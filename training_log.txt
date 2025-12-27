@@ -1,0 +1,150 @@
+INFO:features:Extracting features for 13113 matches...
+INFO:features:Processed 500/13113 matches...
+INFO:features:Processed 1000/13113 matches...
+INFO:features:Processed 1500/13113 matches...
+INFO:features:Processed 2000/13113 matches...
+INFO:features:Processed 2500/13113 matches...
+INFO:features:Processed 3000/13113 matches...
+INFO:features:Processed 3500/13113 matches...
+INFO:features:Processed 4000/13113 matches...
+INFO:features:Processed 4500/13113 matches...
+INFO:features:Processed 5000/13113 matches...
+INFO:features:Processed 5500/13113 matches...
+INFO:features:Processed 6000/13113 matches...
+INFO:features:Processed 6500/13113 matches...
+INFO:features:Processed 7000/13113 matches...
+INFO:features:Processed 7500/13113 matches...
+INFO:features:Processed 8000/13113 matches...
+INFO:features:Processed 8500/13113 matches...
+INFO:features:Processed 9000/13113 matches...
+INFO:features:Processed 9500/13113 matches...
+INFO:features:Processed 10000/13113 matches...
+INFO:features:Processed 10500/13113 matches...
+INFO:features:Processed 11000/13113 matches...
+INFO:features:Processed 11500/13113 matches...
+INFO:features:Processed 12000/13113 matches...
+INFO:features:Processed 12500/13113 matches...
+INFO:features:Processed 13000/13113 matches...
+INFO:features:Extraction complete!
+INFO:features:  Successfully extracted: 8558 matches
+INFO:features:  Skipped (high uncertainty): 4555
+INFO:features:  Skipped (errors): 0
+======================================================================
+TENNIS PREDICTION MODEL TRAINING & EVALUATION
+======================================================================
+Started at: 2025-12-28 05:01:56
+
+======================================================================
+1. EXTRACTING FEATURES
+======================================================================
+Total matches to process: 13,113
+Features extracted: 8,558 matches
+Available features: 17
+
+======================================================================
+2. SPLITTING DATA
+======================================================================
+Train: 1,868 (2020-2021)
+Validation: 2,191 (2022)
+Test: 4,499 (2023-2024)
+After augmentation - Train: 3,736, Val: 4,382, Test: 8,998
+
+======================================================================
+3. TRAINING LOGISTIC REGRESSION
+======================================================================
+Forward feature selection (max 12 features)...
+Optimizing for: combined
+----------------------------------------------------------------------
+Step  1: Added WIN_RATE_DIFF        | LogLoss=0.6289, ROI=+0.050, Features=1
+Step  2: Added SURFACE_EXP_DIFF     | LogLoss=0.6265, ROI=+0.050, Features=2
+Step  3: Added DIRECT_H2H           | LogLoss=0.6248, ROI=+0.050, Features=3
+Step  4: Added COMPLETE_DIFF        | LogLoss=0.6233, ROI=+0.050, Features=4
+Step  5: Added BP_SAVE_DIFF         | LogLoss=0.6210, ROI=+0.050, Features=5
+Step  6: Added FIRST_SERVE_WIN_PCT_DIFF | LogLoss=0.6202, ROI=+0.050, Features=6
+Step  7: Added WSP_DIFF             | LogLoss=0.6200, ROI=+0.050, Features=7
+Step  8: Added MATCHES_PLAYED_DIFF  | LogLoss=0.6200, ROI=+0.050, Features=8
+----------------------------------------------------------------------
+Selected 8 features
+
+Selected 8 features: ['WIN_RATE_DIFF', 'SURFACE_EXP_DIFF', 'DIRECT_H2H', 'COMPLETE_DIFF', 'BP_SAVE_DIFF', 'FIRST_SERVE_WIN_PCT_DIFF', 'WSP_DIFF', 'MATCHES_PLAYED_DIFF']
+
+Tuning regularization (C)...
+  C=0.1: log_loss=0.6203
+  C=0.5: log_loss=0.6200
+  C=1.0: log_loss=0.6200
+  C=2.0: log_loss=0.6199
+  C=5.0: log_loss=0.6199
+
+Best C: 5.0
+
+Feature weights:
+  WIN_RATE_DIFF                 : +0.6008
+  COMPLETE_DIFF                 : -0.4206
+  WSP_DIFF                      : -0.1931
+  SURFACE_EXP_DIFF              : +0.1145
+  BP_SAVE_DIFF                  : -0.1049
+  FIRST_SERVE_WIN_PCT_DIFF      : -0.0604
+  DIRECT_H2H                    : +0.0600
+  MATCHES_PLAYED_DIFF           : +0.0048
+
+======================================================================
+4. TRAINING NEURAL NETWORK ENSEMBLE
+======================================================================
+Training 20-model ensemble...
+  Trained model 1/20
+  Trained model 2/20
+  Trained model 3/20
+  Trained model 4/20
+  Trained model 5/20
+  Trained model 6/20
+  Trained model 7/20
+  Trained model 8/20
+  Trained model 9/20
+  Trained model 10/20
+  Trained model 11/20
+  Trained model 12/20
+  Trained model 13/20
+  Trained model 14/20
+  Trained model 15/20
+  Trained model 16/20
+  Trained model 17/20
+  Trained model 18/20
+  Trained model 19/20
+  Trained model 20/20
+
+======================================================================
+5. EVALUATING ALL MODELS ON TEST SET
+======================================================================
+
+Logistic Regression:
+  Accuracy: 0.6390
+  Log Loss: 0.6336
+  ROI: 5.00%
+
+Neural Network Ensemble:
+  Accuracy: 0.6357
+  Log Loss: 0.6338
+  ROI: 5.00%
+
+Evaluating Markov Model...
+Traceback (most recent call last):
+  File "/Users/ayushmishra/tennis10/train_and_evaluate.py", line 425, in <module>
+    main()
+  File "/Users/ayushmishra/tennis10/train_and_evaluate.py", line 343, in main
+    markov_results = evaluate_model(np.array(markov_probs), np.array(markov_actuals), 'Markov Model')
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ayushmishra/tennis10/train_and_evaluate.py", line 137, in evaluate_model
+    ll = log_loss(actuals, predictions)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ayushmishra/tennis10/.venv/lib/python3.12/site-packages/sklearn/utils/_param_validation.py", line 218, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ayushmishra/tennis10/.venv/lib/python3.12/site-packages/sklearn/metrics/_classification.py", line 3378, in log_loss
+    transformed_labels, y_pred = _validate_multiclass_probabilistic_prediction(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ayushmishra/tennis10/.venv/lib/python3.12/site-packages/sklearn/metrics/_classification.py", line 287, in _validate_multiclass_probabilistic_prediction
+    transformed_labels, lb_classes = _one_hot_encoding_multiclass_target(
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ayushmishra/tennis10/.venv/lib/python3.12/site-packages/sklearn/metrics/_classification.py", line 217, in _one_hot_encoding_multiclass_target
+    raise ValueError(
+ValueError: y_true contains only one label (1). Please provide the list of all expected class labels explicitly through the labels argument.

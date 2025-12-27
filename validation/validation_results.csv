@@ -1,0 +1,24 @@
+test,description,expected,actual,error,passed
+Game Probability,Strong server,0.88,0.8296446444954129,0.05035535550458714,False
+Game Probability,Equal players (symmetry),0.5,0.5,0.0,True
+Game Probability,Weak server,0.12,0.1703553555045871,0.05035535550458711,False
+Symmetry,p=0.55,1.0,1.0,0.0,True
+Symmetry,p=0.6,1.0,1.0,0.0,True
+Symmetry,p=0.65,1.0,1.0,0.0,True
+Symmetry,p=0.7,1.0,1.0,0.0,True
+Symmetry,p=0.75,1.0,1.0,0.0,True
+Set Probability - Equal,Equal servers,0.5,0.5,0.0,True
+Set Probability - Realistic,Federer vs Nadal,0.55,0.6368048463963221,0.08680484639632202,True
+Match Probability BO3,p_set=0.60,0.648,0.6479999999999999,1.1102230246251565e-16,True
+Match Probability BO5,"p_set=0.60, should > BO3",0.683,0.68256,0.00044000000000010697,True
+Edge Case - Perfect Server,p_point=0.99,0.99,0.9973631393614489,0.007363139361448945,True
+Edge Case - Terrible Server,p_point=0.01,0.01,0.0026368606385511217,0.007363139361448879,True
+Edge Case - Equal Players,Both p_point=0.63,0.5,0.5,0.0,True
+Historical Accuracy,100 matches from 2023,0.65,0.59,0.06000000000000005,False
+Calibration Error,Mean absolute calibration error,0.05,0.3319401248258984,0.3319401248258984,False
+Surface - Hard,Average game prob on serve,0.8300000000000001,0.8091914150778801,0.02080858492212001,True
+Surface - Clay,Average game prob on serve,0.78,0.7627687143606497,0.01723128563935028,True
+Surface - Grass,Average game prob on serve,0.88,0.8362350960068298,0.043764903993170234,False
+Surface Ordering,Grass > Hard > Clay,1.0,1.0,0.0,True
+Tiebreak Compression,Tiebreak < Regular for small p,0.12314850247524756,2.3131257261094764,2.1899772236342288,False
+Tiebreak Symmetry,p=0.50 should give 0.50,0.5,1.869384765625,1.369384765625,False

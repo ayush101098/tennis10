@@ -1,0 +1,303 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Markov Model Validation Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; border-bottom: 2px solid #95a5a6; padding-bottom: 5px; }
+        .summary { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin: 20px 0; }
+        .metric { display: inline-block; margin: 10px 20px; }
+        .metric-label { font-weight: bold; color: #7f8c8d; }
+        .metric-value { font-size: 24px; color: #2c3e50; font-weight: bold; }
+        .pass { color: #27ae60; }
+        .fail { color: #e74c3c; }
+        .warning { color: #f39c12; }
+        table { border-collapse: collapse; width: 100%; margin: 20px 0; background: white; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #3498db; color: white; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        img { max-width: 100%; height: auto; margin: 20px 0; border: 1px solid #ddd; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>🎾 Markov Model Validation Report</h1>
+
+    <div class="summary">
+        <h2>Executive Summary</h2>
+        <div class="metric">
+            <div class="metric-label">Tests Passed</div>
+            <div class="metric-value fail">
+                16/23 (69.6%)
+            </div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Accuracy</div>
+            <div class="metric-value fail">59.0%</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Log Loss</div>
+            <div class="metric-value pass">0.6532</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Brier Score</div>
+            <div class="metric-value pass">0.2312</div>
+        </div>
+    </div>
+
+    <h2>Validation Tests</h2>
+    <table border="1" class="dataframe validation-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>test</th>
+      <th>description</th>
+      <th>expected</th>
+      <th>actual</th>
+      <th>error</th>
+      <th>passed</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Game Probability</td>
+      <td>Strong server</td>
+      <td>0.880000</td>
+      <td>0.829645</td>
+      <td>5.035536e-02</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>Game Probability</td>
+      <td>Equal players (symmetry)</td>
+      <td>0.500000</td>
+      <td>0.500000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Game Probability</td>
+      <td>Weak server</td>
+      <td>0.120000</td>
+      <td>0.170355</td>
+      <td>5.035536e-02</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>Symmetry</td>
+      <td>p=0.55</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Symmetry</td>
+      <td>p=0.6</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Symmetry</td>
+      <td>p=0.65</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Symmetry</td>
+      <td>p=0.7</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Symmetry</td>
+      <td>p=0.75</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Set Probability - Equal</td>
+      <td>Equal servers</td>
+      <td>0.500000</td>
+      <td>0.500000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Set Probability - Realistic</td>
+      <td>Federer vs Nadal</td>
+      <td>0.550000</td>
+      <td>0.636805</td>
+      <td>8.680485e-02</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Match Probability BO3</td>
+      <td>p_set=0.60</td>
+      <td>0.648000</td>
+      <td>0.648000</td>
+      <td>1.110223e-16</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Match Probability BO5</td>
+      <td>p_set=0.60, should &gt; BO3</td>
+      <td>0.683000</td>
+      <td>0.682560</td>
+      <td>4.400000e-04</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Edge Case - Perfect Server</td>
+      <td>p_point=0.99</td>
+      <td>0.990000</td>
+      <td>0.997363</td>
+      <td>7.363139e-03</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Edge Case - Terrible Server</td>
+      <td>p_point=0.01</td>
+      <td>0.010000</td>
+      <td>0.002637</td>
+      <td>7.363139e-03</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Edge Case - Equal Players</td>
+      <td>Both p_point=0.63</td>
+      <td>0.500000</td>
+      <td>0.500000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Historical Accuracy</td>
+      <td>100 matches from 2023</td>
+      <td>0.650000</td>
+      <td>0.590000</td>
+      <td>6.000000e-02</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>Calibration Error</td>
+      <td>Mean absolute calibration error</td>
+      <td>0.050000</td>
+      <td>0.331940</td>
+      <td>3.319401e-01</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>Surface - Hard</td>
+      <td>Average game prob on serve</td>
+      <td>0.830000</td>
+      <td>0.809191</td>
+      <td>2.080858e-02</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Surface - Clay</td>
+      <td>Average game prob on serve</td>
+      <td>0.780000</td>
+      <td>0.762769</td>
+      <td>1.723129e-02</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Surface - Grass</td>
+      <td>Average game prob on serve</td>
+      <td>0.880000</td>
+      <td>0.836235</td>
+      <td>4.376490e-02</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>Surface Ordering</td>
+      <td>Grass &gt; Hard &gt; Clay</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>0.000000e+00</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>Tiebreak Compression</td>
+      <td>Tiebreak &lt; Regular for small p</td>
+      <td>0.123149</td>
+      <td>2.313126</td>
+      <td>2.189977e+00</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>Tiebreak Symmetry</td>
+      <td>p=0.50 should give 0.50</td>
+      <td>0.500000</td>
+      <td>1.869385</td>
+      <td>1.369385e+00</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+
+    <h2>Calibration Plot</h2>
+    <img src="calibration_plot.png" alt="Calibration Plot">
+
+    <h2>Accuracy by Surface</h2>
+    <img src="accuracy_by_surface.png" alt="Accuracy by Surface">
+
+    <h2>Surface Statistics</h2>
+    <table border="1" class="dataframe surface-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>surface</th>
+      <th>p_point</th>
+      <th>p_game</th>
+      <th>1st_serve_pct</th>
+      <th>1st_serve_win</th>
+      <th>2nd_serve_win</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Hard</td>
+      <td>0.638052</td>
+      <td>0.809191</td>
+      <td>0.623306</td>
+      <td>0.728993</td>
+      <td>0.513237</td>
+    </tr>
+    <tr>
+      <td>Clay</td>
+      <td>0.613294</td>
+      <td>0.762769</td>
+      <td>0.630373</td>
+      <td>0.689165</td>
+      <td>0.509370</td>
+    </tr>
+    <tr>
+      <td>Grass</td>
+      <td>0.654023</td>
+      <td>0.836235</td>
+      <td>0.630161</td>
+      <td>0.745605</td>
+      <td>0.524187</td>
+    </tr>
+  </tbody>
+</table>
+
+    <div class="summary">
+        <h2>Conclusion</h2>
+        <p><strong>Overall Assessment:</strong> 
+        ❌ FAILED - Critical issues found
+        </p>
+        <p><strong>Report Generated:</strong> 2025-12-27 21:44:18</p>
+    </div>
+</body>
+</html>

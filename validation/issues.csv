@@ -1,0 +1,5 @@
+check,issue,severity,count
+Completeness,500 players have fewer than 10 matches,INFO,500
+Range Validation,"second_serve_win_pct has 1 values outside [0, 1]",ERROR,1
+Range Validation,68 matches with >30 aces (suspicious),WARNING,68
+Temporal Coverage,3 months with fewer than 50 matches,WARNING,3
