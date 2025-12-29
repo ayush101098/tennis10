@@ -139,7 +139,7 @@ class LivePredictor:
         predictions['neural_net'] = np.mean(nn_preds)
         
         # 3. Markov Model
-        markov_result = self.markov_model.predict_match(p1_id, p2_id, surface, best_of)
+        markov_result = self.markov_model.predict_match(p1_id, p2_id, surface, num_sets=best_of)
         predictions['markov'] = markov_result['p_player1_win']
         
         # 4. Meta-Ensemble (weighted)
