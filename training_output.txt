@@ -1,0 +1,48 @@
+============================================================
+TRAINING WITH HISTORICAL STATS (NO DATA LEAKAGE)
+============================================================
+
+Data: 42,571 matches from 2010-01-03 to 2024-12-18
+
+[1/6] Loading matches...
+  Loaded 41,750 matches
+
+[2/6] Computing historical serve averages per player...
+  1,362 unique players
+  Computed career stats for 1,308 players
+
+[3/6] Building features from historical data...
+  Processed 10,000 matches...  Processed 20,000 matches...  Processed 30,000 matches...  Processed 40,000 matches...  Created 41,750 feature rows
+
+[4/6] Creating balanced training data...
+  Class balance: 50.00% player 1 wins
+  Train: 33,341 matches (before 2022-02-14)
+  Test: 8,409 matches (after 2022-02-14)
+
+[5/6] Training Logistic Regression...
+  Best params: {'C': 0.1, 'class_weight': None, 'penalty': 'l2', 'solver': 'lbfgs'}
+  Best CV accuracy: 0.6854
+
+  Test Accuracy: 0.6575 (65.8%)
+  Brier Score: 0.2100
+  Saved to ml_models/logistic_regression_trained.pkl
+
+[6/6] Training Neural Network Ensemble...
+  Model 1/10 trained  Model 2/10 trained  Model 3/10 trained  Model 4/10 trained  Model 5/10 trained  Model 6/10 trained  Model 7/10 trained  Model 8/10 trained  Model 9/10 trained  Model 10/10 trained
+  Trained 10 models
+
+  NN Ensemble Test Accuracy: 0.6575 (65.8%)
+  NN Ensemble Brier Score: 0.2087
+  Saved to ml_models/neural_network_ensemble.pkl
+
+============================================================
+TRAINING COMPLETE!
+============================================================
+
+Data: 42,571 matches (2010-01-03 to 2024-12-18)
+Training: 33,341 | Test: 8,409
+
+Logistic Regression: 65.8% accuracy
+Neural Network Ensemble: 65.8% accuracy
+
+Models saved to ml_models/
