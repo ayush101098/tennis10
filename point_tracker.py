@@ -1,4 +1,16 @@
 """
+
+from break_predictor import GameBreakPredictor
+
+# Create predictor for a specific server
+pred = GameBreakPredictor(server_strength=0.62, 
+                          server_name="Michel", 
+                          returner_name="Maria")
+
+# Track points as they happen
+pred.point_scored(by='server')   # 15-0
+pred.point_scored(by='returner') # 15-15
+pred.print_status()              # Shows adjusted probabilities
 Live Point-by-Point Tennis Match Tracker
 =========================================
 Track matches point by point and identify break opportunities.
@@ -245,7 +257,7 @@ class PointByPointTracker:
         
         cache = {}
         
-        def prob_from(g1, g2, server):
+        def prob_from(7g1, g2, server):
             if (g1, g2, server) in cache:
                 return cache[(g1, g2, server)]
             

@@ -926,7 +926,6 @@ defaults = {
     'p1': 'Player 1', 'p2': 'Player 2',
     'p1_serve': 62, 'p2_serve': 62,
     'sets': [0, 0], 'games': [0, 0], 'points': [0, 0],
-    'set_history': [],
     'server': 1, 'best_of': 3,
     'surface': 'Hard',
     'p1_speed': 'Average', 'p2_speed': 'Average',
@@ -999,132 +998,591 @@ def record_point(winner: int):
         })
         st.session_state.server = 3 - st.session_state.server
         
+        g1, g2 = st.session_state.games
+        if (g1 >= 6 and g1 >= g2 + 2) or g1 == 7:
+            st.session_state.sets[0] += 1
+            st.session_state.games = [0, 0]
+        elif (g2 >= 6 and g2 >= g1 + 2) or g2 == 7:
+            st.session_state.sets[1] += 1
+            st.session_state.games = [0, 0]
+
+def record_bet(bet_type: str, selection: str, odds: float, stake: float, model_prob: float):
+    st.session_state.bets.append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'type': bet_type,
+        'selection': selection,
+        'odds': odds,
+        'stake': stake,
+        'model_prob': model_prob,
+        'ev': (model_prob * odds - 1) * stake,
+        'result': None,
+        'profit': None
+    })
+    st.session_state.total_staked += stake
+
+def settle_bet(idx: int, won: bool):
+    bet = st.session_state.bets[idx]
+    if won:
+        bet['result'] = 'WON'
+        bet['profit'] = bet['stake'] * (bet['odds'] - 1)
+    else:
+        bet['result'] = 'LOST'
+        bet['profit'] = -bet['stake']
+    st.session_state.total_profit += bet['profit']
+
+def get_momentum():
+    if len(st.session_state.point_history) < 3:
+        return 0.5, "Even", "⚖️"
+    recent = st.session_state.point_history[-5:]
+    p1_won = sum(1 for p in recent if p == 1)
+    ratio = p1_won / len(recent)
+    if ratio >= 0.7:
+        return ratio, st.session_state.p1, "🔥"
+    elif ratio <= 0.3:
+        return ratio, st.session_state.p2, "🔥"
+    else:
+        return ratio, "Even", "⚖️"
+
+def is_break_point():
+    server = st.session_state.server
+    s_pts = st.session_state.points[server - 1]
+    r_pts = st.session_state.points[2 - server]
+    if r_pts >= 3 and r_pts > s_pts:
+        return True
+    return False
+
+def get_break_point_count():
+    server = st.session_state.server
+    s_pts = st.session_state.points[server - 1]
+    r_pts = st.session_state.points[2 - server]
+    if r_pts < 3:
+        return 0
+    if s_pts < 3:
+        return r_pts - 2
+    return 1
 
 
-# ==================== BOOKMAKER TERMINAL MAIN ====================
+# ==================== SIDEBAR - PLAYER SETUP ====================
+with st.sidebar:
+    st.markdown("## 🎾 Match Setup")
+    
+    # Player 1
+    st.markdown("### Player 1")
+    p1_input = st.text_input("Name", st.session_state.p1, key="p1_name_input")
+    if p1_input and len(p1_input) >= 2 and p1_input != st.session_state.p1:
+        players = search_player(p1_input)
+        if players:
+            for p in players[:3]:
+                if st.button(f"📚 {p['name']}", key=f"sp1_{p['id']}", use_container_width=True):
+                    st.session_state.p1 = p['name']
+                    st.session_state.p1_id = p['id']
+                    stats = get_player_serve_stats(p['id'], st.session_state.surface)
+                    if stats:
+                        st.session_state.p1_stats = stats
+                        st.session_state.p1_serve = int(stats['serve_point_pct'] * 100)
+                    st.rerun()
+    if p1_input:
+        st.session_state.p1 = p1_input
+    
+    # Player 2
+    st.markdown("### Player 2")
+    p2_input = st.text_input("Name", st.session_state.p2, key="p2_name_input")
+    if p2_input and len(p2_input) >= 2 and p2_input != st.session_state.p2:
+        players = search_player(p2_input)
+        if players:
+            for p in players[:3]:
+                if st.button(f"📚 {p['name']}", key=f"sp2_{p['id']}", use_container_width=True):
+                    st.session_state.p2 = p['name']
+                    st.session_state.p2_id = p['id']
+                    stats = get_player_serve_stats(p['id'], st.session_state.surface)
+                    if stats:
+                        st.session_state.p2_stats = stats
+                        st.session_state.p2_serve = int(stats['serve_point_pct'] * 100)
+                    st.rerun()
+    if p2_input:
+        st.session_state.p2 = p2_input
+    
+    st.markdown("---")
+    
+    # Match settings
+    st.markdown("### ⚙️ Settings")
+    st.session_state.surface = st.selectbox("Surface", ['Hard', 'Clay', 'Grass', 'Indoor'])
+    st.session_state.best_of = st.selectbox("Format", [3, 5], index=0 if st.session_state.best_of == 3 else 1)
+    
+    server_options = [st.session_state.p1, st.session_state.p2]
+    current_idx = st.session_state.server - 1
+    selected = st.selectbox("Server", server_options, index=current_idx)
+    st.session_state.server = 1 if selected == st.session_state.p1 else 2
+    
+    st.markdown("---")
+    
+    # Serve stats adjustments
+    st.markdown("### 🎾 Serve Power")
+    st.session_state.p1_serve = st.slider(f"{st.session_state.p1[:10]} serve %", 50, 75, st.session_state.p1_serve)
+    st.session_state.p2_serve = st.slider(f"{st.session_state.p2[:10]} serve %", 50, 75, st.session_state.p2_serve)
+    
+    st.markdown("---")
+    
+    # Database stats
+    db_stats = get_db_stats()
+    if db_stats:
+        st.markdown("### 📚 Database")
+        st.metric("Matches", f"{db_stats['matches']:,}")
+        st.metric("Players", f"{db_stats['players']:,}")
+    
+    st.markdown("---")
+    
+    # Session P&L
+    profit_color = "green" if st.session_state.total_profit >= 0 else "red"
+    st.markdown(f"""
+    ### 💰 Session P&L
+    <h2 style='color: {profit_color};'>${st.session_state.total_profit:+.2f}</h2>
+    <p style='opacity: 0.7;'>Staked: ${st.session_state.total_staked:.2f}</p>
+    """, unsafe_allow_html=True)
+    
+    # Reset button
+    if st.button("🔄 Reset Match", use_container_width=True):
+        for k in ['sets', 'games', 'points', 'point_history', 'games_history', 'bets']:
+            if k in defaults:
+                st.session_state[k] = defaults[k].copy() if isinstance(defaults[k], list) else defaults[k]
+        st.session_state.total_staked = 0.0
+        st.session_state.total_profit = 0.0
+        st.rerun()
 
-# Market header
-st.markdown(f"""
-<div class="market-header">
-LIVE TENNIS | {st.session_state.p1[:15]} vs {st.session_state.p2[:15]} | {st.session_state.surface.upper()} | BO{st.session_state.best_of}
-</div>
-""", unsafe_allow_html=True)
 
-# Score table
-server_dot_1 = "●" if st.session_state.server == 1 else ""
-server_dot_2 = "●" if st.session_state.server == 2 else ""
-
-point_map = {0: "0", 1: "15", 2: "30", 3: "40", 4: "AD"}
-p1_pts = point_map.get(st.session_state.points[0], "")
-p2_pts = point_map.get(st.session_state.points[1], "")
-
-st.markdown(f"""
-<div class="score-panel">
-    <table>
-        <tr style="font-weight: bold; color: #00ff88;">
-            <td width="25%">PLAYER</td>
-            <td width="12%">S1</td>
-            <td width="12%">S2</td>
-            <td width="12%">S3</td>
-            <td width="12%">GAME</td>
-            <td width="12%">PTS</td>
-            <td width="15%">SERVE%</td>
-        </tr>
-        <tr>
-            <td><span class="serve-dot">{server_dot_1}</span> {st.session_state.p1[:18]}</td>
-            <td>{st.session_state.sets[0]}</td>
-            <td>{st.session_state.set_history[0][0] if len(st.session_state.set_history) > 0 else '-'}</td>
-            <td>{st.session_state.set_history[1][0] if len(st.session_state.set_history) > 1 else '-'}</td>
-            <td>{st.session_state.games[0]}</td>
-            <td>{p1_pts}</td>
-            <td>{st.session_state.p1_serve}%</td>
-        </tr>
-        <tr>
-            <td><span class="serve-dot">{server_dot_2}</span> {st.session_state.p2[:18]}</td>
-            <td>{st.session_state.sets[1]}</td>
-            <td>{st.session_state.set_history[0][1] if len(st.session_state.set_history) > 0 else '-'}</td>
-            <td>{st.session_state.set_history[1][1] if len(st.session_state.set_history) > 1 else '-'}</td>
-            <td>{st.session_state.games[1]}</td>
-            <td>{p2_pts}</td>
-            <td>{st.session_state.p2_serve}%</td>
-        </tr>
-    </table>
-</div>
-""", unsafe_allow_html=True)
-
-# Get model predictions
-ml_predictions = get_ml_predictions(
-    st.session_state.p1_serve,
-    st.session_state.p2_serve,
-    st.session_state.surface,
-    st.session_state.best_of
-)
-
-# Calculate game probabilities
-p1_serve = st.session_state.p1_serve / 100
-p2_serve = st.session_state.p2_serve / 100
-
-if st.session_state.server == 1:
-    server_pts, returner_pts = st.session_state.points
-    p_serve = p1_serve
-    server_name = st.session_state.p1
-    returner_name = st.session_state.p2
-else:
-    server_pts, returner_pts = st.session_state.points[1], st.session_state.points[0]
-    p_serve = p2_serve
-    server_name = st.session_state.p2
-    returner_name = st.session_state.p1
-
-p_hold_base = p_game_from_points(server_pts, returner_pts, p_serve)
-
-# Adjust with ensemble if available
-if ml_predictions and ml_predictions.get('ensemble'):
-    ensemble_p1 = ml_predictions['ensemble']
-    confidence = ml_predictions.get('confidence', 0.5)
-    adjustment_factor = (ensemble_p1 - 0.5) * 0.1 * confidence
+# ==================== MAIN PAGE ====================
+    # Hero header
+    st.markdown(f"""
+    <div class="hero-header">
+        <h1>🎾 {st.session_state.p1} vs {st.session_state.p2}</h1>
+        <div class="hero-subtitle">{st.session_state.surface} Court • Best of {st.session_state.best_of}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # === PLAYER INSIGHTS FROM DATABASE ===
+    if st.session_state.p1_id and st.session_state.p2_id:
+        h2h = get_h2h_details(st.session_state.p1_id, st.session_state.p2_id)
+        if h2h:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #2d3436 0%, #000000 100%); padding: 20px; border-radius: 15px; margin-bottom: 20px;">
+                <h3 style="color: white; text-align: center; margin: 0;">⚔️ Head to Head</h3>
+                <div style="display: flex; justify-content: center; align-items: center; gap: 30px; margin-top: 15px;">
+                    <div style="text-align: center;">
+                        <div style="color: #38ef7d; font-size: 2.5rem; font-weight: bold;">{h2h['p1_wins']}</div>
+                        <div style="color: white; opacity: 0.8;">{st.session_state.p1[:15]}</div>
+                    </div>
+                    <div style="color: white; font-size: 1.5rem;">-</div>
+                    <div style="text-align: center;">
+                        <div style="color: #ff6b6b; font-size: 2.5rem; font-weight: bold;">{h2h['p2_wins']}</div>
+                        <div style="color: white; opacity: 0.8;">{st.session_state.p2[:15]}</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # ==================== BOOKMAKER TERMINAL VIEW ====================
+    
+    # Market header
+    st.markdown(f"""
+    <div class="market-header">
+        LIVE TENNIS MARKET | {st.session_state.surface.upper()} | BEST OF {st.session_state.best_of}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Score panel - compact table format
+    server_dot_1 = "●" if st.session_state.server == 1 else ""
+    server_dot_2 = "●" if st.session_state.server == 2 else ""
+    
+    point_map = {0: "0", 1: "15", 2: "30", 3: "40", 4: "AD"}
+    p1_pts = point_map.get(st.session_state.points[0], "")
+    p2_pts = point_map.get(st.session_state.points[1], "")
+    
+    st.markdown(f"""
+    <div class="score-panel">
+        <table>
+            <tr style="font-weight: bold; color: #00ff88;">
+                <td width="25%">PLAYER</td>
+                <td width="15%">SET 1</td>
+                <td width="15%">SET 2</td>
+                <td width="15%">SET 3</td>
+                <td width="15%">GAME</td>
+                <td width="15%">PTS</td>
+            </tr>
+            <tr>
+                <td><span class="serve-dot">{server_dot_1}</span> {st.session_state.p1[:20]}</td>
+                <td>{st.session_state.sets[0] if len(st.session_state.sets) > 0 else 0}</td>
+                <td>{st.session_state.set_history[0][0] if len(st.session_state.set_history) > 0 else '-'}</td>
+                <td>{st.session_state.set_history[1][0] if len(st.session_state.set_history) > 1 else '-'}</td>
+                <td>{st.session_state.games[0]}</td>
+                <td>{p1_pts}</td>
+            </tr>
+            <tr>
+                <td><span class="serve-dot">{server_dot_2}</span> {st.session_state.p2[:20]}</td>
+                <td>{st.session_state.sets[1] if len(st.session_state.sets) > 1 else 0}</td>
+                <td>{st.session_state.set_history[0][1] if len(st.session_state.set_history) > 0 else '-'}</td>
+                <td>{st.session_state.set_history[1][1] if len(st.session_state.set_history) > 1 else '-'}</td>
+                <td>{st.session_state.games[1]}</td>
+                <td>{p2_pts}</td>
+            </tr>
+        </table>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Get model probabilities
+    ml_predictions = get_ml_predictions(
+        st.session_state.p1_serve,
+        st.session_state.p2_serve,
+        st.session_state.surface,
+        st.session_state.best_of
+    )
+    
+    # Calculate game probabilities
+    p1_serve = st.session_state.p1_serve / 100
+    p2_serve = st.session_state.p2_serve / 100
     
     if st.session_state.server == 1:
-        p_hold = min(0.95, max(0.05, p_hold_base + adjustment_factor))
+        server_pts, returner_pts = st.session_state.points
+        p_serve = p1_serve
+        server_name = st.session_state.p1
+        returner_name = st.session_state.p2
     else:
-        p_hold = min(0.95, max(0.05, p_hold_base - adjustment_factor))
-else:
-    p_hold = p_hold_base
-
-p_break = 1 - p_hold
-
-# Two-column layout: Odds | Probabilities
-col_left, col_right = st.columns([2, 1])
-
-with col_left:
-    st.markdown("### 📊 MARKETS")
+        server_pts, returner_pts = st.session_state.points[1], st.session_state.points[0]
+        p_serve = p2_serve
+        server_name = st.session_state.p2
+        returner_name = st.session_state.p1
     
-    # Odds input
-    odds_c1, odds_c2 = st.columns(2)
-    with odds_c1:
-        st.session_state.game_hold_odds = st.number_input(
-            f"HOLD ({server_name[:10]})", 1.01, 20.0, float(st.session_state.game_hold_odds), 0.05
-        )
-    with odds_c2:
-        st.session_state.game_break_odds = st.number_input(
-            f"BREAK ({returner_name[:10]})", 1.01, 20.0, float(st.session_state.game_break_odds), 0.05
-        )
+    p_hold_base = p_game_from_points(server_pts, returner_pts, p_serve)
     
-    # Point buttons
-    st.markdown("### ⚡ SCORE")
+    # Adjust with ensemble if available
+    if ml_predictions and ml_predictions.get('ensemble'):
+        ensemble_p1 = ml_predictions['ensemble']
+        confidence = ml_predictions.get('confidence', 0.5)
+        adjustment_factor = (ensemble_p1 - 0.5) * 0.1 * confidence
+        
+        if st.session_state.server == 1:
+            p_hold = min(0.95, max(0.05, p_hold_base + adjustment_factor))
+        else:
+            p_hold = min(0.95, max(0.05, p_hold_base - adjustment_factor))
+    else:
+        p_hold = p_hold_base
+    
+    p_break = 1 - p_hold
+    
+    # Two-column layout: Odds | Probabilities
+    col_left, col_right = st.columns([2, 1])
+    
+    with col_left:
+        # ODDS TABLE - BOOKMAKER STYLE
+        st.markdown("### 📊 LIVE MARKETS")
+        
+        # Game market
+        st.markdown(f"""
+        <div class="odds-table">
+            <div class="odds-row odds-header">
+                <div>MARKET</div>
+                <div>BACK</div>
+                <div>TRUE %</div>
+                <div>EDGE</div>
+                <div>STAKE</div>
+            </div>
+            <div class="odds-row">
+                <div>{server_name[:15]} HOLD</div>
+                <div><input type="number" id="hold_odds" value="{st.session_state.game_hold_odds:.2f}" step="0.05" style="width: 70px; background: #2d3561; color: #7ec8e3; border: none; padding: 4px; border-radius: 3px; text-align: center;"></div>
+                <div class="prob-value">{p_hold:.1%}</div>
+                <div class="{'edge-positive' if p_hold > 1/st.session_state.game_hold_odds else 'edge-negative'}">{(p_hold - 1/st.session_state.game_hold_odds):+.1%}</div>
+                <div>—</div>
+            </div>
+            <div class="odds-row">
+                <div>{returner_name[:15]} BREAK</div>
+                <div><input type="number" id="break_odds" value="{st.session_state.game_break_odds:.2f}" step="0.05" style="width: 70px; background: #2d3561; color: #e37e7e; border: none; padding: 4px; border-radius: 3px; text-align: center;"></div>
+                <div class="prob-value">{p_break:.1%}</div>
+                <div class="{'edge-positive' if p_break > 1/st.session_state.game_break_odds else 'edge-negative'}">{(p_break - 1/st.session_state.game_break_odds):+.1%}</div>
+                <div>—</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Input actual odds
+        odds_c1, odds_c2 = st.columns(2)
+        with odds_c1:
+            st.session_state.game_hold_odds = st.number_input(
+                f"HOLD ODDS", 1.01, 20.0, float(st.session_state.game_hold_odds), 0.05, 
+                key="hold_input", label_visibility="collapsed"
+            )
+        with odds_c2:
+            st.session_state.game_break_odds = st.number_input(
+                f"BREAK ODDS", 1.01, 20.0, float(st.session_state.game_break_odds), 0.05,
+                key="break_input", label_visibility="collapsed"
+            )
+        
+        # Point buttons
+        st.markdown("### ⚡ SCORE POINT")
+        btn_cols = st.columns([2, 2, 1, 1])
+        
+        with btn_cols[0]:
+            if st.button(f"✓ {st.session_state.p1[:10]}", use_container_width=True):
+                record_point(1)
+                st.rerun()
+        
+        with btn_cols[1]:
+            if st.button(f"✓ {st.session_state.p2[:10]}", use_container_width=True):
+                record_point(2)
+                st.rerun()
+        
+        with btn_cols[2]:
+            if st.button("↩ UNDO", use_container_width=True):
+                if st.session_state.point_history:
+                    last = st.session_state.point_history.pop()
+                    if st.session_state.points[last - 1] > 0:
+                        st.session_state.points[last - 1] -= 1
+                st.rerun()
+        
+        with btn_cols[3]:
+            if st.button("⇄ SWAP", use_container_width=True):
+                st.session_state.server = 3 - st.session_state.server
+                st.rerun()
+    
+    with col_right:
+        # PROBABILITY PANEL
+        st.markdown("### 🎯 TRUE PROBABILITIES")
+        
+        fair_hold = 1/st.session_state.game_hold_odds
+        fair_break = 1/st.session_state.game_break_odds
+        total_implied = fair_hold + fair_break
+        
+        edge_hold = p_hold - fair_hold
+        edge_break = p_break - fair_break
+        
+        st.markdown(f"""
+        <div class="prob-panel">
+            <div class="prob-row">
+                <span class="prob-label">Model Ensemble:</span>
+                <span class="prob-value">{ml_predictions.get('ensemble', 0.5):.1%}</span>
+            </div>
+            <div class="prob-row">
+                <span class="prob-label">Hold Prob:</span>
+                <span class="prob-value">{p_hold:.1%}</span>
+            </div>
+            <div class="prob-row">
+                <span class="prob-label">Break Prob:</span>
+                <span class="prob-value">{p_break:.1%}</span>
+            </div>
+            <div class="prob-row">
+                <span class="prob-label">Book %:</span>
+                <span class="prob-value">{total_implied:.1%}</span>
+            </div>
+            <div class="prob-row">
+                <span class="prob-label">Hold Edge:</span>
+                <span class="{'edge-positive' if edge_hold > 0 else 'edge-negative'}">{edge_hold:+.1%}</span>
+            </div>
+            <div class="prob-row">
+                <span class="prob-label">Break Edge:</span>
+                <span class="{'edge-positive' if edge_break > 0 else 'edge-negative'}">{edge_break:+.1%}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # P&L tracker
+        total_profit = sum(b['profit'] for b in st.session_state.bets if b['profit'] is not None)
+        pl_class = "pl-positive" if total_profit >= 0 else "pl-negative"
+        
+        st.markdown(f"""
+        <div class="pl-panel">
+            <div style="display: flex; justify-content: space-between;">
+                <span>SESSION P&L:</span>
+                <span class="{pl_class}">${total_profit:+.2f}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                <span>BETS:</span>
+                <span>{len(st.session_state.bets)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                <span>BANKROLL:</span>
+                <span>${st.session_state.bankroll:.2f}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ==================== FOOTER ====================
+st.markdown("---")
+st.caption(f"TENNIS TRADING TERMINAL | Database: {'✓' if os.path.exists(DB_PATH) else '✗'} | Models: 4 Active")
+
+            if st.session_state.p1_id:
+                # Recent form
+                form = get_recent_form(st.session_state.p1_id, 5)
+                if form:
+                    form_str = ' '.join(['🟢' if m['result'] == 'W' else '🔴' for m in form])
+                    wins = sum(1 for m in form if m['result'] == 'W')
+                    st.markdown(f"**Recent Form:** {form_str} ({wins}/5)")
+                    for m in form[:3]:
+                        st.caption(f"{m['result']} vs {m['opponent'][:15]} ({m['surface']})")
+                
+                # Surface win rates
+                surface_stats = get_surface_win_rates(st.session_state.p1_id)
+                if surface_stats:
+                    st.markdown("**Surface Win Rates:**")
+                    for surf, data in surface_stats.items():
+                        emoji = '🏟️' if surf == 'Hard' else ('🧱' if surf == 'Clay' else '🌿')
+                        st.markdown(f"{emoji} {surf}: **{data['pct']:.0%}** ({data['wins']}/{data['total']})")
+                
+                # Hold/Break stats
+                hb_stats = get_hold_break_stats(st.session_state.p1_id, st.session_state.surface)
+                if hb_stats:
+                    st.markdown(f"**On {st.session_state.surface}:**")
+                    if hb_stats['hold_pct']:
+                        st.markdown(f"Hold: **{hb_stats['hold_pct']:.0%}** | Break: **{hb_stats['break_pct']:.0%}**")
+                    if hb_stats['bp_saved_pct']:
+                        st.markdown(f"BP Saved: {hb_stats['bp_saved_pct']:.0%} | BP Conv: {hb_stats['bp_converted_pct']:.0%}")
+            else:
+                st.caption("Player not in database - using manual stats")
+        
+        with pi_col2:
+            st.markdown(f"#### {st.session_state.p2}")
+            if st.session_state.p2_id:
+                # Recent form
+                form = get_recent_form(st.session_state.p2_id, 5)
+                if form:
+                    form_str = ' '.join(['🟢' if m['result'] == 'W' else '🔴' for m in form])
+                    wins = sum(1 for m in form if m['result'] == 'W')
+                    st.markdown(f"**Recent Form:** {form_str} ({wins}/5)")
+                    for m in form[:3]:
+                        st.caption(f"{m['result']} vs {m['opponent'][:15]} ({m['surface']})")
+                
+                # Surface win rates
+                surface_stats = get_surface_win_rates(st.session_state.p2_id)
+                if surface_stats:
+                    st.markdown("**Surface Win Rates:**")
+                    for surf, data in surface_stats.items():
+                        emoji = '🏟️' if surf == 'Hard' else ('🧱' if surf == 'Clay' else '🌿')
+                        st.markdown(f"{emoji} {surf}: **{data['pct']:.0%}** ({data['wins']}/{data['total']})")
+                
+                # Hold/Break stats
+                hb_stats = get_hold_break_stats(st.session_state.p2_id, st.session_state.surface)
+                if hb_stats:
+                    st.markdown(f"**On {st.session_state.surface}:**")
+                    if hb_stats['hold_pct']:
+                        st.markdown(f"Hold: **{hb_stats['hold_pct']:.0%}** | Break: **{hb_stats['break_pct']:.0%}**")
+                    if hb_stats['bp_saved_pct']:
+                        st.markdown(f"BP Saved: {hb_stats['bp_saved_pct']:.0%} | BP Conv: {hb_stats['bp_converted_pct']:.0%}")
+            else:
+                st.caption("Player not in database - using manual stats")
+        
+        # H2H Details
+        if st.session_state.p1_id and st.session_state.p2_id:
+            h2h = get_h2h_details(st.session_state.p1_id, st.session_state.p2_id)
+            if h2h and h2h['matches']:
+                st.markdown("---")
+                st.markdown("#### ⚔️ Recent H2H Matches")
+                for m in h2h['matches']:
+                    st.markdown(f"**{m['winner']}** won | {m['tournament']} ({m['surface']}) | {m['score']}")
+    
+    # Live score
+    server_name = st.session_state.p1 if st.session_state.server == 1 else st.session_state.p2
+    st.markdown(f"""
+    <div class="live-score">
+        {get_score_string()}
+        <div class="server-indicator">🎾 {server_name} serving</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # === AI INSIGHTS (BEFORE STATS) ===
+    ml_predictions = get_ml_predictions(
+        st.session_state.p1_serve,
+        st.session_state.p2_serve,
+        st.session_state.surface,
+        st.session_state.best_of
+    )
+    
+    ai_insights_html = get_ai_insights_html(
+        ml_predictions,
+        st.session_state.p1,
+        st.session_state.p2,
+        get_score_string()
+    )
+    
+    if ai_insights_html:
+        st.markdown(ai_insights_html, unsafe_allow_html=True)
+    
+    # === FEATURE ENGINEERING & DATA INTEGRATION ===
+    if ml_predictions and 'features' in ml_predictions and ml_predictions['features']:
+        with st.expander("📊 Advanced Analytics & Feature Engineering", expanded=False):
+            features = ml_predictions['features']
+            
+            # Model weights visualization
+            if 'model_weights' in features:
+                st.markdown("#### 🎯 Model Contribution to True Probability")
+                weights = features['model_weights']
+                
+                wc1, wc2, wc3, wc4 = st.columns(4)
+                with wc1:
+                    st.metric("Markov Chain", f"{weights.get('hierarchical', 0):.0%}")
+                with wc2:
+                    st.metric("TennisRatio", f"{weights.get('tennisratio', 0):.0%}")
+                with wc3:
+                    st.metric("Logistic Reg", f"{weights.get('logistic', 0):.0%}")
+                with wc4:
+                    st.metric("Neural Net", f"{weights.get('neural', 0):.0%}")
+            
+            # Markov chain probabilities
+            if 'p1_hold_prob' in features:
+                st.markdown("#### ⚡ Point-to-Game Transition Probabilities")
+                mc1, mc2, mc3 = st.columns(3)
+                with mc1:
+                    st.metric(f"{st.session_state.p1} Hold", f"{features['p1_hold_prob']:.1%}")
+                with mc2:
+                    st.metric(f"{st.session_state.p2} Hold", f"{features['p2_hold_prob']:.1%}")
+                with mc3:
+                    st.metric(f"{st.session_state.p1} Set Win", f"{features.get('p1_set_prob', 0):.1%}")
+            
+            # TennisRatio features
+            if 'tr_h2h' in features:
+                h2h = features['tr_h2h']
+                st.markdown("#### 🌐 TennisRatio Live Data")
+                tr1, tr2, tr3, tr4 = st.columns(4)
+                
+                with tr1:
+                    dom = features.get('tr_dominance', 0)
+                    st.metric("Dominance", f"{dom:.1%}" if dom > 0 else "N/A")
+                with tr2:
+                    eff = features.get('tr_efficiency', 0)
+                    st.metric("Efficiency", f"{eff:.1%}" if eff > 0 else "N/A")
+                with tr3:
+                    h2h_wins = h2h.get('p1_wins', 0) if isinstance(h2h, dict) else 0
+                    h2h_total = h2h.get('total_matches', 0) if isinstance(h2h, dict) else 0
+                    st.metric("H2H Wins", f"{h2h_wins}/{h2h_total}" if h2h_total > 0 else "No data")
+                with tr4:
+                    st.metric("Source", "Live Web")
+            
+            st.markdown("---")
+            st.caption("💡 True Probability (P) is calculated using weighted ensemble of all available models based on data quality and confidence")
+    
+    # Break point alert
+    if is_break_point():
+        bp_count = get_break_point_count()
+        returner = st.session_state.p2 if st.session_state.server == 1 else st.session_state.p1
+        st.markdown(f"""
+        <div class="break-alert">
+            🔴 BREAK POINT{'S' if bp_count > 1 else ''} ×{bp_count} — {returner}!
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Quick point buttons
+    st.markdown("### ⚡ Score a Point")
     btn_cols = st.columns([2, 2, 1, 1])
     
     with btn_cols[0]:
-        if st.button(f"✓ {st.session_state.p1[:10]}", use_container_width=True):
+        if st.button(f"✅ {st.session_state.p1}", type="primary", use_container_width=True):
             record_point(1)
             st.rerun()
     
     with btn_cols[1]:
-        if st.button(f"✓ {st.session_state.p2[:10]}", use_container_width=True):
+        if st.button(f"✅ {st.session_state.p2}", type="primary", use_container_width=True):
             record_point(2)
             st.rerun()
     
     with btn_cols[2]:
-        if st.button("↩ UNDO", use_container_width=True):
+        if st.button("↩️ Undo", use_container_width=True):
             if st.session_state.point_history:
                 last = st.session_state.point_history.pop()
                 if st.session_state.points[last - 1] > 0:
@@ -1132,70 +1590,151 @@ with col_left:
             st.rerun()
     
     with btn_cols[3]:
-        if st.button("⇄ SWAP", use_container_width=True):
+        if st.button("🔄 Swap", use_container_width=True):
             st.session_state.server = 3 - st.session_state.server
             st.rerun()
+    
+    st.markdown("---")
+    
+    # === ODDS INPUT & VALUE ANALYSIS ===
+    st.markdown("### 💰 Live Game Odds")
+    
+    server_name = st.session_state.p1 if st.session_state.server == 1 else st.session_state.p2
+    returner_name = st.session_state.p2 if st.session_state.server == 1 else st.session_state.p1
+    
+    oc1, oc2 = st.columns(2)
+    with oc1:
+        st.session_state.game_hold_odds = st.number_input(
+            f"🟢 {server_name} HOLD", 1.01, 20.0,
+            float(st.session_state.game_hold_odds), 0.05, key="hold_odds"
+        )
+    with oc2:
+        st.session_state.game_break_odds = st.number_input(
+            f"🔴 {returner_name} BREAK", 1.01, 20.0,
+            float(st.session_state.game_break_odds), 0.05, key="break_odds"
+        )
+    
+    # Calculate probabilities using TRUE P from ensemble when available
+    p1_serve = st.session_state.p1_serve / 100
+    p2_serve = st.session_state.p2_serve / 100
+    
+    if st.session_state.server == 1:
+        server_pts, returner_pts = st.session_state.points
+        p_serve = p1_serve
+    else:
+        server_pts, returner_pts = st.session_state.points[1], st.session_state.points[0]
+        p_serve = p2_serve
+    
+    # Base probability from Markov point-level model
+    p_hold_base = p_game_from_points(server_pts, returner_pts, p_serve)
+    p_break_base = 1 - p_hold_base
+    
+    # Adjust with ensemble confidence if available
+    if ml_predictions and ml_predictions.get('ensemble'):
+        ensemble_p1 = ml_predictions['ensemble']
+        confidence = ml_predictions.get('confidence', 0.5)
+        
+        # Adjust game probability based on match-level ensemble
+        # Higher ensemble for P1 suggests stronger overall performance
+        adjustment_factor = (ensemble_p1 - 0.5) * 0.1 * confidence  # ±5% max adjustment
+        
+        if st.session_state.server == 1:
+            p_hold = min(0.95, max(0.05, p_hold_base + adjustment_factor))
+        else:
+            p_hold = min(0.95, max(0.05, p_hold_base - adjustment_factor))
+        
+        p_break = 1 - p_hold
+        
+        st.caption(f"✨ Using True P (ensemble-adjusted): {abs(adjustment_factor):.1%} confidence boost")
+    else:
+        # Fallback to base Markov calculation
+        p_hold = p_hold_base
+        p_break = p_break_base
+        st.caption("📊 Using base Markov probability (collecting more data...)")
+    
+    # Fair odds & edge
+    hold_implied = 1 / st.session_state.game_hold_odds
+    break_implied = 1 / st.session_state.game_break_odds
+    total_implied = hold_implied + break_implied
+    hold_fair = hold_implied / total_implied
+    break_fair = break_implied / total_implied
+    
+    edge_hold = p_hold - hold_fair
+    edge_break = p_break - break_fair
+    
+    kelly_hold = max(0, (p_hold * st.session_state.game_hold_odds - 1) / (st.session_state.game_hold_odds - 1)) if edge_hold > 0 else 0
+    kelly_break = max(0, (p_break * st.session_state.game_break_odds - 1) / (st.session_state.game_break_odds - 1)) if edge_break > 0 else 0
+    
+    # Value cards
+    st.markdown("### 🎯 Value Analysis")
+    val_cols = st.columns(2)
+    
+    with val_cols[0]:
+        fair_hold = 1/p_hold if p_hold > 0.01 else 99
+        if edge_hold > 0.03:
+            stake = kelly_hold * 0.25 * st.session_state.bankroll
+            st.markdown(f"""
+            <div class="value-card">
+                <div class="label">🟢 {server_name} HOLD</div>
+                <div class="value">+{edge_hold:.1%} EDGE</div>
+                <div class="subtext">Model: {p_hold:.1%} | Fair: {fair_hold:.2f} | Book: {st.session_state.game_hold_odds}</div>
+                <div class="subtext" style="margin-top: 10px;">💵 Stake: ${stake:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("📝 Record Hold Bet", key="rec_hold", use_container_width=True):
+                record_bet("Game", f"{server_name} Hold", st.session_state.game_hold_odds, stake, p_hold)
+                st.success(f"✅ Bet recorded: ${stake:.2f} @ {st.session_state.game_hold_odds}")
+        elif edge_hold > 0:
+            st.markdown(f"""
+            <div class="neutral-card">
+                <div class="label">🟢 {server_name} HOLD</div>
+                <div class="value">+{edge_hold:.1%}</div>
+                <div class="subtext">Marginal edge - small value</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="no-value-card">
+                <div class="label">🟢 {server_name} HOLD</div>
+                <div class="value">{edge_hold:+.1%}</div>
+                <div class="subtext">No value</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with val_cols[1]:
+        fair_break = 1/p_break if p_break > 0.01 else 99
+        if edge_break > 0.03:
+            stake = kelly_break * 0.25 * st.session_state.bankroll
+            st.markdown(f"""
+            <div class="value-card">
+                <div class="label">🔴 {returner_name} BREAK</div>
+                <div class="value">+{edge_break:.1%} EDGE</div>
+                <div class="subtext">Model: {p_break:.1%} | Fair: {fair_break:.2f} | Book: {st.session_state.game_break_odds}</div>
+                <div class="subtext" style="margin-top: 10px;">💵 Stake: ${stake:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("📝 Record Break Bet", key="rec_break", use_container_width=True):
+                record_bet("Game", f"{returner_name} Break", st.session_state.game_break_odds, stake, p_break)
+                st.success(f"✅ Bet recorded: ${stake:.2f} @ {st.session_state.game_break_odds}")
+        elif edge_break > 0:
+            st.markdown(f"""
+            <div class="neutral-card">
+                <div class="label">🔴 {returner_name} BREAK</div>
+                <div class="value">+{edge_break:.1%}</div>
+                <div class="subtext">Marginal edge - small value</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="no-value-card">
+                <div class="label">🔴 {returner_name} BREAK</div>
+                <div class="value">{edge_break:+.1%}</div>
+                <div class="subtext">No value</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-with col_right:
-    st.markdown("### 🎯 PROBABILITIES")
-    
-    fair_hold = 1/st.session_state.game_hold_odds
-    fair_break = 1/st.session_state.game_break_odds
-    total_implied = fair_hold + fair_break
-    
-    edge_hold = p_hold - fair_hold
-    edge_break = p_break - fair_break
-    
-    st.markdown(f"""
-    <div class="prob-panel">
-        <div class="prob-row">
-            <span class="prob-label">Match Model:</span>
-            <span class="prob-value">{ml_predictions.get('ensemble', 0.5):.1%}</span>
-        </div>
-        <div class="prob-row">
-            <span class="prob-label">Hold True P:</span>
-            <span class="prob-value">{p_hold:.1%}</span>
-        </div>
-        <div class="prob-row">
-            <span class="prob-label">Break True P:</span>
-            <span class="prob-value">{p_break:.1%}</span>
-        </div>
-        <div class="prob-row">
-            <span class="prob-label">Book Margin:</span>
-            <span class="prob-value">{(total_implied - 1):.1%}</span>
-        </div>
-        <div class="prob-row">
-            <span class="prob-label">Hold Edge:</span>
-            <span class="{'edge-positive' if edge_hold > 0 else 'edge-negative'}">{edge_hold:+.1%}</span>
-        </div>
-        <div class="prob-row">
-            <span class="prob-label">Break Edge:</span>
-            <span class="{'edge-positive' if edge_break > 0 else 'edge-negative'}">{edge_break:+.1%}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # P&L
-    total_profit = sum(b['profit'] for b in st.session_state.bets if b['profit'] is not None)
-    pl_class = "pl-positive" if total_profit >= 0 else "pl-negative"
-    
-    st.markdown(f"""
-    <div class="pl-panel">
-        <div style="display: flex; justify-content: space-between;">
-            <span>P&L:</span>
-            <span class="{pl_class}">${total_profit:+.2f}</span>
-        </div>
-        <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-            <span>BETS:</span>
-            <span>{len(st.session_state.bets)}</span>
-        </div>
-        <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-            <span>BANK:</span>
-            <span>${st.session_state.bankroll:.2f}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
-# Footer
+# ==================== FOOTER ====================
 st.markdown("---")
-st.caption(f"TENNIS TERMINAL | DB: {'✓' if os.path.exists(DB_PATH) else '✗'} | 4 Models Active")
+db_status = "✅ Connected" if os.path.exists(DB_PATH) else "❌ Not found"
+st.caption(f"🎾 Tennis Betting Hub Pro | Database: {db_status} | 4 ML Models Integrated | Built with Streamlit")
