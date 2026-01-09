@@ -1,0 +1,79 @@
+{
+  "player1": {
+    "player_id": 106426,
+    "player_name": "Cristian Garin",
+    "database_stats": {},
+    "recent_form": {
+      "record": "20-20",
+      "win_percentage": 50.0,
+      "serve_win_pct": 65.5,
+      "first_serve_pct": 63.1,
+      "bp_save_pct": 68.9,
+      "last_match_date": "2024-09-15",
+      "return_win_pct": 39.7
+    },
+    "surface_performance": {
+      "Hard": {
+        "matches": 15,
+        "win_pct": 40.0,
+        "record": "6-9"
+      },
+      "Clay": {
+        "matches": 24,
+        "win_pct": 58.3,
+        "record": "14-10"
+      },
+      "Grass": {
+        "matches": 1,
+        "win_pct": 0.0,
+        "record": "0-1"
+      }
+    },
+    "special_parameters": {
+      "momentum_score": 0.4779,
+      "best_surface": "Clay",
+      "surface_mastery": 0.6084,
+      "clutch_performance": 0.5444,
+      "bp_defense_rate": 0.5901,
+      "first_serve_win_pct": 0.696,
+      "consistency_rating": 0.8262,
+      "peak_rating": 0.85,
+      "career_win_rate": 0.5179,
+      "total_matches": 251
+    }
+  },
+  "player2": {
+    "player_id": 208118,
+    "player_name": "Eliot Spizzirri",
+    "database_stats": {},
+    "recent_form": {
+      "record": "1-3",
+      "win_percentage": 25.0,
+      "serve_win_pct": 70.3,
+      "first_serve_pct": 64.1,
+      "bp_save_pct": 80.0,
+      "last_match_date": "2024-07-15",
+      "return_win_pct": 45.2
+    },
+    "surface_performance": {
+      "Hard": {
+        "matches": 1,
+        "win_pct": 0.0,
+        "record": "0-1"
+      },
+      "Grass": {
+        "matches": 3,
+        "win_pct": 33.3,
+        "record": "1-2"
+      }
+    },
+    "special_parameters": {}
+  },
+  "h2h": {
+    "total_matches": 0,
+    "player1_wins": 0,
+    "player2_wins": 0
+  },
+  "surface": "Hard",
+  "generated_at": "2026-01-10T04:33:17.929082"
+}

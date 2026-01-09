@@ -1,0 +1,79 @@
+{
+  "player1": {
+    "player_id": 208278,
+    "player_name": "Shintaro Mochizuki",
+    "database_stats": {},
+    "recent_form": {
+      "record": "3-19",
+      "win_percentage": 13.6,
+      "serve_win_pct": 63.0,
+      "first_serve_pct": 60.8,
+      "bp_save_pct": 63.6,
+      "last_match_date": "2023-10-16",
+      "return_win_pct": 35.1
+    },
+    "surface_performance": {
+      "Hard": {
+        "matches": 18,
+        "win_pct": 16.7,
+        "record": "3-15"
+      },
+      "Clay": {
+        "matches": 1,
+        "win_pct": 0.0,
+        "record": "0-1"
+      },
+      "Grass": {
+        "matches": 3,
+        "win_pct": 0.0,
+        "record": "0-3"
+      }
+    },
+    "special_parameters": {
+      "momentum_score": 0.1552,
+      "best_surface": "Hard",
+      "surface_mastery": 0.1667,
+      "clutch_performance": 0.0,
+      "bp_defense_rate": 0.512,
+      "first_serve_win_pct": 0.642,
+      "consistency_rating": 0.868,
+      "peak_rating": 0.15,
+      "career_win_rate": 0.1364,
+      "total_matches": 22
+    }
+  },
+  "player2": {
+    "player_id": 104200,
+    "player_name": "Juan Manuel Elizondo",
+    "database_stats": {},
+    "recent_form": {
+      "record": "2-0",
+      "win_percentage": 100.0,
+      "serve_win_pct": 0,
+      "first_serve_pct": 0,
+      "bp_save_pct": 0,
+      "last_match_date": "2007-07-20",
+      "return_win_pct": 0
+    },
+    "surface_performance": {
+      "Hard": {
+        "matches": 1,
+        "win_pct": 100.0,
+        "record": "1-0"
+      },
+      "Clay": {
+        "matches": 1,
+        "win_pct": 100.0,
+        "record": "1-0"
+      }
+    },
+    "special_parameters": {}
+  },
+  "h2h": {
+    "total_matches": 0,
+    "player1_wins": 0,
+    "player2_wins": 0
+  },
+  "surface": "Hard",
+  "generated_at": "2026-01-10T03:25:39.024434"
+}
