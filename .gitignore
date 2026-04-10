@@ -34,3 +34,18 @@ Thumbs.db
 
 # Environment variables
 .env
+
+# Node modules
+node_modules/
+
+# Next.js / trading-terminal build artifacts
+trading-terminal/node_modules/
+trading-terminal/.next/
+trading-terminal/index_old.html
+
+# Large data files
+*.db
+*.json
+!netlify.toml
+!package.json
+nohup.out

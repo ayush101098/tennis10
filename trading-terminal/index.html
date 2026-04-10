@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRUE P — Tennis Quantitative Trading Terminal</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0e17;--bg2:#111827;--bg3:#1a2235;--bg4:#0f1629;
+  --bd:#1e2d4a;--bd2:#2a3a5c;
+  --t1:#e2e8f0;--t2:#8892a8;--t3:#4a5568;
+  --grn:#00e676;--grn2:#004d2a;--amb:#ffab00;--amb2:#4a3600;
+  --red:#ff1744;--red2:#4a0012;--blu:#448aff;--cyn:#00e5ff;
+  --p1:#00e676;--p2:#448aff;
+}
+body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(--t1);font-size:12px;height:100vh;overflow:hidden}
+.topbar{background:linear-gradient(180deg,#0f1829,#0a0e17);border-bottom:1px solid var(--bd);padding:5px 16px;display:flex;align-items:center;justify-content:space-between;height:34px}
+.brand{font-size:13px;font-weight:700;color:var(--grn);letter-spacing:2px}
+.brand span{color:var(--t3);font-weight:400;letter-spacing:0;margin-left:8px;font-size:11px}
+.status{display:flex;gap:14px;align-items:center;font-size:10px;color:var(--t3)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--grn);display:inline-block;margin-right:4px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* GRID */
+.grid{display:grid;grid-template-columns:290px 1fr 310px;grid-template-rows:1fr auto;height:calc(100vh - 34px)}
+.col{border-right:1px solid var(--bd);overflow-y:auto;padding:10px}
+.col:last-of-type{border-right:none}
+.col-label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--t3);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--bd)}
+
+/* CARDS */
+.card{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:10px;margin-bottom:8px}
+.card-title{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--t3);margin-bottom:6px}
+
+/* MATCH HEADER */
+.tourney{font-size:9px;color:var(--amb);letter-spacing:1.5px;text-transform:uppercase;text-align:center;margin-bottom:6px}
+.prow{display:flex;align-items:center;justify-content:space-between;padding:4px 6px;border-radius:4px;margin-bottom:4px}
+.prow.r1{background:rgba(0,230,118,.06)}
+.prow.r2{background:rgba(68,138,255,.06)}
+.pname{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
+.pname.c1{color:var(--p1)}.pname.c2{color:var(--p2)}
+.sdot{width:6px;height:6px;border-radius:50%;background:var(--amb);display:none}
+.sdot.on{display:inline-block}
+.scores{display:flex;gap:3px;align-items:center}
+.ssc{background:var(--bg4);border:1px solid var(--bd);padding:2px 6px;border-radius:3px;font-size:12px;font-weight:600;min-width:22px;text-align:center}
+.ssc.cur{border-color:var(--amb);color:var(--amb)}
+.gsc{font-size:14px;font-weight:700;min-width:20px;text-align:center;margin-left:4px}
+
+/* GAUGE */
+.gauge{text-align:center;padding:12px}
+.gauge svg{max-width:210px;display:block;margin:0 auto}
+.gauge-val{font-size:30px;font-weight:700;margin-top:-18px;position:relative}
+.gauge-lbl{display:flex;justify-content:space-between;font-size:10px;margin-top:4px;padding:0 10px}
+
+/* SPARKLINE */
+.spark-wrap{position:relative;height:60px;overflow:hidden}
+.spark-canvas{width:100%;height:100%}
+
+/* MODEL BAR */
+.wbar{display:flex;height:16px;border-radius:3px;overflow:hidden;margin:6px 0}
+.wbar div{display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;color:#fff}
+.wleg{display:flex;gap:10px;font-size:9px;margin-top:4px}
+.wleg span{display:flex;align-items:center;gap:3px}
+.ldot{width:8px;height:8px;border-radius:2px;display:inline-block}
+
+/* CENTER: VALUE BETS */
+.vbet-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.vbet{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:12px;transition:all .3s}
+.vbet.has-value{border-color:var(--grn);background:linear-gradient(135deg,var(--grn2),var(--bg3))}
+.vbet.no-value{opacity:.6}
+.vbet-header{font-size:10px;color:var(--t3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;display:flex;justify-content:space-between}
+.vbet-player{font-size:14px;font-weight:700;margin-bottom:6px}
+.vbet-row{display:flex;justify-content:space-between;padding:2px 0;font-size:10px}
+.vbet-row .lbl{color:var(--t3)}.vbet-row .val{font-weight:600}
+.vbet-row .val.pos{color:var(--grn)}.vbet-row .val.neg{color:var(--red)}
+.vbet-action{margin-top:8px;padding:6px 8px;border-radius:4px;font-size:10px;font-weight:700;text-align:center}
+.vbet-action.bet{background:var(--grn2);border:1px solid var(--grn);color:var(--grn)}
+.vbet-action.small{background:rgba(68,138,255,.1);border:1px solid var(--blu);color:var(--blu)}
+.vbet-action.none{background:var(--bg4);color:var(--t3);border:1px solid var(--bd)}
+
+/* POINT LOG */
+.log-wrap{max-height:220px;overflow-y:auto;border-radius:6px}
+table{width:100%;border-collapse:collapse;font-size:10px}
+thead{position:sticky;top:0;background:var(--bg4);z-index:2}
+th{padding:5px 6px;text-align:left;color:var(--t3);font-size:8px;letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--bd);font-weight:600}
+td{padding:4px 6px;border-bottom:1px solid rgba(30,45,74,.4);color:var(--t2)}
+tr:hover td{background:rgba(68,138,255,.04)}
+
+/* RIGHT: EDGES */
+.edge-card{background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:7px 9px;margin-bottom:5px;display:flex;align-items:center;justify-content:space-between;transition:all .3s}
+.edge-card.crit{border-color:var(--red);background:linear-gradient(135deg,var(--red2),var(--bg3))}
+.edge-card.high{border-color:var(--amb);background:linear-gradient(135deg,var(--amb2),var(--bg3))}
+.edge-card.med{border-color:var(--cyn);background:linear-gradient(135deg,rgba(13,33,55,.5),var(--bg3))}
+.edge-name{font-size:10px;font-weight:600;display:flex;align-items:center;gap:5px}
+.edge-msg{font-size:8px;color:var(--t2);margin-top:2px;max-width:180px}
+.badge{font-size:7px;letter-spacing:1px;padding:2px 6px;border-radius:3px;font-weight:700;text-transform:uppercase;white-space:nowrap}
+.badge-off{background:var(--bg4);color:var(--t3)}
+.badge-crit{background:var(--red);color:#fff}
+.badge-high{background:var(--amb);color:#000}
+.badge-med{background:var(--cyn);color:#000}
+
+/* KELLY */
+.kelly{margin-top:8px}
+.kelly-inp{display:flex;gap:6px;margin:6px 0}
+.kelly-inp div{flex:1}
+.kelly-inp label{font-size:7px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:2px}
+.kelly-inp input{width:100%;background:var(--bg4);border:1px solid var(--bd);border-radius:4px;padding:5px 8px;color:var(--t1);font-family:inherit;font-size:11px;outline:none}
+.kelly-inp input:focus{border-color:var(--blu)}
+.btn-log{width:100%;padding:7px;background:linear-gradient(135deg,#004d2a,#00251a);border:1px solid var(--grn);color:var(--grn);font-family:inherit;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;border-radius:4px;cursor:pointer;margin-top:6px}
+.btn-log:hover{background:var(--grn);color:#000}
+
+/* BOTTOM BAR */
+.bottom{grid-column:1/-1;background:var(--bg2);border-top:1px solid var(--bd);padding:6px 14px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bottom-lbl{font-size:9px;letter-spacing:2px;color:var(--t3);text-transform:uppercase;margin-right:6px;white-space:nowrap}
+.btn{padding:5px 12px;border-radius:4px;border:1px solid var(--bd);background:var(--bg3);color:var(--t1);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s}
+.btn:hover{border-color:var(--t2);background:var(--bg4)}
+.btn.b1:hover{border-color:var(--p1);color:var(--p1)}
+.btn.b2:hover{border-color:var(--p2);color:var(--p2)}
+.btn.ace:hover{border-color:var(--grn);color:var(--grn)}
+.btn.df:hover{border-color:var(--red);color:var(--red)}
+.bsep{width:1px;height:22px;background:var(--bd)}
+.binfo{margin-left:auto;display:flex;gap:14px;font-size:10px;color:var(--t3)}
+.binfo .v{color:var(--t2);font-weight:600}
+
+/* LIVE ODDS INPUT ROW */
+.odds-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px}
+.odds-row label{font-size:7px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:2px}
+.odds-row input{width:100%;background:var(--bg4);border:1px solid var(--bd);border-radius:4px;padding:4px 6px;color:var(--t1);font-family:inherit;font-size:11px;outline:none}
+
+/* MODAL */
+.modal-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal-bg.hide{display:none}
+.modal{background:var(--bg2);border:1px solid var(--bd2);border-radius:8px;padding:24px 28px;width:420px;max-width:95vw}
+.modal h2{font-size:16px;color:var(--grn);letter-spacing:2px;margin-bottom:4px}
+.modal .sub{font-size:11px;color:var(--t3);margin-bottom:16px}
+.mrow{display:flex;gap:12px}.mrow>div{flex:1}
+.modal label{font-size:10px;color:var(--t2);display:block;margin:8px 0 3px;letter-spacing:.5px}
+.modal input,.modal select{width:100%;padding:7px 10px;background:var(--bg4);border:1px solid var(--bd);border-radius:4px;color:var(--t1);font-family:inherit;font-size:12px;outline:none}
+.modal input:focus,.modal select:focus{border-color:var(--blu)}
+.btn-start{width:100%;margin-top:16px;padding:10px;background:var(--grn);border:none;color:#000;font-family:inherit;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;border-radius:5px;cursor:pointer}
+.btn-start:hover{opacity:.85}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px}
+</style>
+</head>
+<body>
+
+<!-- MODAL -->
+<div class="modal-bg" id="modal">
+<div class="modal">
+  <h2>TRUE P TERMINAL</h2>
+  <div class="sub">Configure match parameters to begin live tracking</div>
+  <div class="mrow"><div><label>Player 1</label><input id="sP1" value="Sinner J."></div><div><label>Player 2</label><input id="sP2" value="Alcaraz C."></div></div>
+  <div class="mrow"><div><label>Tournament</label><input id="sTour" value="Roland Garros SF"></div><div><label>Surface</label><select id="sSurf"><option>Hard</option><option selected>Clay</option><option>Grass</option></select></div></div>
+  <div class="mrow"><div><label>Best Of</label><select id="sBO"><option value="3">Best of 3</option><option value="5" selected>Best of 5</option></select></div><div><label>First Server</label><select id="sSrv"><option value="1">Player 1</option><option value="2">Player 2</option></select></div></div>
+  <div class="mrow"><div><label>P1 Serve %</label><input type="number" id="sP1S" value="67" min="40" max="90"></div><div><label>P2 Serve %</label><input type="number" id="sP2S" value="65" min="40" max="90"></div></div>
+  <div class="mrow"><div><label>P1 BP Save %</label><input type="number" id="sP1B" value="68" min="30" max="90"></div><div><label>P2 BP Save %</label><input type="number" id="sP2B" value="64" min="30" max="90"></div></div>
+  <div class="mrow"><div><label>ML Prior P1 Win %</label><input type="number" id="sML" value="55" min="1" max="99"></div><div><label>P1 Pre-Match Odds</label><input type="number" id="sOdds" value="1.75" min="1.01" max="20" step=".01"></div></div>
+  <button class="btn-start" onclick="startMatch()">&#9654; INITIALIZE TERMINAL</button>
+</div>
+</div>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="brand">TRUE P <span>| Quantitative Tennis Trading Terminal v2.0</span></div>
+  <div class="status"><span><span class="dot"></span>LIVE ENGINE</span><span id="clock"></span></div>
+</div>
+
+<!-- GRID -->
+<div class="grid">
+
+<!-- LEFT COL -->
+<div class="col">
+  <div class="col-label">Match State</div>
+  <div class="card">
+    <div class="tourney" id="tourney">—</div>
+    <div class="prow r1"><div class="pname c1"><span class="sdot" id="sd1"></span><span id="n1">P1</span></div><div class="scores"><span class="ssc" id="p1s1">-</span><span class="ssc" id="p1s2">-</span><span class="ssc" id="p1s3">-</span><span class="ssc" id="p1s4">-</span><span class="ssc" id="p1s5">-</span><span class="gsc" id="p1g" style="color:var(--p1)">0</span></div></div>
+    <div class="prow r2"><div class="pname c2"><span class="sdot" id="sd2"></span><span id="n2">P2</span></div><div class="scores"><span class="ssc" id="p2s1">-</span><span class="ssc" id="p2s2">-</span><span class="ssc" id="p2s3">-</span><span class="ssc" id="p2s4">-</span><span class="ssc" id="p2s5">-</span><span class="gsc" id="p2g" style="color:var(--p2)">0</span></div></div>
+  </div>
+
+  <!-- GAUGE -->
+  <div class="card gauge">
+    <div class="card-title">TRUE P — Ensemble Win Probability</div>
+    <svg viewBox="0 0 200 115">
+      <defs><linearGradient id="gg" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#448aff"/><stop offset="50%" stop-color="#4a5568"/><stop offset="100%" stop-color="#00e676"/></linearGradient></defs>
+      <path d="M20 100A80 80 0 0 1 180 100" fill="none" stroke="#1e2d4a" stroke-width="10" stroke-linecap="round"/>
+      <path d="M20 100A80 80 0 0 1 180 100" fill="none" stroke="url(#gg)" stroke-width="10" stroke-linecap="round" id="gArc" stroke-dasharray="0 251.33"/>
+      <circle cx="100" cy="100" r="4" fill="var(--amb)" id="gNeedle"/>
+    </svg>
+    <div class="gauge-val" id="gVal" style="color:var(--t3)">—</div>
+    <div class="gauge-lbl"><span id="gL2" style="color:var(--p2)">P2</span><span style="color:var(--t3)">50%</span><span id="gL1" style="color:var(--p1)">P1</span></div>
+  </div>
+
+  <!-- SPARKLINE -->
+  <div class="card">
+    <div class="card-title" style="display:flex;justify-content:space-between">P1 Win Prob — Last 30 pts <span style="font-size:7px;background:var(--red);color:#fff;padding:1px 5px;border-radius:3px;animation:pulse 1.5s infinite">LIVE</span></div>
+    <div class="spark-wrap"><canvas id="sparkCanvas"></canvas></div>
+  </div>
+
+  <!-- MODEL WEIGHTS -->
+  <div class="card">
+    <div class="card-title">Model Weight Decomposition</div>
+    <div class="wbar"><div style="width:35%;background:#7c4dff">ML 35%</div><div style="width:25%;background:#ff6d00">MKV 25%</div><div style="width:40%;background:#00bfa5">MC 40%</div></div>
+    <div class="wleg"><span><span class="ldot" style="background:#7c4dff"></span>ML (LR+RF)</span><span><span class="ldot" style="background:#ff6d00"></span>Markov</span><span><span class="ldot" style="background:#00bfa5"></span>EWMA+MC</span></div>
+    <div style="font-size:8px;color:var(--t3);margin-top:5px">TRUE P = 0.35*ML + 0.25*Markov + 0.40*MC | EWMA lambda=0.6467 | B1=2.5 | 500 sims</div>
+  </div>
+
+  <!-- LIVE STATS -->
+  <div class="card" id="statsCard">
+    <div class="card-title">Live Match Stats</div>
+    <div id="statsBody" style="font-size:10px;color:var(--t2)">No data yet</div>
+  </div>
+</div>
+
+<!-- CENTER COL -->
+<div class="col" style="border-right:1px solid var(--bd)">
+  <div class="col-label">Value Bet Detection &amp; Execution Log</div>
+
+  <!-- LIVE ODDS INPUT -->
+  <div class="card">
+    <div class="card-title">Live Bookmaker Odds (update during match)</div>
+    <div class="odds-row">
+      <div><label>P1 Match</label><input type="number" id="oP1M" value="1.75" step=".01" min="1.01" oninput="refreshEdges()"></div>
+      <div><label>P1 Set</label><input type="number" id="oP1S" value="1.70" step=".01" min="1.01" oninput="refreshEdges()"></div>
+      <div><label>P1 Game</label><input type="number" id="oP1G" value="1.50" step=".01" min="1.01" oninput="refreshEdges()"></div>
+    </div>
+    <div class="odds-row">
+      <div><label>P2 Match</label><input type="number" id="oP2M" value="2.10" step=".01" min="1.01" oninput="refreshEdges()"></div>
+      <div><label>P2 Set</label><input type="number" id="oP2S" value="2.20" step=".01" min="1.01" oninput="refreshEdges()"></div>
+      <div><label>P2 Game</label><input type="number" id="oP2G" value="2.60" step=".01" min="1.01" oninput="refreshEdges()"></div>
+    </div>
+  </div>
+
+  <!-- VALUE BETS GRID -->
+  <div class="vbet-grid" id="vbetGrid">
+    <div class="vbet no-value" id="vb_match_p1"></div>
+    <div class="vbet no-value" id="vb_match_p2"></div>
+    <div class="vbet no-value" id="vb_set_p1"></div>
+    <div class="vbet no-value" id="vb_set_p2"></div>
+    <div class="vbet no-value" id="vb_game_p1"></div>
+    <div class="vbet no-value" id="vb_game_p2"></div>
+  </div>
+
+  <!-- POINT LOG -->
+  <div class="card" style="padding:0">
+    <div style="padding:8px 10px 4px"><div class="card-title" style="margin:0">Point-by-Point Execution Log</div></div>
+    <div class="log-wrap" id="logWrap">
+      <table><thead><tr><th>#</th><th>Srv</th><th>Winner</th><th>Score</th><th>M1</th><th>M2</th><th>TRUE P</th><th>Edge</th></tr></thead><tbody id="logBody"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- RIGHT COL -->
+<div class="col">
+  <div class="col-label">Edge Detection Signals</div>
+  <div id="edgeContainer">
+    <div class="edge-card" id="e_break"><div><div class="edge-name">&#127919; Break Opportunity</div><div class="edge-msg" id="em_break"></div></div><span class="badge badge-off" id="eb_break">INACTIVE</span></div>
+    <div class="edge-card" id="e_bpcount"><div><div class="edge-name">&#9888;&#65039; Critical BP Count</div><div class="edge-msg" id="em_bpcount"></div></div><span class="badge badge-off" id="eb_bpcount">INACTIVE</span></div>
+    <div class="edge-card" id="e_ewma"><div><div class="edge-name">&#128200; EWMA Momentum</div><div class="edge-msg" id="em_ewma"></div></div><span class="badge badge-off" id="eb_ewma">INACTIVE</span></div>
+    <div class="edge-card" id="e_turn"><div><div class="edge-name">&#128260; Momentum Turn</div><div class="edge-msg" id="em_turn"></div></div><span class="badge badge-off" id="eb_turn">INACTIVE</span></div>
+    <div class="edge-card" id="e_clutch"><div><div class="edge-name">&#128142; Clutch Situation</div><div class="edge-msg" id="em_clutch"></div></div><span class="badge badge-off" id="eb_clutch">INACTIVE</span></div>
+    <div class="edge-card" id="e_service"><div><div class="edge-name">&#127934; Service Vulnerability</div><div class="edge-msg" id="em_service"></div></div><span class="badge badge-off" id="eb_service">INACTIVE</span></div>
+    <div class="edge-card" id="e_consist"><div><div class="edge-name">&#128202; Consistency Edge</div><div class="edge-msg" id="em_consist"></div></div><span class="badge badge-off" id="eb_consist">INACTIVE</span></div>
+    <div class="edge-card" id="e_surface"><div><div class="edge-name">&#127967;&#65039; Surface Mastery</div><div class="edge-msg" id="em_surface"></div></div><span class="badge badge-off" id="eb_surface">INACTIVE</span></div>
+  </div>
+
+  <!-- KELLY -->
+  <div class="card kelly">
+    <div class="card-title">Kelly Criterion — Quick Calc</div>
+    <div class="kelly-inp">
+      <div><label>TRUE P (%)</label><input type="number" id="kTP" value="55" min="1" max="99" oninput="calcKelly()"></div>
+      <div><label>Odds</label><input type="number" id="kOdds" value="1.75" min="1.01" max="50" step=".01" oninput="calcKelly()"></div>
+    </div>
+    <div id="kellyOut" style="font-size:10px">
+      <div class="vbet-row"><span class="lbl">Implied</span><span class="val" id="kImpl">—</span></div>
+      <div class="vbet-row"><span class="lbl">Edge</span><span class="val" id="kEdge">—</span></div>
+      <div class="vbet-row"><span class="lbl">Full Kelly</span><span class="val" id="kFull">—</span></div>
+      <div class="vbet-row"><span class="lbl">Quarter Kelly</span><span class="val" id="kQtr">—</span></div>
+      <div class="vbet-row"><span class="lbl">Stake ($1000)</span><span class="val" id="kStake">—</span></div>
+    </div>
+    <button class="btn-log" onclick="logBet()">&#9889; LOG BET</button>
+  </div>
+</div>
+
+<!-- BOTTOM BAR -->
+<div class="bottom">
+  <div class="bottom-lbl" id="bottomLbl">Point Entry</div>
+  <button class="btn b1" onclick="pt(1,'winner')"><span class="bl1">P1</span> Win</button>
+  <button class="btn b2" onclick="pt(2,'winner')"><span class="bl2">P2</span> Win</button>
+  <div class="bsep"></div>
+  <button class="btn ace b1" onclick="pt(1,'ace')"><span class="bl1">P1</span> Ace</button>
+  <button class="btn ace b2" onclick="pt(2,'ace')"><span class="bl2">P2</span> Ace</button>
+  <div class="bsep"></div>
+  <button class="btn df" onclick="pt(0,'df')">Server DF</button>
+  <div class="bsep"></div>
+  <button class="btn b1" onclick="pt(1,'rally')" style="font-size:10px"><span class="bl1">P1</span> Rally</button>
+  <button class="btn b2" onclick="pt(2,'rally')" style="font-size:10px"><span class="bl2">P2</span> Rally</button>
+  <div class="binfo">
+    <span>Pts: <span class="v" id="bPts">0</span></span>
+    <span>Srv: <span class="v" id="bSrv">—</span></span>
+    <span>Edges: <span class="v" id="bEdg">0</span></span>
+  </div>
+</div>
+
+</div>
+
+<script>
+/* ════════════════════════════════════════════
+   STATE
+   ════════════════════════════════════════════ */
+var G = {
+  p1:'P1', p2:'P2', tour:'', surf:'Hard', bo:3,
+  srv:1,
+  sets:[[0,0]], cs:0, pts:[0,0],
+  setsDone:[], sw:[0,0], tb:false, over:false,
+  totSrv:[0,0], faults:[0,0],
+  streak:[0,0],
+  retWon:[0,0], retTot:[0,0],
+  bpF:[0,0], bpC:[0,0],
+  aces:[0,0], dfs:[0,0], winners:[0,0], ues:[0,0],
+  ewma:[50,50], momHist:[],
+  mlPrior:0.55, trueP:0.5, tpHist:[],
+  setP1:0.5, gameP1:0.5,
+  p1S:67, p2S:65, p1B:68, p2B:64, preOdds:1.75,
+  log:[], bets:[]
+};
+
+/* ════════════════════════════════════════════
+   CONSTANTS (Qian et al. 2025)
+   ════════════════════════════════════════════ */
+var W_E=0.1307, W_S=0.1184, W_P=0.1358, W_R=0.6151;
+var LAM=0.6467, B1=2.5, SIMS=500;
+
+/* ════════════════════════════════════════════
+   PERFORMANCE MODEL
+   ════════════════════════════════════════════ */
+function perfE(won, r) {
+  r = Math.max(1, r);
+  var e = 1 / (1 + Math.log(r));
+  return won ? e : -e;
+}
+function perfS(i) { return Math.min(G.streak[i], 10) / 10; }
+function perfP(i) { return G.totSrv[i] === 0 ? 0.85 : Math.max(0, (G.totSrv[i] - G.faults[i]) / G.totSrv[i]); }
+function perfR(i) { return G.retTot[i] === 0 ? 0.30 : G.retWon[i] / G.retTot[i]; }
+
+function perf(i, won, rally, isSrv) {
+  var raw = W_E * perfE(won, rally) + W_S * perfS(i) + W_P * perfP(i) + W_R * perfR(i);
+  raw -= (isSrv ? 0.15 : -0.15);
+  return Math.max(0, Math.min(100, (raw + 0.6) / 1.4 * 100));
+}
+
+function updateEWMA(i, p) {
+  G.ewma[i] = LAM * p + (1 - LAM) * G.ewma[i];
+  return G.ewma[i];
+}
+
+function momProb(m1, m2) {
+  var d = (m1 - m2) / 100;
+  return Math.max(0.05, Math.min(0.95, 1 / (1 + Math.exp(-B1 * d))));
+}
+
+/* ════════════════════════════════════════════
+   MARKOV CHAIN
+   ════════════════════════════════════════════ */
+function C(n, k) { var r = 1; for (var i = 0; i < k; i++) r = r * (n - i) / (i + 1); return r; }
+
+function gProb(p) {
+  p = Math.max(0.01, Math.min(0.99, p));
+  var q = 1 - p;
+  var dn = 1 - 2 * p * q;
+  var dw = Math.abs(dn) < 0.001 ? 0.5 : p * p / dn;
+  return Math.pow(p, 4) + 4 * Math.pow(p, 4) * q + 10 * Math.pow(p, 4) * q * q + 20 * Math.pow(p, 3) * Math.pow(q, 3) * dw;
+}
+
+function sProb(pH, pB) {
+  var pg = (pH + pB) / 2;
+  var qg = 1 - pg;
+  var pr = 0;
+  for (var x = 0; x <= 4; x++) pr += C(5 + x, x) * Math.pow(pg, 6) * Math.pow(qg, x);
+  var tb = 0.5 + 0.8 * (pg - 0.5);
+  pr += C(10, 5) * Math.pow(pg, 5) * Math.pow(qg, 5) * pg * pg;
+  pr += C(10, 5) * Math.pow(pg, 5) * Math.pow(qg, 5) * 2 * pg * qg * tb;
+  return Math.max(0.01, Math.min(0.99, pr));
+}
+
+function mProb(ps, bo) {
+  ps = Math.max(0.01, Math.min(0.99, ps));
+  if (bo === 3) return ps * ps * (3 - 2 * ps);
+  return Math.pow(ps, 3) * (6 * ps * ps - 15 * ps + 10);
+}
+
+function markov() {
+  var a = G.p1S * 0.01, b = G.p2S * 0.01;
+  var h1 = gProb(Math.max(0.45, Math.min(0.85, a * 0.6 + (1 - b * 0.9) * 0.4)));
+  var h2 = gProb(Math.max(0.45, Math.min(0.85, b * 0.6 + (1 - a * 0.9) * 0.4)));
+  var ps = sProb(h1, 1 - h2);
+  var pm = mProb(ps, G.bo);
+  pm += (G.sw[0] - G.sw[1]) * 0.08;
+  pm += ((G.sets[G.cs] ? G.sets[G.cs][0] : 0) - (G.sets[G.cs] ? G.sets[G.cs][1] : 0)) * 0.015;
+  return Math.max(0.02, Math.min(0.98, pm));
+}
+
+/* ════════════════════════════════════════════
+   MONTE CARLO
+   ════════════════════════════════════════════ */
+function mc(pp) {
+  var w = 0, need = Math.ceil(G.bo / 2);
+  for (var i = 0; i < SIMS; i++) {
+    var s1 = G.sw[0], s2 = G.sw[1];
+    var g1 = G.sets[G.cs] ? G.sets[G.cs][0] : 0;
+    var g2 = G.sets[G.cs] ? G.sets[G.cs][1] : 0;
+    var p1 = G.pts[0], p2 = G.pts[1];
+    var sv = G.srv, c = 0;
+    while (s1 < need && s2 < need && c < 500) {
+      c++;
+      var pw = sv === 1 ? pp + 0.1 : pp - 0.1;
+      pw = Math.max(0.15, Math.min(0.85, pw));
+      if (Math.random() < pw) p1++; else p2++;
+      var isTB = (g1 === 6 && g2 === 6);
+      if (isTB) {
+        if (p1 >= 7 && p1 - p2 >= 2) { g1++; p1 = 0; p2 = 0; sv = sv === 1 ? 2 : 1; }
+        else if (p2 >= 7 && p2 - p1 >= 2) { g2++; p1 = 0; p2 = 0; sv = sv === 1 ? 2 : 1; }
+        else if ((p1 + p2) % 2 === 1) { sv = sv === 1 ? 2 : 1; }
+      } else {
+        if (p1 >= 4 && p1 - p2 >= 2) { g1++; p1 = 0; p2 = 0; sv = sv === 1 ? 2 : 1; }
+        else if (p2 >= 4 && p2 - p1 >= 2) { g2++; p1 = 0; p2 = 0; sv = sv === 1 ? 2 : 1; }
+      }
+      if (g1 >= 6 && g1 - g2 >= 2) { s1++; g1 = 0; g2 = 0; }
+      else if (g2 >= 6 && g2 - g1 >= 2) { s2++; g1 = 0; g2 = 0; }
+      else if (g1 === 7 && g2 === 6) { s1++; g1 = 0; g2 = 0; }
+      else if (g2 === 7 && g1 === 6) { s2++; g1 = 0; g2 = 0; }
+    }
+    if (s1 >= need) w++;
+  }
+  return w / SIMS;
+}
+
+/* ════════════════════════════════════════════
+   TRUE P ENSEMBLE
+   ════════════════════════════════════════════ */
+function calcTrueP() {
+  var has = G.momHist.length >= 3;
+  var ep = momProb(G.ewma[0], G.ewma[1]);
+  var mcp = has ? mc(ep) : 0.5;
+  var mk = markov();
+  var ml = G.mlPrior;
+  var tp;
+  if (has) {
+    tp = 0.35 * ml + 0.25 * mk + 0.40 * mcp;
+  } else {
+    tp = 0.60 * ml + 0.40 * mk;
+  }
+  G.trueP = Math.max(0.02, Math.min(0.98, tp));
+  G.tpHist.push(G.trueP * 100);
+  if (G.tpHist.length > 30) G.tpHist.shift();
+
+  /* Set and game level probs for value bets */
+  var a = G.p1S * 0.01, b = G.p2S * 0.01;
+  var h1 = gProb(Math.max(0.45, Math.min(0.85, a * 0.6 + (1 - b * 0.9) * 0.4)));
+  var h2 = gProb(Math.max(0.45, Math.min(0.85, b * 0.6 + (1 - a * 0.9) * 0.4)));
+  G.setP1 = sProb(h1, 1 - h2);
+
+  var srvP = G.srv === 1 ? a : b;
+  var baseG = gProb(Math.max(0.45, Math.min(0.85, srvP)));
+  G.gameP1 = G.srv === 1 ? baseG : (1 - baseG);
+  if (has) { G.gameP1 = G.gameP1 * 0.7 + ep * 0.3; }
+
+  return G.trueP;
+}
+
+/* ════════════════════════════════════════════
+   SCORE LOGIC
+   ════════════════════════════════════════════ */
+function ptStr(a, b, tb) {
+  if (tb) return a + '-' + b;
+  var m = ['0', '15', '30', '40'];
+  if (a <= 3 && b <= 3) return m[a] + '-' + m[b];
+  if (a >= 3 && b >= 3) {
+    if (a === b) return 'Deuce';
+    return a > b ? 'Ad-' + G.p1.split(' ')[0] : 'Ad-' + G.p2.split(' ')[0];
+  }
+  return (a >= 4 ? 'Game' : m[Math.min(a, 3)]) + '-' + (b >= 4 ? 'Game' : m[Math.min(b, 3)]);
+}
+
+function scoreStr() {
+  var s = '';
+  for (var i = 0; i < G.setsDone.length; i++) {
+    if (i > 0) s += ' / ';
+    s += G.setsDone[i][0] + '-' + G.setsDone[i][1];
+  }
+  var c = G.sets[G.cs] || [0, 0];
+  if (s) s += ' / ';
+  s += c[0] + '-' + c[1];
+  if (!G.over) s += ' (' + ptStr(G.pts[0], G.pts[1], G.tb) + ')';
+  return s;
+}
+
+function advance(w) {
+  if (G.over) return;
+  var l = 1 - w;
+  G.pts[w]++;
+  var g1 = G.sets[G.cs][0], g2 = G.sets[G.cs][1];
+  var isTB = (g1 === 6 && g2 === 6);
+  var go = false;
+  if (isTB) {
+    if (G.pts[w] >= 7 && G.pts[w] - G.pts[l] >= 2) go = true;
+    else if ((G.pts[0] + G.pts[1]) % 2 === 1) G.srv = G.srv === 1 ? 2 : 1;
+  } else {
+    if (G.pts[w] >= 4 && G.pts[w] - G.pts[l] >= 2) go = true;
+  }
+  if (go) {
+    G.sets[G.cs][w]++;
+    G.pts = [0, 0];
+    G.srv = G.srv === 1 ? 2 : 1;
+    G.tb = false;
+    var aa = G.sets[G.cs][0], bb = G.sets[G.cs][1];
+    var so = false;
+    if (aa >= 6 && aa - bb >= 2) so = true;
+    if (bb >= 6 && bb - aa >= 2) so = true;
+    if (aa === 7 && bb === 6) so = true;
+    if (bb === 7 && aa === 6) so = true;
+    if (so) {
+      G.sw[aa > bb ? 0 : 1]++;
+      G.setsDone.push([aa, bb]);
+      var nd = Math.ceil(G.bo / 2);
+      if (G.sw[0] >= nd || G.sw[1] >= nd) {
+        G.over = true;
+      } else {
+        G.cs++;
+        G.sets.push([0, 0]);
+      }
+    }
+  }
+  if (!G.over && G.sets[G.cs][0] === 6 && G.sets[G.cs][1] === 6) G.tb = true;
+}
+
+/* ════════════════════════════════════════════
+   RECORD POINT
+   ════════════════════════════════════════════ */
+function pt(winner, type) {
+  if (G.over) return;
+
+  var sv = G.srv;
+  var si = sv - 1;
+  var ri = 1 - si;
+
+  /* DF: server loses */
+  if (type === 'df') { winner = sv === 1 ? 2 : 1; }
+
+  /* Ace: only server can ace, else downgrade */
+  var atype = type;
+  if (type === 'ace' && winner !== sv) { atype = 'winner'; }
+
+  var aw = winner;
+  var pi = aw - 1;
+  var li = 1 - pi;
+  var rally;
+  if (atype === 'ace') rally = 1;
+  else if (atype === 'df') rally = 0;
+  else if (atype === 'winner') rally = 2;
+  else rally = 3 + Math.floor(Math.random() * 6);
+
+  /* BP check before advance */
+  var retAt40 = G.pts[ri] >= 3 && G.pts[ri] >= G.pts[si];
+  if (retAt40 && !G.tb) {
+    G.bpF[si]++;
+    if (pi === ri) G.bpC[ri]++;
+  }
+
+  /* Streaks */
+  G.streak[pi]++;
+  G.streak[li] = 0;
+
+  /* Serve stats */
+  G.totSrv[si]++;
+  if (atype === 'df') { G.faults[si] += 2; G.dfs[si]++; }
+  if (atype === 'ace') G.aces[si]++;
+  if (atype === 'winner') G.winners[pi]++;
+  if (atype === 'rally') G.ues[li]++;
+
+  /* Return tracking */
+  G.retTot[ri]++;
+  if (pi === ri) G.retWon[ri]++;
+
+  /* Performance & EWMA */
+  var pf1 = perf(0, aw === 1, rally, sv === 1);
+  var pf2 = perf(1, aw === 2, rally, sv === 2);
+  var m1 = updateEWMA(0, pf1);
+  var m2 = updateEWMA(1, pf2);
+  G.momHist.push({ m1: m1, m2: m2, pf1: pf1, pf2: pf2, w: aw, s: sv });
+
+  /* Advance score */
+  advance(pi);
+
+  /* TRUE P */
+  var tp = calcTrueP();
+
+  /* Edges */
+  var edges = detectEdges();
+
+  /* Log entry */
+  var n = G.log.length + 1;
+  var eKeys = Object.keys(edges);
+  var eStr = eKeys.length ? eKeys.map(function(k) { return '[' + edges[k].sev.toUpperCase() + ']'; }).join(' ') : '—';
+  var eSev = '';
+  if (eKeys.length) {
+    var hasCrit = false, hasHigh = false;
+    for (var ek = 0; ek < eKeys.length; ek++) {
+      if (edges[eKeys[ek]].sev === 'critical') hasCrit = true;
+      if (edges[eKeys[ek]].sev === 'high') hasHigh = true;
+    }
+    eSev = hasCrit ? 'critical' : hasHigh ? 'high' : 'medium';
+  }
+  G.log.push({ n: n, sv: sv, aw: aw, score: scoreStr(), m1: m1.toFixed(1), m2: m2.toFixed(1), tp: (tp * 100).toFixed(1) + '%', tpR: tp, eStr: eStr, eSev: eSev, type: atype });
+
+  /* Update UI */
+  render(edges);
+}
+
+/* ════════════════════════════════════════════
+   EDGE DETECTION (V2 style)
+   ════════════════════════════════════════════ */
+function detectEdges() {
+  var E = {};
+
+  /* 1. Break Opportunity */
+  for (var i = 0; i < 2; i++) {
+    if (G.bpF[i] > 0) {
+      var saveRate = 1 - (G.bpC[1 - i] / G.bpF[i]);
+      var exp = (i === 0 ? G.p1B : G.p2B) / 100;
+      if (saveRate < exp - 0.15) {
+        E.break_opp = { sev: 'critical', msg: (i ? G.p2 : G.p1) + ' saving ' + (saveRate * 100).toFixed(0) + '% (exp ' + (exp * 100).toFixed(0) + '%)', forP: 1 - i };
+      } else if (saveRate < exp - 0.10 && !E.break_opp) {
+        E.break_opp = { sev: 'high', msg: (i ? G.p2 : G.p1) + ' BP save underperforming', forP: 1 - i };
+      }
+    }
+  }
+
+  /* 2. Critical BP Count */
+  for (var j = 0; j < 2; j++) {
+    if (G.bpF[j] >= 10 && !E.bpcount) {
+      E.bpcount = { sev: 'critical', msg: (j ? G.p2 : G.p1) + ' faced ' + G.bpF[j] + ' BPs — 65% match loss rate', forP: 1 - j };
+    } else if (G.bpF[j] >= 8 && !E.bpcount) {
+      E.bpcount = { sev: 'high', msg: (j ? G.p2 : G.p1) + ' faced ' + G.bpF[j] + ' BPs — approaching danger', forP: 1 - j };
+    }
+  }
+
+  /* 3. EWMA Momentum */
+  var gap = G.ewma[0] - G.ewma[1];
+  if (G.momHist.length >= 3) {
+    if (Math.abs(gap) > 15) {
+      E.ewma = { sev: 'critical', msg: 'EWMA gap ' + (gap > 0 ? '+' : '') + gap.toFixed(1) + ' -> ' + (gap > 0 ? G.p1 : G.p2) + ' surge', forP: gap > 0 ? 0 : 1 };
+    } else if (Math.abs(gap) > 8) {
+      E.ewma = { sev: 'high', msg: 'EWMA gap ' + (gap > 0 ? '+' : '') + gap.toFixed(1) + ' -> ' + (gap > 0 ? G.p1 : G.p2) + ' building', forP: gap > 0 ? 0 : 1 };
+    }
+  }
+
+  /* 4. Momentum turning point */
+  if (G.momHist.length >= 5) {
+    var r = G.momHist.slice(-3);
+    var o = G.momHist.slice(-5, -3);
+    var rt = r[2].m1 - r[0].m1;
+    var ot = o[1].m1 - o[0].m1;
+    if (ot < -3 && rt > 3) {
+      E.turn = { sev: 'high', msg: G.p1 + ' momentum REVERSING up', forP: 0 };
+    } else if (ot > 3 && rt < -3) {
+      E.turn = { sev: 'high', msg: G.p1 + ' momentum REVERSING down', forP: 1 };
+    }
+  }
+
+  /* 5. Clutch */
+  var ga = G.sets[G.cs] ? G.sets[G.cs][0] : 0;
+  var gb = G.sets[G.cs] ? G.sets[G.cs][1] : 0;
+  if (ga >= 4 && gb >= 4) {
+    E.clutch = { sev: 'high', msg: 'Clutch zone: ' + ga + '-' + gb + ' in set' };
+  }
+
+  /* 6. Service Vulnerability */
+  for (var k = 0; k < 2; k++) {
+    var tot = 0;
+    for (var ss = 0; ss < G.sets.length; ss++) tot += G.sets[ss][k];
+    tot = Math.max(1, tot);
+    var dr = G.dfs[k] / (tot * 2);
+    if (dr > 0.15 && !E.service) {
+      E.service = { sev: 'high', msg: (k ? G.p2 : G.p1) + ' DF rate ' + (dr * 100).toFixed(0) + '%', forP: 1 - k };
+    }
+  }
+
+  /* 7. Consistency */
+  for (var u = 0; u < 2; u++) {
+    var ttl = G.winners[u] + G.ues[u];
+    if (ttl > 20 && G.ues[u] / ttl > 0.4 && !E.consist) {
+      E.consist = { sev: 'medium', msg: (u ? G.p2 : G.p1) + ' UE ratio ' + (G.ues[u] / ttl * 100).toFixed(0) + '%', forP: 1 - u };
+    }
+  }
+
+  /* 8. Surface */
+  var sd = G.p1S - G.p2S;
+  if (Math.abs(sd) >= 8) {
+    E.surface = { sev: 'medium', msg: 'Serve dominance gap ' + (sd > 0 ? G.p1 : G.p2) + ' +' + Math.abs(sd) + '%' };
+  }
+
+  return E;
+}
+
+/* ════════════════════════════════════════════
+   VALUE BET CALCULATOR (V2 style)
+   ════════════════════════════════════════════ */
+function buildVBet(el, label, player, trueP, odds, pColor) {
+  var implied = 1 / odds;
+  var edge = trueP - implied;
+  var kelly = edge > 0 ? (trueP * odds - 1) / (odds - 1) : 0;
+  var stake = Math.min(kelly * 100, 150);
+  var isValue = edge > 0.05;
+  var isSmall = edge > 0 && edge <= 0.05;
+  el.className = 'vbet' + (isValue ? ' has-value' : isSmall ? '' : ' no-value');
+  var action = '';
+  if (isValue) {
+    action = '<div class="vbet-action bet">VALUE BET — $' + stake.toFixed(0) + ' (Kelly ' + (kelly * 100).toFixed(1) + '%)</div>';
+  } else if (isSmall) {
+    action = '<div class="vbet-action small">Small edge: ' + (edge * 100).toFixed(1) + '%</div>';
+  } else {
+    action = '<div class="vbet-action none">No value: ' + (edge * 100).toFixed(1) + '%</div>';
+  }
+  el.innerHTML = '<div class="vbet-header"><span>' + label + '</span><span style="color:' + (edge > 0 ? 'var(--grn)' : 'var(--red)') + '">' + (edge > 0 ? '+' : '') + (edge * 100).toFixed(1) + '%</span></div>'
+    + '<div class="vbet-player" style="color:' + pColor + '">' + player + '</div>'
+    + '<div class="vbet-row"><span class="lbl">Odds</span><span class="val">' + odds.toFixed(2) + '</span></div>'
+    + '<div class="vbet-row"><span class="lbl">Implied</span><span class="val">' + (implied * 100).toFixed(1) + '%</span></div>'
+    + '<div class="vbet-row"><span class="lbl">TRUE P</span><span class="val" style="color:' + pColor + '">' + (trueP * 100).toFixed(1) + '%</span></div>'
+    + action;
+}
+
+function refreshEdges() {
+  var o = {
+    p1m: parseFloat(document.getElementById('oP1M').value) || 1.75,
+    p2m: parseFloat(document.getElementById('oP2M').value) || 2.10,
+    p1s: parseFloat(document.getElementById('oP1S').value) || 1.70,
+    p2s: parseFloat(document.getElementById('oP2S').value) || 2.20,
+    p1g: parseFloat(document.getElementById('oP1G').value) || 1.50,
+    p2g: parseFloat(document.getElementById('oP2G').value) || 2.60
+  };
+  buildVBet(document.getElementById('vb_match_p1'), 'MATCH', G.p1, G.trueP, o.p1m, 'var(--p1)');
+  buildVBet(document.getElementById('vb_match_p2'), 'MATCH', G.p2, 1 - G.trueP, o.p2m, 'var(--p2)');
+  buildVBet(document.getElementById('vb_set_p1'), 'SET', G.p1, G.setP1, o.p1s, 'var(--p1)');
+  buildVBet(document.getElementById('vb_set_p2'), 'SET', G.p2, 1 - G.setP1, o.p2s, 'var(--p2)');
+  buildVBet(document.getElementById('vb_game_p1'), 'GAME', G.p1, G.gameP1, o.p1g, 'var(--p1)');
+  buildVBet(document.getElementById('vb_game_p2'), 'GAME', G.p2, 1 - G.gameP1, o.p2g, 'var(--p2)');
+}
+
+/* ════════════════════════════════════════════
+   RENDER
+   ════════════════════════════════════════════ */
+function render(edges) {
+  /* Server dots */
+  document.getElementById('sd1').className = 'sdot' + (G.srv === 1 ? ' on' : '');
+  document.getElementById('sd2').className = 'sdot' + (G.srv === 2 ? ' on' : '');
+
+  /* Set scores */
+  for (var i = 0; i < 5; i++) {
+    var sc = G.setsDone[i];
+    document.getElementById('p1s' + (i + 1)).textContent = sc ? sc[0] : (i === G.cs && G.sets[i] ? G.sets[i][0] : '-');
+    document.getElementById('p2s' + (i + 1)).textContent = sc ? sc[1] : (i === G.cs && G.sets[i] ? G.sets[i][1] : '-');
+    document.getElementById('p1s' + (i + 1)).className = 'ssc' + (i === G.cs && !G.over ? ' cur' : '');
+    document.getElementById('p2s' + (i + 1)).className = 'ssc' + (i === G.cs && !G.over ? ' cur' : '');
+  }
+
+  /* Game/Point score */
+  if (G.over) {
+    document.getElementById('p1g').textContent = G.sw[0] > G.sw[1] ? 'W' : '';
+    document.getElementById('p2g').textContent = G.sw[1] > G.sw[0] ? 'W' : '';
+  } else {
+    var ps = ptStr(G.pts[0], G.pts[1], G.tb);
+    if (ps === 'Deuce') {
+      document.getElementById('p1g').textContent = '40';
+      document.getElementById('p2g').textContent = '40';
+    } else if (ps.indexOf('Ad') === 0) {
+      var ap = ps.indexOf(G.p1.split(' ')[0]) >= 0 ? 1 : 2;
+      document.getElementById('p1g').textContent = ap === 1 ? 'Ad' : '40';
+      document.getElementById('p2g').textContent = ap === 2 ? 'Ad' : '40';
+    } else {
+      var pp = ps.split('-');
+      document.getElementById('p1g').textContent = G.tb ? G.pts[0] : (pp[0] || '0');
+      document.getElementById('p2g').textContent = G.tb ? G.pts[1] : (pp[1] || '0');
+    }
+  }
+
+  /* Gauge */
+  var pct = G.trueP * 100;
+  var tot = 251.33;
+  document.getElementById('gArc').setAttribute('stroke-dasharray', (pct / 100 * tot) + ' ' + tot);
+  var ang = Math.PI * (1 - pct / 100);
+  var nx = 100 + 80 * Math.cos(ang);
+  var ny = 100 - 80 * Math.sin(ang);
+  document.getElementById('gNeedle').setAttribute('cx', nx);
+  document.getElementById('gNeedle').setAttribute('cy', ny);
+  document.getElementById('gVal').textContent = pct.toFixed(1) + '%';
+  document.getElementById('gVal').style.color = pct > 55 ? 'var(--p1)' : pct < 45 ? 'var(--p2)' : 'var(--t2)';
+
+  /* Sparkline (pure canvas) */
+  drawSpark();
+
+  /* Value bets */
+  refreshEdges();
+
+  /* Edge cards */
+  var eMap = {
+    'break': 'break_opp',
+    'bpcount': 'bpcount',
+    'ewma': 'ewma',
+    'turn': 'turn',
+    'clutch': 'clutch',
+    'service': 'service',
+    'consist': 'consist',
+    'surface': 'surface'
+  };
+  var eKeys = ['break', 'bpcount', 'ewma', 'turn', 'clutch', 'service', 'consist', 'surface'];
+  var active = 0;
+  for (var ei = 0; ei < eKeys.length; ei++) {
+    var ek = eKeys[ei];
+    var dataKey = eMap[ek];
+    var e = edges[dataKey];
+    var card = document.getElementById('e_' + ek);
+    var badge = document.getElementById('eb_' + ek);
+    var msg = document.getElementById('em_' + ek);
+    if (e) {
+      active++;
+      var sevClass = e.sev === 'critical' ? 'crit' : e.sev === 'high' ? 'high' : 'med';
+      card.className = 'edge-card ' + sevClass;
+      badge.className = 'badge badge-' + sevClass;
+      badge.textContent = e.sev.toUpperCase();
+      msg.textContent = e.msg;
+    } else {
+      card.className = 'edge-card';
+      badge.className = 'badge badge-off';
+      badge.textContent = 'INACTIVE';
+      msg.textContent = '';
+    }
+  }
+
+  /* Log table row */
+  var entry = G.log[G.log.length - 1];
+  if (!entry) return;
+  var tr = document.createElement('tr');
+  var sc2 = entry.sv === 1 ? 'var(--p1)' : 'var(--p2)';
+  var wc = entry.aw === 1 ? 'var(--p1)' : 'var(--p2)';
+  var tc = entry.tpR * 100 > 55 ? 'var(--p1)' : entry.tpR * 100 < 45 ? 'var(--p2)' : 'var(--t2)';
+  var typeIcon = entry.type === 'ace' ? ' Ace' : entry.type === 'df' ? ' DF' : '';
+  var eSevColor = entry.eSev === 'critical' ? 'var(--red)' : entry.eSev === 'high' ? 'var(--amb)' : entry.eSev === 'medium' ? 'var(--cyn)' : 'var(--t3)';
+  tr.innerHTML = '<td>' + entry.n + '</td>'
+    + '<td style="color:' + sc2 + '">' + (entry.sv === 1 ? 'P1' : 'P2') + '</td>'
+    + '<td style="color:' + wc + ';font-weight:600">' + (entry.aw === 1 ? G.p1 : G.p2).substring(0, 8) + typeIcon + '</td>'
+    + '<td style="font-size:8px">' + entry.score + '</td>'
+    + '<td style="color:var(--p1)">' + entry.m1 + '</td>'
+    + '<td style="color:var(--p2)">' + entry.m2 + '</td>'
+    + '<td style="color:' + tc + ';font-weight:700">' + entry.tp + '</td>'
+    + '<td style="font-weight:600;color:' + eSevColor + '">' + entry.eStr + '</td>';
+  document.getElementById('logBody').appendChild(tr);
+  document.getElementById('logWrap').scrollTop = 999999;
+
+  /* Stats */
+  updateStats();
+
+  /* Bottom bar */
+  document.getElementById('bPts').textContent = G.log.length;
+  document.getElementById('bSrv').textContent = G.srv === 1 ? G.p1 : G.p2;
+  document.getElementById('bEdg').textContent = active;
+  if (G.over) document.getElementById('bottomLbl').textContent = 'MATCH COMPLETE';
+}
+
+function updateStats() {
+  var h = '<div style="display:grid;grid-template-columns:1fr auto auto;gap:2px 10px">'
+    + '<span style="color:var(--t3)"></span><span style="color:var(--p1);font-weight:600">' + G.p1.substring(0, 8) + '</span><span style="color:var(--p2);font-weight:600">' + G.p2.substring(0, 8) + '</span>'
+    + '<span>Aces</span><span>' + G.aces[0] + '</span><span>' + G.aces[1] + '</span>'
+    + '<span>DFs</span><span>' + G.dfs[0] + '</span><span>' + G.dfs[1] + '</span>'
+    + '<span>Winners</span><span>' + G.winners[0] + '</span><span>' + G.winners[1] + '</span>'
+    + '<span>UEs</span><span>' + G.ues[0] + '</span><span>' + G.ues[1] + '</span>'
+    + '<span>BPs Faced</span><span>' + G.bpF[0] + '</span><span>' + G.bpF[1] + '</span>'
+    + '<span>BPs Conv</span><span>' + G.bpC[0] + '</span><span>' + G.bpC[1] + '</span>'
+    + '<span>EWMA</span><span style="color:var(--p1)">' + G.ewma[0].toFixed(1) + '</span><span style="color:var(--p2)">' + G.ewma[1].toFixed(1) + '</span>'
+    + '</div>';
+  document.getElementById('statsBody').innerHTML = h;
+}
+
+/* ════════════════════════════════════════════
+   SPARKLINE (pure canvas, no Chart.js)
+   ════════════════════════════════════════════ */
+function drawSpark() {
+  var canvas = document.getElementById('sparkCanvas');
+  var par = canvas.parentElement;
+  var rect = par.getBoundingClientRect();
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  var w = rect.width, h = rect.height;
+  ctx.clearRect(0, 0, w, h);
+  var d = G.tpHist;
+  if (d.length < 2) return;
+  var n = d.length;
+  var step = w / (n - 1);
+
+  /* fill area */
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  for (var i = 0; i < n; i++) {
+    var y = h - (d[i] / 100) * h;
+    ctx.lineTo(i * step, y);
+  }
+  ctx.lineTo((n - 1) * step, h);
+  ctx.closePath();
+  var last = d[d.length - 1];
+  ctx.fillStyle = last > 55 ? 'rgba(0,230,118,.1)' : last < 45 ? 'rgba(68,138,255,.1)' : 'rgba(136,146,168,.06)';
+  ctx.fill();
+
+  /* line */
+  ctx.beginPath();
+  for (var j = 0; j < n; j++) {
+    var y2 = h - (d[j] / 100) * h;
+    if (j === 0) ctx.moveTo(j * step, y2);
+    else ctx.lineTo(j * step, y2);
+  }
+  ctx.strokeStyle = last > 55 ? '#00e676' : last < 45 ? '#448aff' : '#8892a8';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  /* 50% line */
+  ctx.beginPath();
+  ctx.moveTo(0, h / 2);
+  ctx.lineTo(w, h / 2);
+  ctx.strokeStyle = 'rgba(74,85,104,.4)';
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([4, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+/* ════════════════════════════════════════════
+   KELLY QUICK CALC
+   ════════════════════════════════════════════ */
+function calcKelly() {
+  var tp = (parseFloat(document.getElementById('kTP').value) || 55) / 100;
+  var odds = parseFloat(document.getElementById('kOdds').value) || 1.75;
+  var imp = 1 / odds;
+  var edge = tp - imp;
+  var fk = edge > 0 ? (tp * odds - 1) / (odds - 1) : 0;
+  var qk = fk * 0.25;
+  var cap = Math.min(qk, 0.05);
+  var stake = cap * 1000;
+
+  document.getElementById('kImpl').textContent = (imp * 100).toFixed(1) + '%';
+  var ee = document.getElementById('kEdge');
+  ee.textContent = (edge > 0 ? '+' : '') + (edge * 100).toFixed(1) + '%';
+  ee.className = 'val ' + (edge > 0.02 ? 'pos' : edge < -0.02 ? 'neg' : '');
+  document.getElementById('kFull').textContent = fk > 0 ? (fk * 100).toFixed(1) + '%' : '—';
+  document.getElementById('kQtr').textContent = qk > 0 ? (qk * 100).toFixed(1) + '%' : '—';
+  document.getElementById('kStake').textContent = stake > 0 ? '$' + stake.toFixed(0) + (qk > 0.05 ? ' (cap 5%)' : '') : '—';
+  document.getElementById('kStake').className = 'val ' + (stake > 0 ? 'pos' : '');
+}
+
+function logBet() {
+  var odds = parseFloat(document.getElementById('kOdds').value) || 1.75;
+  var tp = (parseFloat(document.getElementById('kTP').value) || 55) / 100;
+  var edge = tp - 1 / odds;
+  if (edge <= 0.02) { alert('Edge below 2% — no bet'); return; }
+  var fk = (tp * odds - 1) / (odds - 1);
+  var stake = Math.min(fk * 0.25, 0.05) * 1000;
+  G.bets.push({ t: new Date().toLocaleTimeString(), odds: odds, tp: tp, edge: edge, stake: stake, pt: G.log.length });
+  alert('BET LOGGED: $' + stake.toFixed(0) + ' @ ' + odds + ' | Edge ' + (edge * 100).toFixed(1) + '% | Pt #' + G.log.length);
+}
+
+/* ════════════════════════════════════════════
+   INIT MATCH
+   ════════════════════════════════════════════ */
+function startMatch() {
+  G.p1 = document.getElementById('sP1').value || 'Player 1';
+  G.p2 = document.getElementById('sP2').value || 'Player 2';
+  G.tour = document.getElementById('sTour').value || 'Match';
+  G.surf = document.getElementById('sSurf').value;
+  G.bo = parseInt(document.getElementById('sBO').value);
+  G.srv = parseInt(document.getElementById('sSrv').value);
+  G.p1S = parseInt(document.getElementById('sP1S').value);
+  G.p2S = parseInt(document.getElementById('sP2S').value);
+  G.p1B = parseInt(document.getElementById('sP1B').value);
+  G.p2B = parseInt(document.getElementById('sP2B').value);
+  G.mlPrior = parseInt(document.getElementById('sML').value) / 100;
+  G.preOdds = parseFloat(document.getElementById('sOdds').value);
+
+  /* Labels */
+  document.getElementById('n1').textContent = G.p1;
+  document.getElementById('n2').textContent = G.p2;
+  document.getElementById('tourney').textContent = G.tour + ' | ' + G.surf + ' | Best of ' + G.bo;
+  document.getElementById('gL1').textContent = G.p1.substring(0, 10);
+  document.getElementById('gL2').textContent = G.p2.substring(0, 10);
+  var bl1 = document.querySelectorAll('.bl1');
+  var bl2 = document.querySelectorAll('.bl2');
+  for (var a = 0; a < bl1.length; a++) bl1[a].textContent = G.p1.substring(0, 8);
+  for (var b = 0; b < bl2.length; b++) bl2[b].textContent = G.p2.substring(0, 8);
+  document.getElementById('oP1M').value = G.preOdds;
+  document.getElementById('bSrv').textContent = G.srv === 1 ? G.p1 : G.p2;
+
+  /* Init probs */
+  G.trueP = G.mlPrior;
+  G.tpHist.push(G.trueP * 100);
+  G.setP1 = 0.5;
+  G.gameP1 = G.srv === 1 ? 0.65 : 0.35;
+
+  /* Render initial gauge */
+  var pct = G.trueP * 100, tot = 251.33;
+  document.getElementById('gArc').setAttribute('stroke-dasharray', (pct / 100 * tot) + ' ' + tot);
+  var ang = Math.PI * (1 - pct / 100);
+  document.getElementById('gNeedle').setAttribute('cx', 100 + 80 * Math.cos(ang));
+  document.getElementById('gNeedle').setAttribute('cy', 100 - 80 * Math.sin(ang));
+  document.getElementById('gVal').textContent = pct.toFixed(1) + '%';
+  document.getElementById('gVal').style.color = pct > 55 ? 'var(--p1)' : pct < 45 ? 'var(--p2)' : 'var(--t2)';
+
+  document.getElementById('kTP').value = Math.round(G.mlPrior * 100);
+  calcKelly();
+  refreshEdges();
+
+  for (var i = 0; i < 5; i++) {
+    document.getElementById('p1s' + (i + 1)).textContent = i === 0 ? '0' : '-';
+    document.getElementById('p2s' + (i + 1)).textContent = i === 0 ? '0' : '-';
+    document.getElementById('p1s' + (i + 1)).className = 'ssc' + (i === 0 ? ' cur' : '');
+    document.getElementById('p2s' + (i + 1)).className = 'ssc' + (i === 0 ? ' cur' : '');
+  }
+
+  document.getElementById('sd1').className = 'sdot' + (G.srv === 1 ? ' on' : '');
+  document.getElementById('sd2').className = 'sdot' + (G.srv === 2 ? ' on' : '');
+
+  /* Hide modal */
+  document.getElementById('modal').classList.add('hide');
+}
+
+/* Clock */
+setInterval(function() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}, 1000);
+document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+</script>
+</body>
+</html>
