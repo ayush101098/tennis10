@@ -59,4 +59,7 @@ trading-terminal/index_old.html
 *.json
 !netlify.toml
 !package.json
+!package-lock.json
+!tsconfig.json
+!vercel.json
 nohup.out
