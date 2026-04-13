@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useTradeStream } from "@/hooks/useTradeStream";
-import { fetchMatches, sendPoint } from "@/lib/api";
+import { fetchMatches, sendPoint, setupMatch } from "@/lib/api";
 import type { MatchListItem, TradeBoxFrame } from "@/lib/types";
 
 import MatchList from "@/components/MatchList";
 import LiveMatchPanel from "@/components/LiveMatchPanel";
+import SchedulePanel from "@/components/SchedulePanel";
 import TradeBox from "@/components/TradeBox";
 import OddsLadder from "@/components/OddsLadder";
 import PositionTracker from "@/components/PositionTracker";
@@ -18,8 +19,50 @@ import { TradeLog, StatePerformance } from "@/components/TradeLog";
 export default function TerminalPage() {
   const [matches, setMatches] = useState<MatchListItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [leftTab, setLeftTab] = useState<"matches" | "live">("matches");
+  const [leftTab, setLeftTab] = useState<"matches" | "live" | "schedule">("schedule");
   const { frame, connected } = useTradeStream(activeId);
+
+  // Auto-setup from schedule panel
+  const handleScheduleSetup = useCallback(
+    async (player1: string, player2: string, tournament: string, surface: string, bestOf: number) => {
+      try {
+        const res = await setupMatch({
+          player1_name: player1,
+          player2_name: player2,
+          surface,
+          best_of: bestOf,
+          tournament,
+          tournament_level: "",
+          initial_server: 1,
+          p1_serve_pct: 63,
+          p2_serve_pct: 63,
+          p1_return_pct: 35,
+          p2_return_pct: 35,
+          p1_rank: 50,
+          p2_rank: 50,
+          p1_ranking_points: 1000,
+          p2_ranking_points: 1000,
+          p1_first_serve_pct: 62,
+          p2_first_serve_pct: 62,
+          p1_first_serve_win_pct: 72,
+          p2_first_serve_win_pct: 72,
+          p1_second_serve_win_pct: 52,
+          p2_second_serve_win_pct: 52,
+          p1_bp_save_pct: 62,
+          p2_bp_save_pct: 62,
+          p1_win_rate: 50,
+          p2_win_rate: 50,
+          bankroll: 10000,
+        });
+        if (res.match_id) {
+          setActiveId(res.match_id);
+          setLeftTab("matches");
+          fetchMatches().then(setMatches).catch(() => {});
+        }
+      } catch { /* ignore */ }
+    },
+    []
+  );
 
   // Poll match list
   useEffect(() => {
@@ -77,7 +120,7 @@ export default function TerminalPage() {
       </header>
 
       {/* ── Main Grid ── */}
-      <div className="flex-1 grid grid-cols-[220px_1fr_280px] grid-rows-[1fr_220px] min-h-0">
+      <div className="flex-1 grid grid-cols-[340px_1fr_280px] grid-rows-[1fr_220px] min-h-0">
         {/* LEFT — Match List + Live Matches (tabbed) */}
         <aside className="row-span-2 border-r border-terminal-border overflow-hidden flex flex-col">
           {/* Tab bar */}
@@ -93,6 +136,16 @@ export default function TerminalPage() {
               MATCHES
             </button>
             <button
+              onClick={() => setLeftTab("schedule")}
+              className={`flex-1 text-[10px] font-bold uppercase tracking-wider py-1.5 transition ${
+                leftTab === "schedule"
+                  ? "text-terminal-yellow border-b-2 border-terminal-yellow bg-terminal-yellow/5"
+                  : "text-terminal-muted hover:text-slate-300"
+              }`}
+            >
+              📅
+            </button>
+            <button
               onClick={() => setLeftTab("live")}
               className={`flex-1 text-[10px] font-bold uppercase tracking-wider py-1.5 transition ${
                 leftTab === "live"
@@ -100,7 +153,7 @@ export default function TerminalPage() {
                   : "text-terminal-muted hover:text-slate-300"
               }`}
             >
-              📡 LIVE
+              📡
             </button>
           </div>
 
@@ -113,6 +166,8 @@ export default function TerminalPage() {
                 onSelect={setActiveId}
                 onMatchCreated={onMatchCreated}
               />
+            ) : leftTab === "schedule" ? (
+              <SchedulePanel onAutoSetup={handleScheduleSetup} />
             ) : (
               <LiveMatchPanel activeMatchId={activeId} />
             )}

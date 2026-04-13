@@ -55,6 +55,7 @@ from .live_features import LiveFeatureEngine, PlayerProfile
 from .ml_predictor import MLPredictor
 from .ensemble_probability import EnsembleProbabilityEngine
 from .live_feed import LiveMatchFeed, DataSource, MatchInfo
+from .schedule import fetch_schedule
 
 
 # ─── App ──────────────────────────────────────────────────────────────────────
@@ -361,6 +362,31 @@ async def list_matches():
             score_summary=ms.score.point_display,
         ).model_dump())
     return items
+
+
+# ─── Match Schedule (today + tomorrow with base probability) ─────────────────
+
+_schedule_cache: Dict[str, object] = {"data": None, "ts": 0.0}
+_SCHEDULE_TTL = 120  # cache for 2 minutes
+
+
+@app.get("/schedule")
+async def get_schedule(include_finished: bool = False):
+    """
+    Returns today's and tomorrow's tennis matches (ATP/WTA/ITF/Challenger)
+    with base win probabilities computed from rankings.
+    """
+    now = time.time()
+    # Serve from cache if fresh
+    if _schedule_cache["data"] and (now - _schedule_cache["ts"]) < _SCHEDULE_TTL:
+        return _schedule_cache["data"]
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, fetch_schedule, include_finished,
+    )
+    _schedule_cache["data"] = result
+    _schedule_cache["ts"] = now
+    return result
 
 
 # ─── Live Match Data Feed ────────────────────────────────────────────────────

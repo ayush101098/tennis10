@@ -109,3 +109,39 @@ export async function fetchFeedStatus(matchId: string) {
   const res = await fetch(`${API}/live/feed/${matchId}/status`);
   return res.json();
 }
+
+// ─── Schedule (Today + Tomorrow) ─────────────────────────────────────────────
+
+export interface ScheduledMatch {
+  id: string;
+  player1: string;
+  player2: string;
+  p1_rank: number;
+  p2_rank: number;
+  p1_seed: number;
+  p2_seed: number;
+  tournament: string;
+  round: string;
+  tour: string;
+  surface: string;
+  best_of: number;
+  source: string;
+  status: string;
+  start_time: string;
+  start_timestamp: number;
+  p1_win_prob: number;
+  p2_win_prob: number;
+  prob_method: string;
+}
+
+export interface ScheduleResponse {
+  today: ScheduledMatch[];
+  tomorrow: ScheduledMatch[];
+  today_date: string;
+  tomorrow_date: string;
+}
+
+export async function fetchSchedule(): Promise<ScheduleResponse> {
+  const res = await fetch(`${API}/schedule`);
+  return res.json();
+}
