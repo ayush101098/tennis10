@@ -1,6 +1,10 @@
 [build]
-  publish = "trading-terminal"
-  command = "echo 'Static site - no build needed'"
+  base = "trading-terminal"
+  publish = "out"
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
 
 [[redirects]]
   from = "/*"
