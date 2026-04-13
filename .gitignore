@@ -34,6 +34,17 @@ Thumbs.db
 
 # Environment variables
 .env
+.env.local
+
+# Betfair SSL certificates (NEVER commit these)
+certs/
+*.crt
+*.key
+*.pem
+
+# Trading logs
+betfair_trading.log
+logs/
 
 # Node modules
 node_modules/

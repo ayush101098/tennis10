@@ -1,9 +1,28 @@
-streamlit
-pandas
-numpy
-plotly
-scikit-learn
-joblib
-requests
-beautifulsoup4
-lxml
+# ── Core Trading Server ──────────────────────────────────────────
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+websockets>=12.0
+
+# ── ML / Data ───────────────────────────────────────────────────
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+joblib>=1.3.0
+
+# ── Betfair API ─────────────────────────────────────────────────
+betfairlightweight>=2.20.0
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# ── Streamlit UI (optional) ────────────────────────────────────
+streamlit>=1.28.0
+
+# ── Flask Prediction API ───────────────────────────────────────
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# ── Cloud / Monitoring ─────────────────────────────────────────
+python-dotenv>=1.0.0
+structlog>=23.2.0

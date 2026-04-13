@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  # ── FastAPI Trading Server ─────────────────────────────────────────────
+  trading-server:
+    build:
+      context: .
+      target: trading-server
+    ports:
+      - "8888:8888"
+    env_file: .env
+    volumes:
+      - ./certs:/app/certs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Betfair Live Trading Loop ──────────────────────────────────────────
+  betfair-loop:
+    build:
+      context: .
+      target: betfair-loop
+    env_file: .env
+    volumes:
+      - ./certs:/app/certs:ro
+      - ./logs:/app/logs
+    depends_on:
+      trading-server:
+        condition: service_healthy
+    # Override at runtime:
+    #   docker compose run betfair-loop --player1 "X" --player2 "Y" --dry-run
+    command: ["--help"]
+    restart: "no"
+
+  # ── Next.js Frontend ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./trading-terminal
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://trading-server:8888
+    depends_on:
+      trading-server:
+        condition: service_healthy
+    restart: unless-stopped
