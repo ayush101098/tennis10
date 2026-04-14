@@ -35,7 +35,24 @@ export interface ScheduledMatch {
     currentSetGames: { p1: number; p2: number };   // games in current set
     statusDetail: string;            // "1st Set", "2nd Set", etc.
     scoreText: string;               // e.g. "Kopriva leads Engel 4-2"
+    /** Point-level data from SofaScore (when matched) */
+    pointScore?: { p1: string; p2: string }; // "0"/"15"/"30"/"40"/"A"
+    tiebreakScore?: { p1: number; p2: number };
+    /** Live match statistics from SofaScore */
+    stats?: LiveMatchStats;
+    sofaId?: number;                 // SofaScore event ID for stats lookup
   };
+}
+
+/** Real-time match statistics from SofaScore */
+export interface LiveMatchStats {
+  p1_aces: number; p2_aces: number;
+  p1_doubleFaults: number; p2_doubleFaults: number;
+  p1_firstServePercent: number; p2_firstServePercent: number;
+  p1_firstServeWon: number; p2_firstServeWon: number;
+  p1_secondServeWon: number; p2_secondServeWon: number;
+  p1_breakPointsConverted: string; p2_breakPointsConverted: string; // e.g. "3/5"
+  p1_totalPointsWon: number; p2_totalPointsWon: number;
 }
 
 export interface ScheduleData {
@@ -380,5 +397,210 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
     fetchESPN("wta", todayStr, rankMap),
   ]);
   const flat = all.flat();
-  return flat.find(m => m.id === matchId) ?? null;
+  const match = flat.find(m => m.id === matchId) ?? null;
+  if (match && match.status === "live" && match.liveScore) {
+    // Enrich with SofaScore point-level data
+    await enrichWithSofaScore(match);
+  }
+  return match;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   SofaScore Integration — point-level scores + match statistics
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const SOFA_LIVE = "https://www.sofascore.com/api/v1/sport/tennis/events/live";
+
+interface SofaLiveEvent {
+  id: number;
+  homeTeam: { name: string; id: number };
+  awayTeam: { name: string; id: number };
+  homeScore: {
+    current: number;
+    period1?: number; period2?: number; period3?: number; period4?: number; period5?: number;
+    point?: string;
+    period1TieBreak?: number; period2TieBreak?: number; period3TieBreak?: number;
+    period4TieBreak?: number; period5TieBreak?: number;
+  };
+  awayScore: {
+    current: number;
+    period1?: number; period2?: number; period3?: number; period4?: number; period5?: number;
+    point?: string;
+    period1TieBreak?: number; period2TieBreak?: number; period3TieBreak?: number;
+    period4TieBreak?: number; period5TieBreak?: number;
+  };
+  firstToServe?: number; // 1 = home, 2 = away
+  status: { code: number; description: string; type: string };
+}
+
+/** Fuzzy name matching: normalize and compare last names */
+function matchNames(espnName: string, sofaName: string): boolean {
+  const a = normName(espnName);
+  const b = normName(sofaName);
+  if (a === b) return true;
+  // Compare last names
+  const aLast = a.split(" ").pop() || "";
+  const bLast = b.split(" ").pop() || "";
+  if (aLast.length > 2 && aLast === bLast) return true;
+  // Try first 3 chars of last name for accented variants
+  if (aLast.length > 3 && bLast.length > 3 && aLast.slice(0, 4) === bLast.slice(0, 4)) return true;
+  return false;
+}
+
+/** Cache SofaScore data to avoid hammering the API */
+let _sofaCache: { data: SofaLiveEvent[]; ts: number } | null = null;
+const SOFA_CACHE_TTL = 5_000; // 5 seconds
+
+async function fetchSofaLive(): Promise<SofaLiveEvent[]> {
+  if (_sofaCache && Date.now() - _sofaCache.ts < SOFA_CACHE_TTL) {
+    return _sofaCache.data;
+  }
+  try {
+    const res = await fetch(SOFA_LIVE);
+    if (!res.ok) return _sofaCache?.data || [];
+    const json = await res.json();
+    const events: SofaLiveEvent[] = json.events || [];
+    _sofaCache = { data: events, ts: Date.now() };
+    return events;
+  } catch (e) {
+    console.warn("[sofascore] fetch failed", e);
+    return _sofaCache?.data || [];
+  }
+}
+
+/** Fetch match statistics from SofaScore */
+export async function fetchSofaStats(sofaId: number): Promise<LiveMatchStats | null> {
+  try {
+    const res = await fetch(`https://www.sofascore.com/api/v1/event/${sofaId}/statistics`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    // Statistics are grouped by period — use "ALL" or the last group
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const groups: any[] = json.statistics || [];
+    if (!groups.length) return null;
+
+    // Find the "All" period group, or use the first one
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allGroup = groups.find((g: any) => g.period === "ALL") || groups[0];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const statsGroups: any[] = allGroup.groups || [];
+
+    const stats: Partial<LiveMatchStats> = {};
+
+    for (const group of statsGroups) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const item of group.statisticsItems || []) {
+        const key = item.name as string;
+        const home = item.home as string;
+        const away = item.away as string;
+        switch (key) {
+          case "Aces": stats.p1_aces = parseInt(home) || 0; stats.p2_aces = parseInt(away) || 0; break;
+          case "Double faults": stats.p1_doubleFaults = parseInt(home) || 0; stats.p2_doubleFaults = parseInt(away) || 0; break;
+          case "First serve percentage": stats.p1_firstServePercent = parseInt(home) || 0; stats.p2_firstServePercent = parseInt(away) || 0; break;
+          case "First serve points won": stats.p1_firstServeWon = parseInt(home) || 0; stats.p2_firstServeWon = parseInt(away) || 0; break;
+          case "Second serve points won": stats.p1_secondServeWon = parseInt(home) || 0; stats.p2_secondServeWon = parseInt(away) || 0; break;
+          case "Break points won": stats.p1_breakPointsConverted = home || "0/0"; stats.p2_breakPointsConverted = away || "0/0"; break;
+          case "Total points won": stats.p1_totalPointsWon = parseInt(home) || 0; stats.p2_totalPointsWon = parseInt(away) || 0; break;
+        }
+      }
+    }
+
+    return {
+      p1_aces: stats.p1_aces || 0,
+      p2_aces: stats.p2_aces || 0,
+      p1_doubleFaults: stats.p1_doubleFaults || 0,
+      p2_doubleFaults: stats.p2_doubleFaults || 0,
+      p1_firstServePercent: stats.p1_firstServePercent || 0,
+      p2_firstServePercent: stats.p2_firstServePercent || 0,
+      p1_firstServeWon: stats.p1_firstServeWon || 0,
+      p2_firstServeWon: stats.p2_firstServeWon || 0,
+      p1_secondServeWon: stats.p1_secondServeWon || 0,
+      p2_secondServeWon: stats.p2_secondServeWon || 0,
+      p1_breakPointsConverted: stats.p1_breakPointsConverted || "0/0",
+      p2_breakPointsConverted: stats.p2_breakPointsConverted || "0/0",
+      p1_totalPointsWon: stats.p1_totalPointsWon || 0,
+      p2_totalPointsWon: stats.p2_totalPointsWon || 0,
+    };
+  } catch (e) {
+    console.warn("[sofascore] stats fetch failed", e);
+    return null;
+  }
+}
+
+/** Enrich an ESPN match with SofaScore point-level data */
+async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
+  if (!match.liveScore || match.status !== "live") return;
+
+  const sofaEvents = await fetchSofaLive();
+  // Find matching SofaScore event by player names
+  const sofaMatch = sofaEvents.find(se => {
+    const homeMatch = matchNames(match.player1, se.homeTeam.name) || matchNames(match.player2, se.homeTeam.name);
+    const awayMatch = matchNames(match.player1, se.awayTeam.name) || matchNames(match.player2, se.awayTeam.name);
+    return homeMatch && awayMatch;
+  });
+
+  if (!sofaMatch) return;
+
+  // Determine which SofaScore player maps to ESPN P1/P2
+  const p1IsHome = matchNames(match.player1, sofaMatch.homeTeam.name);
+  const homeScore = sofaMatch.homeScore;
+  const awayScore = sofaMatch.awayScore;
+  const p1Score = p1IsHome ? homeScore : awayScore;
+  const p2Score = p1IsHome ? awayScore : homeScore;
+
+  // Point scores
+  if (p1Score.point !== undefined && p2Score.point !== undefined) {
+    match.liveScore.pointScore = {
+      p1: p1Score.point,
+      p2: p2Score.point,
+    };
+  }
+
+  // Server from SofaScore (more reliable)
+  if (sofaMatch.firstToServe) {
+    const sofaServerIsHome = sofaMatch.firstToServe === 1;
+    // Determine current server from firstToServe + total games played
+    const totalGames = (match.liveScore.completedSets || []).reduce(
+      (acc, s) => acc + s.p1 + s.p2, 0
+    ) + (match.liveScore.currentSetGames?.p1 || 0) + (match.liveScore.currentSetGames?.p2 || 0);
+    const firstServer: 1 | 2 = (sofaServerIsHome && p1IsHome) || (!sofaServerIsHome && !p1IsHome) ? 1 : 2;
+    // Server alternates every game (simplified)
+    match.liveScore.server = (totalGames % 2 === 0) ? firstServer : (firstServer === 1 ? 2 : 1);
+  }
+
+  // Check for tiebreak scores
+  const numSets = (match.liveScore.completedSets?.length || 0) + 1;
+  const tbKey = `period${numSets}TieBreak` as keyof typeof homeScore;
+  if (homeScore[tbKey] !== undefined) {
+    const hTB = homeScore[tbKey] as number;
+    const aTB = (awayScore[tbKey] as number) || 0;
+    match.liveScore.tiebreakScore = {
+      p1: p1IsHome ? hTB : aTB,
+      p2: p1IsHome ? aTB : hTB,
+    };
+  }
+
+  // Store sofaId for stats fetch
+  match.liveScore.sofaId = sofaMatch.id;
+
+  // Fetch live stats
+  try {
+    const stats = await fetchSofaStats(sofaMatch.id);
+    if (stats) {
+      // If P1 is away in SofaScore, swap the stats
+      if (!p1IsHome) {
+        match.liveScore.stats = {
+          p1_aces: stats.p2_aces, p2_aces: stats.p1_aces,
+          p1_doubleFaults: stats.p2_doubleFaults, p2_doubleFaults: stats.p1_doubleFaults,
+          p1_firstServePercent: stats.p2_firstServePercent, p2_firstServePercent: stats.p1_firstServePercent,
+          p1_firstServeWon: stats.p2_firstServeWon, p2_firstServeWon: stats.p1_firstServeWon,
+          p1_secondServeWon: stats.p2_secondServeWon, p2_secondServeWon: stats.p1_secondServeWon,
+          p1_breakPointsConverted: stats.p2_breakPointsConverted, p2_breakPointsConverted: stats.p1_breakPointsConverted,
+          p1_totalPointsWon: stats.p2_totalPointsWon, p2_totalPointsWon: stats.p1_totalPointsWon,
+        };
+      } else {
+        match.liveScore.stats = stats;
+      }
+    }
+  } catch { /* stats are optional */ }
 }

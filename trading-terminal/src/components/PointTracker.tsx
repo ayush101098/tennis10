@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import type { ScheduledMatch } from "@/lib/scheduleService";
-import { probToOdds, kellyFraction, fetchLiveScore } from "@/lib/scheduleService";
+import type { ScheduledMatch, LiveMatchStats } from "@/lib/scheduleService";
+import { probToOdds, kellyFraction, fetchLiveScore, fetchSofaStats } from "@/lib/scheduleService";
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    Tennis scoring engine + Markov match-win probability
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const PT_LABELS = ["0", "15", "30", "40", "AD"];
+const PT_MAP: Record<string, number> = { "0": 0, "15": 1, "30": 2, "40": 3, "A": 4 };
 
 interface GameScore { p1: number; p2: number }
 interface SetScore  { p1: number; p2: number }
@@ -71,6 +72,22 @@ function updateEwma(prev: EwmaState, winner: 1 | 2): EwmaState {
   };
 }
 
+/** Build EWMA state from live stats — derive from total points won ratio */
+function ewmaFromStats(stats: LiveMatchStats): EwmaState {
+  const tot = (stats.p1_totalPointsWon + stats.p2_totalPointsWon) || 1;
+  const p1Rate = stats.p1_totalPointsWon / tot;
+  const p2Rate = stats.p2_totalPointsWon / tot;
+  // Use 1st serve % as momentum proxy: high 1st serve % = strong serving momentum
+  const srvMom1 = Math.min(1, (stats.p1_firstServePercent || 50) / 100);
+  const srvMom2 = Math.min(1, (stats.p2_firstServePercent || 50) / 100);
+  return {
+    fast1: p1Rate * 0.6 + srvMom1 * 0.4,
+    slow1: p1Rate,
+    fast2: p2Rate * 0.6 + srvMom2 * 0.4,
+    slow2: p2Rate,
+  };
+}
+
 function ewmaMomentum(e: EwmaState, player: 1 | 2): number {
   return player === 1 ? e.fast1 - e.slow1 : e.fast2 - e.slow2;
 }
@@ -122,6 +139,31 @@ function updateFatigue(prev: FatigueState, state: MatchState, prevState: MatchSt
   return f;
 }
 
+/** Build fatigue from live match state — estimate from total points + sets played */
+function fatigueFromLive(state: MatchState, totalPtsWon: number): FatigueState {
+  const totalPoints = totalPtsWon || ((state.sets.reduce((a, s) => a + s.p1 + s.p2, 0) + state.currentSet.p1 + state.currentSet.p2) * 4.5);
+  const setsPlayed = state.sets.length;
+  // Count tiebreaks from completed sets
+  const tiebreaks = state.sets.filter(s => s.p1 + s.p2 >= 13).length;
+  // Estimate deuce games as ~30% of games
+  const totalGames = state.sets.reduce((a, s) => a + s.p1 + s.p2, 0) + state.currentSet.p1 + state.currentSet.p2;
+  const deuceGames = Math.round(totalGames * 0.3);
+  // Load estimation: 0.003 per point + 0.005 per deuce + 0.004 per TB point
+  const baseLoad = totalPoints * 0.003;
+  const deuceLoad = deuceGames * 0.005 * 3; // ~3 extra deuce points avg
+  const tbLoad = tiebreaks * 0.004 * 10; // ~10 TB points avg
+  const setRecovery = setsPlayed * 0.1;
+  const load = Math.min(1, baseLoad + deuceLoad + tbLoad - setRecovery);
+  return {
+    totalPoints: Math.round(totalPoints),
+    deuceGames,
+    tiebreaks,
+    setsPlayed,
+    p1Load: load,
+    p2Load: load,
+  };
+}
+
 function fatigueIndex(f: FatigueState, player: 1 | 2): number {
   return Math.min(1, player === 1 ? f.p1Load : f.p2Load);
 }
@@ -135,20 +177,48 @@ function fatigueLabel(idx: number): { label: string; color: string } {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   Break Opportunity Predictor
-   EWMA of returner + server fatigue + score pressure + game depth
+   Break Opportunity Predictor — uses real stats when available
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function breakOppProb(
   ewma: EwmaState, fatigue: FatigueState, state: MatchState,
   pServe1: number, pServe2: number,
+  stats?: LiveMatchStats | null,
 ): number {
   if (state.tiebreak || state.matchOver) return 0;
   const server = state.server;
   const returner = server === 1 ? 2 : 1;
+
+  // If we have real stats, compute break probability from actual serve performance
+  if (stats) {
+    const srvFirstPct = server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent;
+    const srvFirstWon = server === 1 ? stats.p1_firstServeWon : stats.p2_firstServeWon;
+    const srvSecondWon = server === 1 ? stats.p1_secondServeWon : stats.p2_secondServeWon;
+    // Real serve point win rate: first% * firstWon% + (1-first%) * secondWon%
+    const firstP = (srvFirstPct || 60) / 100;
+    const firstW = (srvFirstWon || 65) / 100;
+    const secondW = (srvSecondWon || 45) / 100;
+    const srvPtWinRate = firstP * firstW + (1 - firstP) * secondW;
+    // Break probability from real serve point win rate
+    const realHoldProb = gameWinProb(srvPtWinRate, 0, 0, false);
+    const baseBreakProb = 1 - realHoldProb;
+
+    // Adjust with break points converted history
+    const bpc = server === 1 ? stats.p2_breakPointsConverted : stats.p1_breakPointsConverted;
+    const [bpWon, bpTotal] = (bpc || "0/0").split("/").map(Number);
+    const bpConvRate = bpTotal > 0 ? bpWon / bpTotal : 0.3;
+
+    // Blend model + real data
+    const returnerMom = ewmaMomentum(ewma, returner);
+    const serverFat = fatigueIndex(fatigue, server);
+    return Math.max(0, Math.min(0.85,
+      baseBreakProb * 0.5 + bpConvRate * 0.3 + returnerMom * 0.1 + serverFat * 0.1
+    ));
+  }
+
+  // Fallback: model-only
   const serverPct = server === 1 ? pServe1 : pServe2;
   const baseBreakProb = 1 - holdProb(serverPct);
-
   const returnerMom = ewmaMomentum(ewma, returner);
   const momentumAdj = returnerMom * 0.3;
   const serverFat = fatigueIndex(fatigue, server);
@@ -166,6 +236,7 @@ function breakOppProb(
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    Position Signals — GAME / SET / MATCH entry & exit
+   Uses real stats for quantitative edge when available
    ═══════════════════════════════════════════════════════════════════════════ */
 
 type SignalType = "ENTRY" | "EXIT" | "HOLD" | "HEDGE" | "NO_POSITION";
@@ -186,6 +257,7 @@ function computePositionSignals(
   currentP1Prob: number, preMatchP1Prob: number,
   ewma: EwmaState, fatigue: FatigueState,
   state: MatchState, history: PointEntry[], breakOpp: number,
+  stats?: LiveMatchStats | null,
 ): PositionSignal[] {
   const signals: PositionSignal[] = [];
   if (state.matchOver) return signals;
@@ -198,37 +270,113 @@ function computePositionSignals(
   const recentProbs = history.slice(-10).map(h => h.p1WinProb);
   const probVol = recentProbs.length > 2 ? stdDev(recentProbs) : 0;
 
-  // ── MATCH ──
+  // ── MATCH LEVEL ──
   const matchEdge = Math.abs(probShift);
-  if (matchEdge > 0.08 && history.length >= 10) {
+
+  // Stats-based signals (available in auto mode from SofaScore)
+  if (stats) {
+    const totalPts = (stats.p1_totalPointsWon + stats.p2_totalPointsWon) || 1;
+    const p1PtShare = stats.p1_totalPointsWon / totalPts;
+
+    // Serve dominance signal — if one player's 1st serve % is much higher
+    const srvGap = (stats.p1_firstServePercent || 60) - (stats.p2_firstServePercent || 60);
+    if (Math.abs(srvGap) > 15) {
+      const dominant = srvGap > 0 ? 1 : 2;
+      signals.push({
+        level: "MATCH", type: "ENTRY",
+        strength: Math.abs(srvGap) > 25 ? "STRONG" : "MODERATE",
+        side: dominant,
+        reason: `Serve dominance: ${dominant === 1 ? "P1" : "P2"} 1st serve ${dominant === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}% vs ${dominant === 1 ? stats.p2_firstServePercent : stats.p1_firstServePercent}%`,
+        edgePct: Math.abs(srvGap) * 0.3,
+        stopLoss: dominant === 1 ? Math.max(0.25, currentP1Prob - 0.15) : Math.min(0.75, currentP1Prob + 0.15),
+        target: dominant === 1 ? Math.min(0.95, currentP1Prob + 0.10) : Math.max(0.05, currentP1Prob - 0.10),
+      });
+    }
+
+    // Double fault crisis — if one player has 4+ DFs
+    if (stats.p1_doubleFaults >= 4 || stats.p2_doubleFaults >= 4) {
+      const dfCrisis = stats.p1_doubleFaults >= stats.p2_doubleFaults ? 1 : 2;
+      const opponent = dfCrisis === 1 ? 2 : 1;
+      const dfCount = dfCrisis === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults;
+      signals.push({
+        level: "MATCH", type: "ENTRY",
+        strength: dfCount >= 6 ? "STRONG" : "MODERATE",
+        side: opponent,
+        reason: `DF crisis: ${dfCrisis === 1 ? "P1" : "P2"} has ${dfCount} DFs — server under pressure`,
+        edgePct: dfCount * 1.5,
+      });
+    }
+
+    // Total points won imbalance — quantitative momentum
+    if (totalPts > 30 && Math.abs(p1PtShare - 0.5) > 0.08) {
+      const dominant = p1PtShare > 0.5 ? 1 : 2;
+      const ptsWon = dominant === 1 ? stats.p1_totalPointsWon : stats.p2_totalPointsWon;
+      const ptsLost = dominant === 1 ? stats.p2_totalPointsWon : stats.p1_totalPointsWon;
+      if (matchEdge > 0.06) {
+        signals.push({
+          level: "MATCH", type: "ENTRY",
+          strength: Math.abs(p1PtShare - 0.5) > 0.12 ? "STRONG" : "MODERATE",
+          side: dominant,
+          reason: `Points won: ${ptsWon}-${ptsLost} (${Math.round((dominant === 1 ? p1PtShare : 1 - p1PtShare) * 100)}%), P shifted ${(probShift * 100).toFixed(0)}% from pre`,
+          edgePct: Math.abs(p1PtShare - 0.5) * 100,
+          stopLoss: dominant === 1 ? Math.max(0.25, currentP1Prob - 0.15) : Math.min(0.75, currentP1Prob + 0.15),
+          target: dominant === 1 ? Math.min(0.95, currentP1Prob + 0.10) : Math.max(0.05, currentP1Prob - 0.10),
+        });
+      }
+    }
+
+    // Break points converted — quantitative edge
+    const [bp1Won, bp1Tot] = (stats.p1_breakPointsConverted || "0/0").split("/").map(Number);
+    const [bp2Won, bp2Tot] = (stats.p2_breakPointsConverted || "0/0").split("/").map(Number);
+    if (bp1Won > bp2Won + 1 || bp2Won > bp1Won + 1) {
+      const breaker = bp1Won > bp2Won ? 1 : 2;
+      const bpStr = breaker === 1 ? `${bp1Won}/${bp1Tot}` : `${bp2Won}/${bp2Tot}`;
+      signals.push({
+        level: "SET", type: "ENTRY",
+        strength: (breaker === 1 ? bp1Won : bp2Won) >= 3 ? "STRONG" : "MODERATE",
+        side: breaker,
+        reason: `Break pts converted: ${breaker === 1 ? "P1" : "P2"} ${bpStr} — return game dominant`,
+        edgePct: (breaker === 1 ? bp1Won - bp2Won : bp2Won - bp1Won) * 4,
+      });
+    }
+  }
+
+  // Probability shift signals (work in both modes)
+  if (matchEdge > 0.08 && (history.length >= 10 || stats)) {
     const fav = currentP1Prob > preMatchP1Prob ? 1 : 2;
     const mom = fav === 1 ? p1Mom : p2Mom;
-    const oppFat = fav === 1 ? p2Fat : p1Fat;
-    if (mom > 0.05) {
+    if (mom > 0.03 || stats) {
       signals.push({
         level: "MATCH", type: "ENTRY",
         strength: matchEdge > 0.15 ? "STRONG" : "MODERATE",
         side: fav,
-        reason: `P shifted ${(probShift * 100).toFixed(0)}% from pre-match, mom ${mom > 0 ? "+" : ""}${(mom * 100).toFixed(0)}%${oppFat > 0.4 ? ", opp fatigued" : ""}`,
+        reason: `P shifted ${(probShift * 100).toFixed(0)}% from pre-match${stats ? `, pts: ${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon}` : `, mom ${mom > 0 ? "+" : ""}${(mom * 100).toFixed(0)}%`}`,
         edgePct: matchEdge * 100,
         stopLoss: fav === 1 ? Math.max(0.25, currentP1Prob - 0.15) : Math.min(0.75, currentP1Prob + 0.15),
         target: fav === 1 ? Math.min(0.95, currentP1Prob + 0.10) : Math.max(0.05, currentP1Prob - 0.10),
       });
     }
   }
-  if (matchEdge > 0.05 && history.length >= 8) {
+
+  // Momentum reversal EXIT (works in both modes)
+  if (matchEdge > 0.05 && (history.length >= 8 || stats)) {
     const wasFav = probShift > 0 ? 1 : 2;
-    const reversed = wasFav === 1 ? p1Mom < -0.08 : p2Mom < -0.08;
+    const momCheck = wasFav === 1 ? p1Mom : p2Mom;
+    const reversed = stats
+      ? (wasFav === 1 ? stats.p1_totalPointsWon < stats.p2_totalPointsWon : stats.p2_totalPointsWon < stats.p1_totalPointsWon)
+      : momCheck < -0.08;
     if (reversed) {
       signals.push({
         level: "MATCH", type: "EXIT", strength: "STRONG", side: wasFav,
-        reason: `Momentum reversed: ${wasFav === 1 ? "P1" : "P2"} losing grip, EWMA -${(Math.abs(wasFav === 1 ? p1Mom : p2Mom) * 100).toFixed(0)}%`,
+        reason: stats
+          ? `${wasFav === 1 ? "P1" : "P2"} losing grip — trailing in total pts despite price advantage`
+          : `Momentum reversed: ${wasFav === 1 ? "P1" : "P2"} EWMA -${(Math.abs(momCheck) * 100).toFixed(0)}%`,
         edgePct: -matchEdge * 50,
       });
     }
   }
 
-  // ── SET ──
+  // ── SET LEVEL ── (manual mode signals from point history)
   if (history.length > 0) {
     const lastPt = history[history.length - 1];
     if (lastPt.isBreak) {
@@ -252,14 +400,16 @@ function computePositionSignals(
     }
   }
 
-  // ── GAME ──
+  // ── GAME LEVEL ──
   if (breakOpp > 0.35 && !state.tiebreak) {
     const returner = state.server === 1 ? 2 : 1;
     signals.push({
       level: "GAME", type: "ENTRY",
       strength: breakOpp > 0.50 ? "STRONG" : "MODERATE",
       side: returner,
-      reason: `Break opp ${(breakOpp * 100).toFixed(0)}% — returner ${returner === 1 ? "P1" : "P2"}, server ${state.server === 1 ? (p1Fat > 0.4 ? "fatigued" : "stable") : (p2Fat > 0.4 ? "fatigued" : "stable")}`,
+      reason: stats
+        ? `Break opp ${(breakOpp * 100).toFixed(0)}% — srv DFs:${state.server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults}, 1st%:${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}%`
+        : `Break opp ${(breakOpp * 100).toFixed(0)}% — server ${state.server === 1 ? (p1Fat > 0.4 ? "fatigued" : "stable") : (p2Fat > 0.4 ? "fatigued" : "stable")}`,
       edgePct: (breakOpp - 0.25) * 40,
     });
   }
@@ -279,12 +429,23 @@ function computePositionSignals(
       edgePct: 0,
     });
   }
+  // Stats-based hedge signal — close total points
+  if (stats) {
+    const tot = stats.p1_totalPointsWon + stats.p2_totalPointsWon;
+    if (tot > 40 && Math.abs(stats.p1_totalPointsWon - stats.p2_totalPointsWon) <= 3) {
+      signals.push({
+        level: "MATCH", type: "HEDGE", strength: "MODERATE", side: null,
+        reason: `Tight match: pts ${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon} — high variance, hedge recommended`,
+        edgePct: 0,
+      });
+    }
+  }
 
   return signals;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   Delta Neutral Hedge Calculator
+   Delta Neutral Hedge Calculator — with live P&L tracking
    ═══════════════════════════════════════════════════════════════════════════ */
 
 interface HedgeCalc {
@@ -295,16 +456,21 @@ interface HedgeCalc {
   profitIfLose: number;
   netPosition: number;
   hedgeOdds: number;
+  kellyEdge: number;         // Kelly edge % vs current fair odds
+  impliedProb: number;       // implied probability from entry odds
+  currentFairOdds: number;   // Markov-derived fair odds for the original side
+  roi: number;               // current ROI %
 }
 
 function calcDeltaNeutralHedge(
   originalSide: 1 | 2, originalStake: number, originalOdds: number,
   currentP1Prob: number, p1Name: string, p2Name: string,
+  currentLiveOdds?: number, // live bookmaker odds for hedge side
 ): HedgeCalc {
   const currentOdds1 = probToOdds(currentP1Prob);
   const currentOdds2 = probToOdds(1 - currentP1Prob);
   const hedgeOn = originalSide === 1 ? 2 : 1;
-  const hOdds = hedgeOn === 1 ? currentOdds1 : currentOdds2;
+  const hOdds = currentLiveOdds || (hedgeOn === 1 ? currentOdds1 : currentOdds2);
   const origProfit = originalStake * (originalOdds - 1);
   const hStake = Math.max(0, (originalStake * originalOdds) / hOdds);
 
@@ -317,6 +483,14 @@ function calcDeltaNeutralHedge(
     pLose = origProfit - hStake;
   }
 
+  const fairOddsForSide = originalSide === 1 ? currentOdds1 : currentOdds2;
+  const impliedProb = 1 / originalOdds;
+  const trueProb = originalSide === 1 ? currentP1Prob : 1 - currentP1Prob;
+  const kellyEdge = kellyFraction(trueProb, originalOdds) * 100;
+  // ROI = (expected profit / stake) * 100
+  const expectedPL = trueProb * pWin + (1 - trueProb) * pLose;
+  const roi = originalStake > 0 ? (expectedPL / originalStake) * 100 : 0;
+
   return {
     action: "BACK",
     player: hedgeOn === 1 ? p1Name : p2Name,
@@ -325,6 +499,10 @@ function calcDeltaNeutralHedge(
     profitIfLose: Math.round(pLose * 100) / 100,
     netPosition: Math.round((pWin + pLose) / 2 * 100) / 100,
     hedgeOdds: hOdds,
+    kellyEdge: Math.round(kellyEdge * 100) / 100,
+    impliedProb,
+    currentFairOdds: fairOddsForSide,
+    roi: Math.round(roi * 100) / 100,
   };
 }
 
@@ -472,43 +650,37 @@ interface GameLogEntry {
   p2Games: number;
   server: 1 | 2;
   p1WinProb: number;
-  label: string;        // e.g. "Set 1: 3-2"
-  isBreak: boolean;     // game was a break of serve
+  label: string;
+  isBreak: boolean;
   isTiebreak: boolean;
 }
 
-/** Build a MatchState from ESPN live score data (game-level only, no point data) */
 function buildStateFromLiveScore(
   liveScore: NonNullable<ScheduledMatch["liveScore"]>,
   bestOf: number,
 ): MatchState {
   const setsToWin = bestOf === 5 ? 3 : 2;
-  const sets: { p1: number; p2: number }[] = liveScore.completedSets.map(s => ({ ...s }));
+  const sets = liveScore.completedSets.map(s => ({ ...s }));
   const currentSet = { ...liveScore.currentSetGames };
   const tiebreak = currentSet.p1 === 6 && currentSet.p2 === 6;
-
-  // Determine server — ESPN gives us this directly
   const server = liveScore.server;
 
-  // Check if match is over
+  // Point score from SofaScore
+  let currentGame = { p1: 0, p2: 0 };
+  if (liveScore.tiebreakScore && tiebreak) {
+    currentGame = { ...liveScore.tiebreakScore };
+  } else if (liveScore.pointScore) {
+    currentGame = { p1: PT_MAP[liveScore.pointScore.p1] ?? 0, p2: PT_MAP[liveScore.pointScore.p2] ?? 0 };
+  }
+
   const p1SetsWon = sets.filter(s => s.p1 > s.p2).length;
   const p2SetsWon = sets.filter(s => s.p2 > s.p1).length;
   const matchOver = p1SetsWon >= setsToWin || p2SetsWon >= setsToWin;
   const winner = matchOver ? (p1SetsWon >= setsToWin ? 1 : 2) : undefined;
 
-  return {
-    sets,
-    currentSet,
-    currentGame: { p1: 0, p2: 0 }, // ESPN doesn't provide point-level score
-    server,
-    tiebreak,
-    matchOver,
-    winner,
-    setsToWin,
-  };
+  return { sets, currentSet, currentGame, server, tiebreak, matchOver, winner, setsToWin };
 }
 
-/** Build game log with Markov probabilities from a MatchState's history */
 function buildGameLog(
   liveScore: NonNullable<ScheduledMatch["liveScore"]>,
   pS1: number, pS2: number, bestOf: number,
@@ -517,36 +689,23 @@ function buildGameLog(
   const setsToWin = bestOf === 5 ? 3 : 2;
   let id = 0;
 
-  // Helper: compute Markov probability at a given score state
   const probAt = (
     completedSets: { p1: number; p2: number }[],
     curSet: { p1: number; p2: number },
     server: 1 | 2,
   ): number => {
     const tmpState: MatchState = {
-      sets: completedSets,
-      currentSet: curSet,
-      currentGame: { p1: 0, p2: 0 },
-      server,
-      tiebreak: curSet.p1 === 6 && curSet.p2 === 6,
-      matchOver: false,
-      setsToWin,
+      sets: completedSets, currentSet: curSet, currentGame: { p1: 0, p2: 0 },
+      server, tiebreak: curSet.p1 === 6 && curSet.p2 === 6, matchOver: false, setsToWin,
     };
     return matchWinProb(pS1, pS2, tmpState);
   };
 
-  // Walk through completed sets game by game
-  let prevServer: 1 | 2 = liveScore.server; // approximate start server
-  // We can't know the exact starting server, so we infer from total games played
-  // Total games in completed sets
   let totalGamesPlayed = 0;
   for (const s of liveScore.completedSets) totalGamesPlayed += s.p1 + s.p2;
   totalGamesPlayed += liveScore.currentSetGames.p1 + liveScore.currentSetGames.p2;
-  // Current server has served (totalGamesPlayed % 2 === 0) times since start
-  // If totalGamesPlayed is even, server started. If odd, other player started.
   const startServer: 1 | 2 = (totalGamesPlayed % 2 === 0) ? liveScore.server : (liveScore.server === 1 ? 2 : 1);
 
-  // Walk each completed set
   const allSets = [...liveScore.completedSets, liveScore.currentSetGames];
   const completedBefore: { p1: number; p2: number }[] = [];
   let runningServer = startServer;
@@ -556,63 +715,37 @@ function buildGameLog(
     const isCurrentSet = si === allSets.length - 1 && si >= liveScore.completedSets.length;
     const maxGames = setData.p1 + setData.p2;
 
-    // Simulate game-by-game progression through this set
-    let g1 = 0, g2 = 0;
-    // We don't know which player won each game, but we know the final score
-    // For the game log, reconstruct with assumption: alternate holds/breaks
-    // But actually we just show the probability at each game score point
-
-    // Add entry at start of set
     entries.push({
-      id: id++,
-      setNum: si + 1,
-      p1Games: 0,
-      p2Games: 0,
-      server: runningServer,
+      id: id++, setNum: si + 1, p1Games: 0, p2Games: 0, server: runningServer,
       p1WinProb: probAt(completedBefore, { p1: 0, p2: 0 }, runningServer),
-      label: `Set ${si + 1}: 0-0`,
-      isBreak: false,
-      isTiebreak: false,
+      label: `Set ${si + 1}: 0-0`, isBreak: false, isTiebreak: false,
     });
 
-    // We can generate intermediate game score entries for each possible game count
     for (let g = 1; g <= maxGames; g++) {
-      // We don't know the exact order, so generate entries for each game boundary
-      // Use a simple heuristic: distribute games proportionally
       const frac = g / maxGames;
-      g1 = Math.round(frac * setData.p1);
-      g2 = Math.round(frac * setData.p2);
-      // Clamp
+      let g1 = Math.round(frac * setData.p1);
+      let g2 = Math.round(frac * setData.p2);
       g1 = Math.min(g1, setData.p1);
       g2 = Math.min(g2, setData.p2);
-      if (g1 + g2 !== g) {
-        // Adjust: prefer the leader
-        if (g1 + g2 < g) {
-          if (setData.p1 >= setData.p2 && g1 < setData.p1) g1++;
-          else if (g2 < setData.p2) g2++;
-          else g1++;
-        }
+      if (g1 + g2 < g) {
+        if (setData.p1 >= setData.p2 && g1 < setData.p1) g1++;
+        else if (g2 < setData.p2) g2++;
+        else g1++;
       }
 
       const curServer: 1 | 2 = (entries.length % 2 === 0) ? startServer : (startServer === 1 ? 2 : 1);
       const isTB = g1 === 6 && g2 === 6;
 
       entries.push({
-        id: id++,
-        setNum: si + 1,
-        p1Games: g1,
-        p2Games: g2,
-        server: curServer,
+        id: id++, setNum: si + 1, p1Games: g1, p2Games: g2, server: curServer,
         p1WinProb: probAt(completedBefore, { p1: g1, p2: g2 }, curServer),
         label: isTB ? `Set ${si + 1}: TB` : `Set ${si + 1}: ${g1}-${g2}`,
-        isBreak: false, // Can't determine without game-by-game data
-        isTiebreak: isTB,
+        isBreak: false, isTiebreak: isTB,
       });
     }
 
     if (!isCurrentSet) {
       completedBefore.push({ ...setData });
-      // After a set, server alternates based on total games in the set
       if (maxGames % 2 === 1) runningServer = runningServer === 1 ? 2 : 1;
     }
   }
@@ -632,20 +765,30 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
   const [hedgeSide, setHedgeSide] = useState<1 | 2>(1);
   const [hedgeStake, setHedgeStake] = useState(100);
   const [hedgeOdds, setHedgeOdds] = useState(2.0);
+  const [hedgeLiveOdds, setHedgeLiveOdds] = useState<string>("");
   const [subTab, setSubTab] = useState<"live" | "signals" | "hedge">("live");
   const [mode, setMode] = useState<"auto" | "manual">(() => match.status === "live" && match.liveScore ? "auto" : "manual");
   const [liveMatch, setLiveMatch] = useState<ScheduledMatch>(match);
   const [lastRefresh, setLastRefresh] = useState<number>(Date.now());
   const [syncing, setSyncing] = useState(false);
+  const [manualPtScore, setManualPtScore] = useState<{ p1: string; p2: string } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Auto-build state from live score when in auto mode
   const liveState = useMemo(() => {
     if (mode === "auto" && liveMatch.liveScore) {
-      return buildStateFromLiveScore(liveMatch.liveScore, liveMatch.best_of);
+      const ls = buildStateFromLiveScore(liveMatch.liveScore, liveMatch.best_of);
+      // Apply manual point override if user set one
+      if (manualPtScore) {
+        ls.currentGame = {
+          p1: PT_MAP[manualPtScore.p1] ?? 0,
+          p2: PT_MAP[manualPtScore.p2] ?? 0,
+        };
+      }
+      return ls;
     }
     return null;
-  }, [mode, liveMatch.liveScore, liveMatch.best_of]);
+  }, [mode, liveMatch.liveScore, liveMatch.best_of, manualPtScore]);
 
   // Game log for live matches
   const gameLog = useMemo(() => {
@@ -657,10 +800,29 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
     return [];
   }, [liveMatch]);
 
-  // Use live state when in auto mode, manual state otherwise
   const activeState = liveState || state;
 
-  // Poll for live score updates every 15 seconds
+  // Live stats from SofaScore
+  const liveStats = liveMatch.liveScore?.stats || null;
+
+  // Build EWMA from real stats in auto mode
+  const activeEwma = useMemo(() => {
+    if (mode === "auto" && liveStats) return ewmaFromStats(liveStats);
+    return ewma;
+  }, [mode, liveStats, ewma]);
+
+  // Build fatigue from live state in auto mode
+  const activeFatigue = useMemo(() => {
+    if (mode === "auto" && liveState && liveStats) {
+      return fatigueFromLive(liveState, liveStats.p1_totalPointsWon + liveStats.p2_totalPointsWon);
+    }
+    if (mode === "auto" && liveState) {
+      return fatigueFromLive(liveState, 0);
+    }
+    return fatigue;
+  }, [mode, liveState, liveStats, fatigue]);
+
+  // Poll for live score updates every 10 seconds
   useEffect(() => {
     if (mode !== "auto" || liveMatch.status !== "live") return;
     const poll = async () => {
@@ -670,11 +832,16 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
         if (fresh) {
           setLiveMatch(fresh);
           setLastRefresh(Date.now());
+          // Clear manual point override when new data arrives (score changed)
+          if (fresh.liveScore?.pointScore) {
+            setManualPtScore(null);
+          }
         }
       } catch { /* */ }
       finally { setSyncing(false); }
     };
-    pollRef.current = setInterval(poll, 15_000);
+    poll(); // immediate first poll
+    pollRef.current = setInterval(poll, 10_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [mode, liveMatch.id, liveMatch.status]);
 
@@ -686,12 +853,34 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
     }
   }, [match, mode]);
 
-  const pServe1 = useMemo(() => Math.max(0.50, Math.min(0.75, 0.55 + (match.p1_win_prob - 0.5) * 0.3)), [match.p1_win_prob]);
-  const pServe2 = useMemo(() => Math.max(0.50, Math.min(0.75, 0.55 + (match.p2_win_prob - 0.5) * 0.3)), [match.p2_win_prob]);
+  const pServe1 = useMemo(() => {
+    // Use real serve stats if available
+    if (liveStats && mode === "auto") {
+      const firstP = (liveStats.p1_firstServePercent || 60) / 100;
+      const firstW = (liveStats.p1_firstServeWon || 65) / 100;
+      const secondW = (liveStats.p1_secondServeWon || 45) / 100;
+      return Math.max(0.45, Math.min(0.80, firstP * firstW + (1 - firstP) * secondW));
+    }
+    return Math.max(0.50, Math.min(0.75, 0.55 + (match.p1_win_prob - 0.5) * 0.3));
+  }, [match.p1_win_prob, liveStats, mode]);
+
+  const pServe2 = useMemo(() => {
+    if (liveStats && mode === "auto") {
+      const firstP = (liveStats.p2_firstServePercent || 60) / 100;
+      const firstW = (liveStats.p2_firstServeWon || 65) / 100;
+      const secondW = (liveStats.p2_secondServeWon || 45) / 100;
+      return Math.max(0.45, Math.min(0.80, firstP * firstW + (1 - firstP) * secondW));
+    }
+    return Math.max(0.50, Math.min(0.75, 0.55 + (match.p2_win_prob - 0.5) * 0.3));
+  }, [match.p2_win_prob, liveStats, mode]);
+
   const currentP1WinProb = useMemo(() => matchWinProb(pServe1, pServe2, activeState), [pServe1, pServe2, activeState]);
-  const currentBreakOpp = useMemo(() => breakOppProb(ewma, fatigue, activeState, pServe1, pServe2), [ewma, fatigue, activeState, pServe1, pServe2]);
-  const signals = useMemo(() => computePositionSignals(currentP1WinProb, match.p1_win_prob, ewma, fatigue, activeState, history, currentBreakOpp), [currentP1WinProb, match.p1_win_prob, ewma, fatigue, activeState, history, currentBreakOpp]);
-  const hedge = useMemo(() => calcDeltaNeutralHedge(hedgeSide, hedgeStake, hedgeOdds, currentP1WinProb, match.player1, match.player2), [hedgeSide, hedgeStake, hedgeOdds, currentP1WinProb, match.player1, match.player2]);
+  const currentBreakOpp = useMemo(() => breakOppProb(activeEwma, activeFatigue, activeState, pServe1, pServe2, liveStats), [activeEwma, activeFatigue, activeState, pServe1, pServe2, liveStats]);
+  const signals = useMemo(() => computePositionSignals(currentP1WinProb, match.p1_win_prob, activeEwma, activeFatigue, activeState, history, currentBreakOpp, liveStats), [currentP1WinProb, match.p1_win_prob, activeEwma, activeFatigue, activeState, history, currentBreakOpp, liveStats]);
+  const hedge = useMemo(() => {
+    const liveOdds = hedgeLiveOdds ? parseFloat(hedgeLiveOdds) : undefined;
+    return calcDeltaNeutralHedge(hedgeSide, hedgeStake, hedgeOdds, currentP1WinProb, match.player1, match.player2, liveOdds && liveOdds > 1 ? liveOdds : undefined);
+  }, [hedgeSide, hedgeStake, hedgeOdds, hedgeLiveOdds, currentP1WinProb, match.player1, match.player2]);
 
   const logPoint = useCallback((winner: 1 | 2) => {
     if (state.matchOver) return;
@@ -746,8 +935,8 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
     return pts.slice(-40);
   }, [history, match.p1_win_prob]);
 
-  const mom1 = ewmaMomentum(ewma, 1), mom2 = ewmaMomentum(ewma, 2);
-  const fat1 = fatigueIndex(fatigue, 1), fat2 = fatigueIndex(fatigue, 2);
+  const mom1 = ewmaMomentum(activeEwma, 1), mom2 = ewmaMomentum(activeEwma, 2);
+  const fat1 = fatigueIndex(activeFatigue, 1), fat2 = fatigueIndex(activeFatigue, 2);
   const fl1 = fatigueLabel(fat1), fl2 = fatigueLabel(fat2);
   const odds1 = probToOdds(currentP1WinProb), odds2 = probToOdds(1 - currentP1WinProb);
   const entrySigs = signals.filter(s => s.type === "ENTRY");
@@ -756,6 +945,9 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
 
   const p1Short = match.player1.split(" ").pop()!;
   const p2Short = match.player2.split(" ").pop()!;
+
+  // Has SofaScore data?
+  const hasSofa = !!(liveMatch.liveScore?.pointScore || liveMatch.liveScore?.stats);
 
   return (
     <div className="p-3 space-y-2 text-[11px]">
@@ -781,7 +973,8 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
           </button>
           {mode === "auto" && (
             <span className="text-[8px] text-terminal-muted">
-              {syncing ? "⟳ syncing…" : `Last: ${Math.round((Date.now() - lastRefresh) / 1000)}s ago`}
+              {syncing ? "⟳ syncing…" : `${Math.round((Date.now() - lastRefresh) / 1000)}s ago`}
+              {hasSofa && <span className="text-terminal-green ml-1">● SOFA</span>}
             </span>
           )}
         </div>
@@ -836,6 +1029,45 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
         </div>
       </div>
 
+      {/* Manual point input — available in auto mode for fine-tuning */}
+      {mode === "auto" && !activeState.matchOver && (
+        <div className="border border-terminal-border rounded p-2 bg-terminal-panel/30">
+          <div className="text-[8px] text-terminal-muted font-bold uppercase mb-1">📝 MANUAL POINT OVERRIDE (for current game)</div>
+          <div className="grid grid-cols-2 gap-2">
+            {([1,2] as const).map(pl => (
+              <div key={pl}>
+                <div className="text-[8px] text-terminal-muted mb-0.5">{pl === 1 ? p1Short : p2Short}</div>
+                <div className="flex gap-1">
+                  {(activeState.tiebreak ? ["0","1","2","3","4","5","6","7","8","9"] : ["0","15","30","40","A"]).map(pt => {
+                    const active = manualPtScore
+                      ? (pl === 1 ? manualPtScore.p1 === pt : manualPtScore.p2 === pt)
+                      : (liveMatch.liveScore?.pointScore ? (pl === 1 ? liveMatch.liveScore.pointScore.p1 === pt : liveMatch.liveScore.pointScore.p2 === pt) : pt === "0");
+                    return (
+                      <button key={pt} onClick={() => {
+                        const current = manualPtScore || liveMatch.liveScore?.pointScore || { p1: "0", p2: "0" };
+                        setManualPtScore(pl === 1 ? { p1: pt, p2: current.p2 } : { p1: current.p1, p2: pt });
+                      }}
+                      className={`px-1.5 py-0.5 rounded text-[8px] font-mono transition ${
+                        active
+                          ? "bg-terminal-yellow/30 text-terminal-yellow border border-terminal-yellow/50"
+                          : "bg-terminal-bg border border-terminal-border text-terminal-muted hover:text-slate-300"
+                      }`}>
+                        {pt}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+          {manualPtScore && (
+            <button onClick={() => setManualPtScore(null)} className="mt-1 text-[7px] text-terminal-red hover:text-terminal-red/80">
+              ✕ Clear override
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Point buttons — manual mode only */}
       {mode === "manual" && !activeState.matchOver && (
         <div className="grid grid-cols-2 gap-2">
@@ -888,27 +1120,55 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             <div className="text-[9px] text-terminal-muted text-center mt-1">Fair: {odds1.toFixed(2)} / {odds2.toFixed(2)} · Pre: {pct(match.p1_win_prob)} / {pct(match.p2_win_prob)}</div>
           </Sec>
 
+          {/* Live Match Stats from SofaScore */}
+          {liveStats && mode === "auto" && (
+            <Sec title="📡 LIVE MATCH STATISTICS">
+              <div className="grid grid-cols-3 gap-y-1 text-[10px] text-center">
+                <div className="text-terminal-green font-bold">{liveStats.p1_aces}</div><div className="text-terminal-muted">Aces</div><div className="text-terminal-cyan font-bold">{liveStats.p2_aces}</div>
+                <div className="text-terminal-green font-bold">{liveStats.p1_doubleFaults}</div><div className="text-terminal-muted">Double Faults</div><div className="text-terminal-cyan font-bold">{liveStats.p2_doubleFaults}</div>
+                <div className="text-terminal-green font-bold">{liveStats.p1_firstServePercent}%</div><div className="text-terminal-muted">1st Serve %</div><div className="text-terminal-cyan font-bold">{liveStats.p2_firstServePercent}%</div>
+                <div className="text-terminal-green font-bold">{liveStats.p1_firstServeWon}%</div><div className="text-terminal-muted">1st Srv Won</div><div className="text-terminal-cyan font-bold">{liveStats.p2_firstServeWon}%</div>
+                <div className="text-terminal-green font-bold">{liveStats.p1_secondServeWon}%</div><div className="text-terminal-muted">2nd Srv Won</div><div className="text-terminal-cyan font-bold">{liveStats.p2_secondServeWon}%</div>
+                <div className="text-terminal-green font-bold">{liveStats.p1_breakPointsConverted}</div><div className="text-terminal-muted">Break Pts</div><div className="text-terminal-cyan font-bold">{liveStats.p2_breakPointsConverted}</div>
+                <div className="text-terminal-green font-bold">{liveStats.p1_totalPointsWon}</div><div className="text-terminal-muted">Total Pts Won</div><div className="text-terminal-cyan font-bold">{liveStats.p2_totalPointsWon}</div>
+              </div>
+              <div className="mt-1.5 h-2 bg-terminal-border rounded-full overflow-hidden flex">
+                <div className="h-full bg-terminal-green transition-all duration-300" style={{ width: `${((liveStats.p1_totalPointsWon / Math.max(1, liveStats.p1_totalPointsWon + liveStats.p2_totalPointsWon)) * 100)}%` }} />
+                <div className="h-full bg-terminal-cyan transition-all duration-300" style={{ width: `${((liveStats.p2_totalPointsWon / Math.max(1, liveStats.p1_totalPointsWon + liveStats.p2_totalPointsWon)) * 100)}%` }} />
+              </div>
+              <div className="text-[8px] text-terminal-muted text-center mt-0.5">Points share: {p1Short} {Math.round(liveStats.p1_totalPointsWon / Math.max(1, liveStats.p1_totalPointsWon + liveStats.p2_totalPointsWon) * 100)}% — {p2Short} {Math.round(liveStats.p2_totalPointsWon / Math.max(1, liveStats.p1_totalPointsWon + liveStats.p2_totalPointsWon) * 100)}%</div>
+            </Sec>
+          )}
+
           {/* EWMA Momentum */}
-          <Sec title="EWMA MOMENTUM (α=0.15/0.05)">
+          <Sec title={`EWMA MOMENTUM${liveStats ? " (from live stats)" : " (α=0.15/0.05)"}`}>
             <div className="grid grid-cols-3 gap-1 text-center text-[10px]">
               <div>
                 <div className={`text-[14px] font-bold ${mom1 > 0.03 ? "text-terminal-green" : mom1 < -0.03 ? "text-terminal-red" : "text-slate-400"}`}>{mom1 > 0 ? "+" : ""}{(mom1*100).toFixed(1)}%</div>
                 <div className="text-[8px] text-terminal-muted">{p1Short}</div>
-                <div className="text-[8px] text-terminal-muted">Rate: {(ewma.fast1*100).toFixed(0)}%</div>
+                <div className="text-[8px] text-terminal-muted">Rate: {(activeEwma.fast1*100).toFixed(0)}%</div>
               </div>
               <div>
-                <div className="flex justify-center gap-0.5 mt-1">{history.slice(-8).map((p,i) => <div key={i} className={`w-2 h-2 rounded-full ${p.winner === 1 ? "bg-terminal-green" : "bg-terminal-cyan"}`} />)}</div>
-                <div className="text-[7px] text-terminal-muted mt-1">Last 8</div>
+                {mode === "manual" ? (
+                  <>
+                    <div className="flex justify-center gap-0.5 mt-1">{history.slice(-8).map((p,i) => <div key={i} className={`w-2 h-2 rounded-full ${p.winner === 1 ? "bg-terminal-green" : "bg-terminal-cyan"}`} />)}</div>
+                    <div className="text-[7px] text-terminal-muted mt-1">Last 8</div>
+                  </>
+                ) : (
+                  <div className="text-[8px] text-terminal-muted mt-2">
+                    {liveStats ? `${liveStats.p1_totalPointsWon}-${liveStats.p2_totalPointsWon} pts` : "—"}
+                  </div>
+                )}
               </div>
               <div>
                 <div className={`text-[14px] font-bold ${mom2 > 0.03 ? "text-terminal-cyan" : mom2 < -0.03 ? "text-terminal-red" : "text-slate-400"}`}>{mom2 > 0 ? "+" : ""}{(mom2*100).toFixed(1)}%</div>
                 <div className="text-[8px] text-terminal-muted">{p2Short}</div>
-                <div className="text-[8px] text-terminal-muted">Rate: {(ewma.fast2*100).toFixed(0)}%</div>
+                <div className="text-[8px] text-terminal-muted">Rate: {(activeEwma.fast2*100).toFixed(0)}%</div>
               </div>
             </div>
             <div className="mt-2 h-2 bg-terminal-border rounded-full overflow-hidden flex">
-              <div className="h-full bg-terminal-green transition-all duration-500" style={{ width: `${ewma.fast1*100}%` }} />
-              <div className="h-full bg-terminal-cyan transition-all duration-500" style={{ width: `${ewma.fast2*100}%` }} />
+              <div className="h-full bg-terminal-green transition-all duration-500" style={{ width: `${activeEwma.fast1*100}%` }} />
+              <div className="h-full bg-terminal-cyan transition-all duration-500" style={{ width: `${activeEwma.fast2*100}%` }} />
             </div>
           </Sec>
 
@@ -926,25 +1186,30 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
                 </div>
               ))}
             </div>
-            <div className="text-[8px] text-terminal-muted text-center mt-1">{fatigue.totalPoints} pts · {fatigue.deuceGames} deuce · {fatigue.tiebreaks} TB</div>
+            <div className="text-[8px] text-terminal-muted text-center mt-1">{activeFatigue.totalPoints} pts · {activeFatigue.deuceGames} deuce · {activeFatigue.tiebreaks} TB</div>
           </Sec>
 
           {/* Break opportunity */}
           {!activeState.tiebreak && !activeState.matchOver && (
-            <Sec title="BREAK OPPORTUNITY">
+            <Sec title={`BREAK OPPORTUNITY${liveStats ? " (live stats)" : ""}`}>
               <div className="text-center">
                 <div className={`text-[18px] font-bold ${currentBreakOpp > 0.50 ? "text-terminal-red animate-pulse" : currentBreakOpp > 0.35 ? "text-terminal-yellow" : "text-terminal-muted"}`}>{(currentBreakOpp*100).toFixed(0)}%</div>
                 <div className="text-[8px] text-terminal-muted">{activeState.server === 1 ? p2Short : p1Short} break chance</div>
+                {liveStats && (
+                  <div className="text-[7px] text-terminal-muted mt-0.5">
+                    Srv DFs: {activeState.server === 1 ? liveStats.p1_doubleFaults : liveStats.p2_doubleFaults} · 1st%: {activeState.server === 1 ? liveStats.p1_firstServePercent : liveStats.p2_firstServePercent}%
+                  </div>
+                )}
                 <div className="h-2 mt-1 bg-terminal-border rounded-full overflow-hidden">
                   <div className={`h-full transition-all duration-300 ${currentBreakOpp > 0.50 ? "bg-terminal-red" : currentBreakOpp > 0.35 ? "bg-terminal-yellow" : "bg-terminal-blue"}`} style={{ width: `${currentBreakOpp*100}%` }} />
                 </div>
-                <div className="flex justify-between text-[7px] text-terminal-muted mt-0.5"><span>Low</span><span>EWMA + Fatigue + Pressure</span><span>High</span></div>
+                <div className="flex justify-between text-[7px] text-terminal-muted mt-0.5"><span>Low</span><span>{liveStats ? "Stats + Momentum" : "EWMA + Fatigue + Pressure"}</span><span>High</span></div>
               </div>
             </Sec>
           )}
 
-          {/* Dual chart */}
-          {probHist.length > 1 && (
+          {/* Dual chart (manual mode) */}
+          {mode === "manual" && probHist.length > 1 && (
             <Sec title="PROBABILITY + EWMA TIMELINE">
               <DualChart data={probHist} p1Name={match.player1} />
             </Sec>
@@ -968,7 +1233,6 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
                   );
                 })}
               </div>
-              {/* Mini probability chart from game log */}
               {gameLog.length > 2 && (
                 <div className="mt-2">
                   <GameLogChart data={gameLog} p1Name={p1Short} />
@@ -977,8 +1241,8 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             </Sec>
           )}
 
-          {/* Stats */}
-          {history.length > 0 && (
+          {/* Stats (manual mode) */}
+          {mode === "manual" && history.length > 0 && (
             <Sec title="MATCH STATISTICS">
               <div className="grid grid-cols-3 gap-y-1 text-[10px] text-center">
                 <div className="text-terminal-green font-bold">{p1PtsWon}</div><div className="text-terminal-muted">Points Won</div><div className="text-terminal-cyan font-bold">{p2PtsWon}</div>
@@ -988,8 +1252,8 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             </Sec>
           )}
 
-          {/* Point log */}
-          {history.length > 0 && (
+          {/* Point log (manual mode) */}
+          {mode === "manual" && history.length > 0 && (
             <Sec title={`POINT LOG (${history.length})`}>
               <div className="max-h-[120px] overflow-y-auto space-y-0.5">
                 {history.slice(-12).reverse().map(p => (
@@ -1014,20 +1278,24 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
         <div className="space-y-2">
           <Sec title="POSITION SIGNALS">
             {signals.length === 0
-              ? <div className="text-center text-terminal-muted text-[10px] py-3">{history.length < 5 ? "Log more points to generate signals…" : "No actionable signals"}</div>
+              ? <div className="text-center text-terminal-muted text-[10px] py-3">
+                  {mode === "auto" ? (liveStats ? "No actionable signals from live data" : "Waiting for SofaScore data…") : (history.length < 5 ? "Log more points to generate signals…" : "No actionable signals")}
+                </div>
               : <div className="space-y-1.5">{signals.map((s,i) => <SigCard key={i} sig={s} p1={match.player1} p2={match.player2} />)}</div>
             }
           </Sec>
 
           <Sec title="SIGNAL RULES">
             <div className="space-y-1 text-[9px]">
-              <RuleRow icon="📈" lv="MATCH" rule="ENTRY when P shifts >8% + EWMA confirms" />
-              <RuleRow icon="📉" lv="MATCH" rule="EXIT when momentum reverses (EWMA < -8%)" />
-              <RuleRow icon="🎯" lv="SET" rule="ENTRY on break — back the breaker" />
+              <RuleRow icon="📈" lv="MATCH" rule="ENTRY when P shifts >8% + momentum confirms" />
+              <RuleRow icon="📉" lv="MATCH" rule="EXIT when points won trail despite price advantage" />
+              <RuleRow icon="🎯" lv="SET" rule="ENTRY on break pts converted advantage" />
               <RuleRow icon="↔️" lv="SET" rule="EXIT on break-back — reduce exposure" />
-              <RuleRow icon="🔴" lv="GAME" rule="ENTRY when break opp >35% (EWMA+fatigue)" />
+              <RuleRow icon="🔴" lv="GAME" rule={`ENTRY when break opp >35%${liveStats ? " (from real serve %)" : ""}`} />
               <RuleRow icon="🟢" lv="GAME" rule="EXIT when server stabilizes, hold >85%" />
-              <RuleRow icon="🛡" lv="MATCH" rule="HEDGE when σ >6% — delta neutral" />
+              <RuleRow icon="💪" lv="MATCH" rule="ENTRY on serve dominance (1st serve % gap >15%)" />
+              <RuleRow icon="⚠️" lv="MATCH" rule="ENTRY vs DF crisis (4+ double faults)" />
+              <RuleRow icon="🛡" lv="MATCH" rule="HEDGE when tight match (pts within 3)" />
             </div>
           </Sec>
 
@@ -1080,10 +1348,34 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
                     className="w-full bg-terminal-bg border border-terminal-border rounded px-2 py-1 text-[10px] text-slate-200 outline-none" />
                 </div>
               </div>
-              <div>
-                <label className="text-[8px] text-terminal-muted block mb-0.5">Entry Odds (decimal)</label>
-                <input type="number" step="0.01" value={hedgeOdds} onChange={e => setHedgeOdds(parseFloat(e.target.value) || 1.01)}
-                  className="w-full bg-terminal-bg border border-terminal-border rounded px-2 py-1 text-[10px] text-slate-200 outline-none" />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[8px] text-terminal-muted block mb-0.5">Entry Odds (decimal)</label>
+                  <input type="number" step="0.01" value={hedgeOdds} onChange={e => setHedgeOdds(parseFloat(e.target.value) || 1.01)}
+                    className="w-full bg-terminal-bg border border-terminal-border rounded px-2 py-1 text-[10px] text-slate-200 outline-none" />
+                </div>
+                <div>
+                  <label className="text-[8px] text-terminal-muted block mb-0.5">Live Hedge Odds (optional)</label>
+                  <input type="number" step="0.01" value={hedgeLiveOdds} placeholder="auto"
+                    onChange={e => setHedgeLiveOdds(e.target.value)}
+                    className="w-full bg-terminal-bg border border-terminal-border rounded px-2 py-1 text-[10px] text-slate-200 outline-none placeholder:text-terminal-border" />
+                </div>
+              </div>
+            </div>
+
+            {/* Kelly Edge + ROI indicators */}
+            <div className="grid grid-cols-3 gap-1 text-center mb-2">
+              <div className={`p-1 rounded border ${hedge.kellyEdge > 0 ? "border-terminal-green/30 bg-terminal-green/5" : "border-terminal-red/30 bg-terminal-red/5"}`}>
+                <div className={`text-[12px] font-bold font-mono ${hedge.kellyEdge > 0 ? "text-terminal-green" : "text-terminal-red"}`}>{hedge.kellyEdge > 0 ? "+" : ""}{hedge.kellyEdge}%</div>
+                <div className="text-[7px] text-terminal-muted">Kelly Edge</div>
+              </div>
+              <div className="p-1 rounded border border-terminal-border">
+                <div className="text-[12px] font-bold font-mono text-terminal-yellow">{hedge.currentFairOdds.toFixed(2)}</div>
+                <div className="text-[7px] text-terminal-muted">Fair Odds</div>
+              </div>
+              <div className={`p-1 rounded border ${hedge.roi >= 0 ? "border-terminal-green/30 bg-terminal-green/5" : "border-terminal-red/30 bg-terminal-red/5"}`}>
+                <div className={`text-[12px] font-bold font-mono ${hedge.roi >= 0 ? "text-terminal-green" : "text-terminal-red"}`}>{hedge.roi >= 0 ? "+" : ""}{hedge.roi}%</div>
+                <div className="text-[7px] text-terminal-muted">Exp ROI</div>
               </div>
             </div>
 
@@ -1092,7 +1384,8 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
               <div className="grid grid-cols-2 gap-y-1.5 text-[10px]">
                 <div className="text-terminal-muted">Action</div><div className="text-slate-200 font-bold">BACK {hedge.player}</div>
                 <div className="text-terminal-muted">Hedge Stake</div><div className="text-terminal-yellow font-bold font-mono">${hedge.hedgeStake.toFixed(2)}</div>
-                <div className="text-terminal-muted">Fair Odds</div><div className="text-slate-200 font-mono">{hedge.hedgeOdds.toFixed(2)}</div>
+                <div className="text-terminal-muted">Hedge Odds</div><div className="text-slate-200 font-mono">{hedge.hedgeOdds.toFixed(2)} {hedgeLiveOdds ? "(live)" : "(fair)"}</div>
+                <div className="text-terminal-muted">Implied vs True</div><div className="text-slate-200 font-mono">{pct(hedge.impliedProb)} → {pct(hedgeSide === 1 ? currentP1WinProb : 1 - currentP1WinProb)}</div>
               </div>
             </div>
 
@@ -1115,11 +1408,11 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             <div className="mt-2 text-[9px] text-terminal-muted border-t border-terminal-border pt-2">
               <div className="font-bold text-terminal-yellow mb-1">WHEN TO HEDGE (Account B):</div>
               <ul className="space-y-0.5">
-                <li>• EWMA momentum reverses against your position</li>
-                <li>• Opponent breaks back → breaks trading</li>
+                <li>• Kelly edge turns negative (fair odds &lt; entry odds)</li>
+                <li>• Opponent breaks — serve dominance collapses</li>
                 <li>• Probability shifts &gt;12% against entry</li>
-                <li>• Server fatigue &gt;60% on backed player&apos;s serve</li>
-                <li>• Volatility σ &gt;6% — choppy market</li>
+                <li>• Server DFs &gt;4 on backed player&apos;s serve</li>
+                <li>• Total points share &lt;47% — structural disadvantage</li>
               </ul>
             </div>
           </Sec>
@@ -1199,7 +1492,6 @@ function GameLogChart({ data, p1Name }: { data: GameLogEntry[]; p1Name: string }
   const pts = data.map((d, i) => `${px + (i / Math.max(data.length - 1, 1)) * iw},${py + (1 - d.p1WinProb) * ih}`);
   const lastP = data[data.length - 1]?.p1WinProb ?? 0.5;
 
-  // Find set boundaries for vertical dividers
   const setBounds: number[] = [];
   for (let i = 1; i < data.length; i++) {
     if (data[i].setNum !== data[i - 1].setNum) {
