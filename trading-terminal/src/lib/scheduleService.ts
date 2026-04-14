@@ -347,7 +347,7 @@ function computeProb(
 
 // ─── SofaScore Scheduled Events (ITF + Challenger + WTA 125) ─────────────────
 
-const SOFA_SCHEDULED = "https://www.sofascore.com/api/v1/sport/tennis/scheduled-events";
+const SOFA_SCHEDULED = "/api/sofa/sport/tennis/scheduled-events";
 
 /** SofaScore category slugs we pull that ESPN doesn't cover */
 const SOFA_EXTRA_CATS = new Set(["itf-men", "itf-women", "challenger", "wta-125"]);
@@ -516,8 +516,8 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
  * does NOT include ITF events — only ATP, WTA, Challenger, W125).
  */
 const SOFA_CAT_URLS: Record<string, string> = {
-  "itf-men": "https://www.sofascore.com/api/v1/category/785/scheduled-events",
-  "itf-women": "https://www.sofascore.com/api/v1/category/213/scheduled-events",
+  "itf-men": "/api/sofa/category/785/scheduled-events",
+  "itf-women": "/api/sofa/category/213/scheduled-events",
 };
 
 /** Cache SofaScore scheduled data per date — 60s TTL for schedule, 8s for live polling */
@@ -677,7 +677,7 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
    SofaScore Integration — point-level scores + match statistics
    ═══════════════════════════════════════════════════════════════════════════ */
 
-const SOFA_LIVE = "https://www.sofascore.com/api/v1/sport/tennis/events/live";
+const SOFA_LIVE = "/api/sofa/sport/tennis/events/live";
 
 interface SofaLiveEvent {
   id: number;
@@ -739,7 +739,7 @@ async function fetchSofaLive(): Promise<SofaLiveEvent[]> {
 /** Fetch match statistics from SofaScore */
 export async function fetchSofaStats(sofaId: number): Promise<LiveMatchStats | null> {
   try {
-    const res = await fetch(`https://www.sofascore.com/api/v1/event/${sofaId}/statistics`);
+    const res = await fetch(`/api/sofa/event/${sofaId}/statistics`);
     if (!res.ok) return null;
     const json = await res.json();
     // Statistics are grouped by period — use "ALL" or the last group

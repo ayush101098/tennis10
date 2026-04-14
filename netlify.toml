@@ -6,6 +6,17 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# Functions directory for serverless functions (SofaScore proxy etc.)
+[functions]
+  directory = "netlify/functions"
+
+# Route SofaScore API requests through the serverless function
+[[redirects]]
+  from = "/api/sofa/*"
+  to = "/.netlify/functions/sofa-proxy/:splat"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
