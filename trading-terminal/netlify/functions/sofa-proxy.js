@@ -3,14 +3,32 @@
  *
  * When the frontend is deployed as a static export on Netlify, Next.js API
  * routes don't exist.  This function handles /api/sofa/* requests instead.
+ *
+ * SofaScore blocks ALL programmatic HTTP requests via TLS fingerprinting
+ * (Varnish CDN returns 403 for Node.js fetch, curl, etc.).
+ *
+ * This function forwards requests to a deployed instance of sofa_proxy.py
+ * (which uses tls_client with Chrome TLS fingerprint impersonation).
+ *
+ * Set the SOFA_PROXY_URL env var on Netlify to the deployed proxy URL:
+ *   e.g. https://sofa-proxy.onrender.com
+ *        https://sofa-proxy-xxxx.fly.dev
  */
 
 exports.handler = async (event) => {
-  const SOFA_BASE = "https://www.sofascore.com/api/v1";
+  const SOFA_PROXY_URL = process.env.SOFA_PROXY_URL;
 
-  // event.path is like /.netlify/functions/sofa-proxy/sport/tennis/...
-  // The redirect in netlify.toml rewrites /api/sofa/* → /.netlify/functions/sofa-proxy/*
-  // Extract the trailing path after the function name
+  if (!SOFA_PROXY_URL) {
+    return {
+      statusCode: 503,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        error: "SOFA_PROXY_URL not configured. Deploy sofa_proxy.py and set the env var.",
+      }),
+    };
+  }
+
+  // Extract the SofaScore API path from the request
   const fnPrefix = "/.netlify/functions/sofa-proxy/";
   let sofaPath = event.path;
   if (sofaPath.startsWith(fnPrefix)) {
@@ -19,18 +37,12 @@ exports.handler = async (event) => {
     sofaPath = sofaPath.slice("/api/sofa/".length);
   }
 
-  const url = `${SOFA_BASE}/${sofaPath}`;
+  // Forward to the deployed sofa_proxy.py (which handles TLS fingerprinting)
+  const url = `${SOFA_PROXY_URL.replace(/\/$/, "")}/${sofaPath}`;
 
   try {
     const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        Referer: "https://www.sofascore.com/",
-        Origin: "https://www.sofascore.com",
-      },
+      headers: { Accept: "application/json" },
     });
 
     const body = await res.text();
@@ -49,7 +61,10 @@ exports.handler = async (event) => {
     return {
       statusCode: 502,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Failed to fetch from SofaScore" }),
+      body: JSON.stringify({
+        error: "Failed to reach sofa_proxy — is it deployed?",
+        proxyUrl: SOFA_PROXY_URL,
+      }),
     };
   }
 };

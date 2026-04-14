@@ -14,6 +14,7 @@ Usage:
 The Next.js API route at /api/sofa/[...path] calls http://localhost:3001/...
 """
 
+import os
 import sys
 import json
 import time
@@ -95,9 +96,10 @@ class SofaHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 3001
-    server = HTTPServer(("127.0.0.1", port), SofaHandler)
-    print(f"[sofa-proxy] listening on http://127.0.0.1:{port}")
+    port = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 else 3001))
+    host = os.environ.get("HOST", "0.0.0.0")
+    server = HTTPServer((host, port), SofaHandler)
+    print(f"[sofa-proxy] listening on http://{host}:{port}")
     print(f"[sofa-proxy] TLS impersonation: chrome_120")
     try:
         server.serve_forever()

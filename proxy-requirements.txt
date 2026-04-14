@@ -1,0 +1,2 @@
+# SofaScore TLS proxy — requires tls_client for Chrome fingerprint impersonation
+tls_client>=1.0.0

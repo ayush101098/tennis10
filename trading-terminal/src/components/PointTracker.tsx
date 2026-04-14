@@ -177,8 +177,9 @@ function fatigueLabel(idx: number): { label: string; color: string } {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   Break Opportunity Predictor — uses real stats when available,
-   also responds to current game score context
+   Break Opportunity Predictor — Markov-based from current game score
+   Uses gameWinProb() to compute EXACT break probability from the current
+   point score, then adjusts for momentum / fatigue / match context.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function breakOppProb(
@@ -189,8 +190,11 @@ function breakOppProb(
   if (state.tiebreak || state.matchOver) return 0;
   const server = state.server;
   const returner = server === 1 ? 2 : 1;
+  const gs = state.currentGame;
+  const cs = state.currentSet;
 
-  // If we have real stats, compute break probability from actual serve performance
+  // ── Step 1: Determine serve point win rate ──
+  let srvPtWin: number;
   if (stats) {
     const srvFirstPct = server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent;
     const srvFirstWon = server === 1 ? stats.p1_firstServeWon : stats.p2_firstServeWon;
@@ -198,44 +202,62 @@ function breakOppProb(
     const firstP = (srvFirstPct || 60) / 100;
     const firstW = (srvFirstWon || 65) / 100;
     const secondW = (srvSecondWon || 45) / 100;
-    const srvPtWinRate = firstP * firstW + (1 - firstP) * secondW;
-    const realHoldProb = gameWinProb(srvPtWinRate, 0, 0, false);
-    const baseBreakProb = 1 - realHoldProb;
-    const bpc = server === 1 ? stats.p2_breakPointsConverted : stats.p1_breakPointsConverted;
-    const [bpWon, bpTotal] = (bpc || "0/0").split("/").map(Number);
-    const bpConvRate = bpTotal > 0 ? bpWon / bpTotal : 0.3;
-    const returnerMom = ewmaMomentum(ewma, returner);
-    const serverFat = fatigueIndex(fatigue, server);
-    return Math.max(0, Math.min(0.85,
-      baseBreakProb * 0.5 + bpConvRate * 0.3 + returnerMom * 0.1 + serverFat * 0.1
-    ));
+    srvPtWin = firstP * firstW + (1 - firstP) * secondW;
+  } else {
+    // Elo-derived serve point win probability
+    srvPtWin = server === 1 ? pServe1 : pServe2;
   }
 
-  // Model-only: use Elo-derived serve point win probability
-  const serverPct = server === 1 ? pServe1 : pServe2;
-  const baseBreakProb = 1 - holdProb(serverPct);
-  const returnerMom = ewmaMomentum(ewma, returner);
-  const momentumAdj = returnerMom * 0.3;
-  const serverFat = fatigueIndex(fatigue, server);
-  const fatigueAdj = serverFat * 0.15;
-  // Returner leading in the set → pressure on server
-  const gameDiff = server === 1
-    ? state.currentSet.p2 - state.currentSet.p1
-    : state.currentSet.p1 - state.currentSet.p2;
-  const pressureAdj = gameDiff > 0 ? gameDiff * 0.03 : 0;
-  // Current game score context: returner leading in game → higher break chance
-  const gs = state.currentGame;
-  const depth = gs.p1 + gs.p2;
-  const depthAdj = depth >= 6 ? 0.05 : depth >= 4 ? 0.02 : 0;
-  // Score-state boost: if returner leads in game points, actual break is imminent
-  const retPts = server === 1 ? gs.p2 : gs.p1;
+  // ── Step 2: Markov break probability from CURRENT game score ──
+  // gameWinProb gives P(server wins game from this score)
+  // So break prob = 1 - P(server holds from here)
   const srvPts = server === 1 ? gs.p1 : gs.p2;
-  let scoreAdj = 0;
-  if (retPts >= 3 && retPts > srvPts) scoreAdj = 0.15; // break point! (30-40, 40-AD)
-  else if (retPts >= 2 && retPts > srvPts) scoreAdj = 0.06; // 15-30, 0-30
-  else if (retPts >= 3 && retPts === srvPts) scoreAdj = 0.03; // deuce
+  const retPts = server === 1 ? gs.p2 : gs.p1;
+  const holdFromHere = gameWinProb(srvPtWin, srvPts, retPts, false);
+  let breakProb = 1 - holdFromHere;
 
-  return Math.max(0, Math.min(0.85, baseBreakProb + momentumAdj + fatigueAdj + pressureAdj + depthAdj + scoreAdj));
+  // ── Step 3: Contextual adjustments ──
+  // Momentum: returner on a roll → increase break chance
+  const returnerMom = ewmaMomentum(ewma, returner);
+  breakProb += returnerMom * 0.12;
+
+  // Fatigue: tired server → harder to hold
+  const serverFat = fatigueIndex(fatigue, server);
+  breakProb += serverFat * 0.06;
+
+  // Set pressure: server trailing → psychological pressure
+  const srvGames = server === 1 ? cs.p1 : cs.p2;
+  const retGames = server === 1 ? cs.p2 : cs.p1;
+  if (retGames >= 5 && retGames > srvGames) {
+    breakProb += 0.04; // serving to stay in set
+  } else if (retGames > srvGames && retGames >= 3) {
+    breakProb += 0.02; // trailing in set
+  }
+
+  // ── Step 4: Stats-based adjustments (when SofaScore data available) ──
+  if (stats) {
+    // Double fault pressure: high DF rate → serve is unreliable
+    const dfs = server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults;
+    const totalPts = (stats.p1_totalPointsWon + stats.p2_totalPointsWon) || 1;
+    const dfRate = dfs / totalPts;
+    if (dfRate > 0.08) breakProb += 0.05;      // DF crisis
+    else if (dfRate > 0.05) breakProb += 0.03;  // elevated DF rate
+
+    // Second serve vulnerability: low 2nd serve win % → breaks more likely
+    const srvSecondWon = server === 1 ? stats.p1_secondServeWon : stats.p2_secondServeWon;
+    if ((srvSecondWon || 50) < 40) breakProb += 0.03;
+
+    // Break point conversion history (secondary signal)
+    const bpc = server === 1 ? stats.p2_breakPointsConverted : stats.p1_breakPointsConverted;
+    const [bpWon, bpTotal] = (bpc || "0/0").split("/").map(Number);
+    if (bpTotal >= 2) {
+      const bpConvRate = bpWon / bpTotal;
+      if (bpConvRate > 0.50) breakProb += 0.04;       // excellent converter
+      else if (bpConvRate > 0.35) breakProb += 0.02;   // good converter
+    }
+  }
+
+  return Math.max(0, Math.min(0.95, breakProb));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -354,19 +376,35 @@ function computePositionSignals(
 
   // ═══ SET LEVEL — from score patterns ═══
 
-  // 6) Game lead in current set → service break detected
-  const gameLead = cs.p1 - cs.p2;
-  if (Math.abs(gameLead) >= 2 && totalGames > 2) {
-    const leader = gameLead > 0 ? 1 : 2;
-    const isBreakUp = Math.abs(gameLead) % 2 === 1; // odd game diff implies a break
-    if (isBreakUp) {
-      signals.push({
-        level: "SET", type: "ENTRY", strength: Math.abs(gameLead) >= 3 ? "STRONG" : "MODERATE",
-        side: leader,
-        reason: `${leader === 1 ? "P1" : "P2"} leads ${cs.p1}-${cs.p2} (break advantage) · back for set`,
-        edgePct: Math.abs(gameLead) * 5,
-        stopLoss: leader === 1 ? Math.max(0.30, currentP1Prob - 0.12) : Math.min(0.70, currentP1Prob + 0.12),
-      });
+  // 6) Break advantage detection — use actual net break count from serve alternation
+  {
+    const totalGamesInSet = cs.p1 + cs.p2;
+    if (totalGamesInSet >= 2) {
+      // Determine who served first in this set from current server + games played
+      const firstServerInSet: 1 | 2 = totalGamesInSet % 2 === 0
+        ? state.server
+        : (state.server === 1 ? 2 : 1);
+      // Expected game diff if all service games were held
+      const p1SrvGames = firstServerInSet === 1
+        ? Math.ceil(totalGamesInSet / 2)
+        : Math.floor(totalGamesInSet / 2);
+      const expectedDiff = p1SrvGames - (totalGamesInSet - p1SrvGames);
+      const actualDiff = cs.p1 - cs.p2;
+      // Net break advantage: positive = P1 has break lead
+      const netBreaks = (actualDiff - expectedDiff) / 2;
+
+      if (Math.abs(netBreaks) >= 1) {
+        const leader = netBreaks > 0 ? 1 : 2;
+        const breakCount = Math.abs(netBreaks);
+        signals.push({
+          level: "SET", type: "ENTRY",
+          strength: breakCount >= 2 ? "STRONG" : "MODERATE",
+          side: leader,
+          reason: `${leader === 1 ? "P1" : "P2"} has ${breakCount > 1 ? breakCount + "× " : ""}break advantage at ${cs.p1}-${cs.p2} — back for set`,
+          edgePct: breakCount * 7,
+          stopLoss: leader === 1 ? Math.max(0.25, currentP1Prob - 0.12) : Math.min(0.75, currentP1Prob + 0.12),
+        });
+      }
     }
   }
 
@@ -428,44 +466,79 @@ function computePositionSignals(
 
   // ═══ GAME LEVEL — from break opportunity + score context ═══
 
-  // 10) Break point from game score (always works — uses point score)
+  // 10) Break point / pressure from game score (Markov-accurate)
   if (!state.tiebreak) {
     const retPts = state.server === 1 ? gs.p2 : gs.p1;
     const srvPts = state.server === 1 ? gs.p1 : gs.p2;
     const returner = state.server === 1 ? 2 : 1;
+    const scoreLabel = `${PT_LABELS[Math.min(gs.p1,4)]}-${PT_LABELS[Math.min(gs.p2,4)]}`;
+
     if (retPts >= 3 && retPts > srvPts) {
-      // Actual break point!
+      // Actual break point! (30-40, 40-AD)
+      const convPct = Math.round(breakOpp * 100);
       signals.push({
         level: "GAME", type: "ENTRY", strength: "STRONG", side: returner,
-        reason: `🔴 BREAK POINT! ${returner === 1 ? "P1" : "P2"} at ${PT_LABELS[Math.min(gs.p1,4)]}-${PT_LABELS[Math.min(gs.p2,4)]}${stats ? ` · srv 1st%: ${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}%` : ""}`,
-        edgePct: 15,
+        reason: `🔴 BREAK POINT ${scoreLabel}! Conv: ${convPct}%${stats ? ` · srv 1st%: ${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}% · DFs: ${state.server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults}` : ""}`,
+        edgePct: Math.max(15, convPct * 0.4),
       });
-    } else if (retPts >= 2 && srvPts <= 1 && retPts > srvPts) {
-      // Building toward break (0-30, 15-30, 0-15 with momentum)
+    } else if (retPts >= 3 && retPts === srvPts) {
+      // Deuce — next point critical
       signals.push({
         level: "GAME", type: "ENTRY", strength: "MODERATE", side: returner,
-        reason: `Pressure: ${PT_LABELS[Math.min(gs.p1,4)]}-${PT_LABELS[Math.min(gs.p2,4)]} · server under stress`,
-        edgePct: 6,
+        reason: `Deuce — ${Math.round(breakOpp * 100)}% break chance · server under pressure`,
+        edgePct: 8,
+      });
+    } else if (retPts >= 2 && srvPts <= 1 && retPts > srvPts) {
+      // Building toward break (0-30, 15-30)
+      signals.push({
+        level: "GAME", type: "ENTRY", strength: "MODERATE", side: returner,
+        reason: `Pressure ${scoreLabel} · break opp ${Math.round(breakOpp * 100)}%${srvPts === 0 && retPts >= 2 ? " · server in trouble" : ""}`,
+        edgePct: Math.max(6, Math.round(breakOpp * 20)),
+      });
+    } else if (srvPts >= 3 && srvPts > retPts) {
+      // Server has game point — break unlikely
+      signals.push({
+        level: "GAME", type: "EXIT", strength: "MODERATE", side: null,
+        reason: `Game point ${scoreLabel} · hold likely ${Math.round((1 - breakOpp) * 100)}%`,
+        edgePct: -3,
+      });
+    }
+
+    // 10b) Serving to stay in set — extra pressure signal
+    const srvGames = state.server === 1 ? cs.p1 : cs.p2;
+    const retGames = state.server === 1 ? cs.p2 : cs.p1;
+    if (retGames >= 5 && retGames > srvGames && srvGames < 6) {
+      signals.push({
+        level: "GAME", type: "ENTRY", strength: breakOpp > 0.30 ? "STRONG" : "MODERATE",
+        side: returner,
+        reason: `Server must hold to stay in set (${cs.p1}-${cs.p2}) · break ${Math.round(breakOpp * 100)}%`,
+        edgePct: Math.max(8, Math.round(breakOpp * 30)),
       });
     }
   }
 
-  // 11) Break opportunity from model (lowered threshold to 0.28 from 0.35)
-  if (breakOpp > 0.28 && !state.tiebreak) {
+  // 11) Break opportunity from Markov model (score-state aware)
+  if (breakOpp > 0.25 && !state.tiebreak) {
     const returner = state.server === 1 ? 2 : 1;
-    signals.push({
-      level: "GAME", type: "ENTRY",
-      strength: breakOpp > 0.45 ? "STRONG" : breakOpp > 0.35 ? "MODERATE" : "WEAK",
-      side: returner,
-      reason: stats
-        ? `Break opp ${(breakOpp * 100).toFixed(0)}% · DFs:${state.server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults} 1st%:${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}%`
-        : `Break opp ${(breakOpp * 100).toFixed(0)}% · hold ${((1 - breakOpp) * 100).toFixed(0)}% [Elo model${p1Fat > 0.3 || p2Fat > 0.3 ? " + fatigue" : ""}]`,
-      edgePct: (breakOpp - 0.20) * 40,
-    });
+    // Only show if not already covered by signal #10 (avoid duplicate)
+    const retPts = state.server === 1 ? gs.p2 : gs.p1;
+    const srvPts = state.server === 1 ? gs.p1 : gs.p2;
+    const alreadySignaled = (retPts >= 3 && retPts > srvPts) || (retPts >= 2 && srvPts <= 1 && retPts > srvPts) || (retPts >= 3 && retPts === srvPts);
+    if (!alreadySignaled) {
+      signals.push({
+        level: "GAME", type: "ENTRY",
+        strength: breakOpp > 0.45 ? "STRONG" : breakOpp > 0.35 ? "MODERATE" : "WEAK",
+        side: returner,
+        reason: stats
+          ? `Break opp ${(breakOpp * 100).toFixed(0)}% [Markov] · DFs:${state.server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults} 1st%:${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}%`
+          : `Break opp ${(breakOpp * 100).toFixed(0)}% · hold ${((1 - breakOpp) * 100).toFixed(0)}% [Markov${p1Fat > 0.3 || p2Fat > 0.3 ? " + fatigue" : ""}]`,
+        edgePct: (breakOpp - 0.18) * 40,
+      });
+    }
   }
 
   // 12) Server stabilized EXIT
-  if (breakOpp < 0.15 && gs.p1 + gs.p2 >= 2 && !state.tiebreak) {
+  if (breakOpp < 0.12 && gs.p1 + gs.p2 >= 2 && !state.tiebreak) {
     signals.push({
       level: "GAME", type: "EXIT", strength: "WEAK", side: null,
       reason: `Server stable — hold ${((1 - breakOpp) * 100).toFixed(0)}%, close game position`,
@@ -1316,19 +1389,22 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
 
           {/* Break opportunity */}
           {!activeState.tiebreak && !activeState.matchOver && (
-            <Sec title={`BREAK OPPORTUNITY${liveStats ? " (live stats)" : ""}`}>
+            <Sec title={`BREAK OPPORTUNITY${liveStats ? " (live)" : " (Markov)"}`}>
               <div className="text-center">
-                <div className={`text-[18px] font-bold ${currentBreakOpp > 0.50 ? "text-terminal-red animate-pulse" : currentBreakOpp > 0.35 ? "text-terminal-yellow" : "text-terminal-muted"}`}>{(currentBreakOpp*100).toFixed(0)}%</div>
+                <div className={`text-[18px] font-bold ${currentBreakOpp > 0.50 ? "text-terminal-red animate-pulse" : currentBreakOpp > 0.35 ? "text-terminal-yellow" : currentBreakOpp > 0.25 ? "text-terminal-blue" : "text-terminal-muted"}`}>{(currentBreakOpp*100).toFixed(0)}%</div>
                 <div className="text-[8px] text-terminal-muted">{activeState.server === 1 ? p2Short : p1Short} break chance</div>
+                <div className="text-[7px] text-terminal-muted mt-0.5">
+                  Score: {PT_LABELS[Math.min(activeState.currentGame.p1, 4)]}-{PT_LABELS[Math.min(activeState.currentGame.p2, 4)]} · Hold: {((1 - currentBreakOpp) * 100).toFixed(0)}%
+                </div>
                 {liveStats && (
                   <div className="text-[7px] text-terminal-muted mt-0.5">
-                    Srv DFs: {activeState.server === 1 ? liveStats.p1_doubleFaults : liveStats.p2_doubleFaults} · 1st%: {activeState.server === 1 ? liveStats.p1_firstServePercent : liveStats.p2_firstServePercent}%
+                    Srv DFs: {activeState.server === 1 ? liveStats.p1_doubleFaults : liveStats.p2_doubleFaults} · 1st%: {activeState.server === 1 ? liveStats.p1_firstServePercent : liveStats.p2_firstServePercent}% · 2nd%: {activeState.server === 1 ? liveStats.p1_secondServeWon : liveStats.p2_secondServeWon}%
                   </div>
                 )}
                 <div className="h-2 mt-1 bg-terminal-border rounded-full overflow-hidden">
                   <div className={`h-full transition-all duration-300 ${currentBreakOpp > 0.50 ? "bg-terminal-red" : currentBreakOpp > 0.35 ? "bg-terminal-yellow" : "bg-terminal-blue"}`} style={{ width: `${currentBreakOpp*100}%` }} />
                 </div>
-                <div className="flex justify-between text-[7px] text-terminal-muted mt-0.5"><span>Low</span><span>{liveStats ? "Stats + Momentum" : "EWMA + Fatigue + Pressure"}</span><span>High</span></div>
+                <div className="flex justify-between text-[7px] text-terminal-muted mt-0.5"><span>Hold</span><span>Markov + {liveStats ? "Stats" : "Momentum"}</span><span>Break</span></div>
               </div>
             </Sec>
           )}

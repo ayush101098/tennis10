@@ -1,0 +1,26 @@
+# ── SofaScore TLS Proxy ──────────────────────────────────────────────────────
+# Deploys sofa_proxy.py — uses tls_client with Chrome TLS fingerprint
+# to bypass SofaScore's Varnish CDN 403 blocking.
+#
+# Build:  docker build -f Dockerfile.proxy -t sofa-proxy .
+# Run:    docker run -p 3001:3001 sofa-proxy
+# Deploy: Push to Render / Railway / Cloud Run
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY proxy-requirements.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY sofa_proxy.py .
+
+# Render / Railway / Cloud Run set PORT env var automatically
+ENV PORT=3001
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/')" || exit 1
+
+CMD ["python", "sofa_proxy.py"]

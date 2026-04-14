@@ -1,0 +1,21 @@
+# Render Blueprint — one-click deploy of SofaScore TLS proxy
+# https://docs.render.com/blueprint-spec
+#
+# Usage:
+# 1. Push this repo to GitHub
+# 2. Go to https://dashboard.render.com/blueprints
+# 3. Connect this repo → Render deploys sofa-proxy automatically
+# 4. Copy the service URL (e.g. https://sofa-proxy-xxxx.onrender.com)
+# 5. Set SOFA_PROXY_URL env var on Netlify to that URL
+
+services:
+  - type: web
+    name: sofa-proxy
+    runtime: docker
+    dockerfilePath: ./Dockerfile.proxy
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "3001"
