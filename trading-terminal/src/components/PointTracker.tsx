@@ -177,7 +177,8 @@ function fatigueLabel(idx: number): { label: string; color: string } {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   Break Opportunity Predictor — uses real stats when available
+   Break Opportunity Predictor — uses real stats when available,
+   also responds to current game score context
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function breakOppProb(
@@ -194,21 +195,15 @@ function breakOppProb(
     const srvFirstPct = server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent;
     const srvFirstWon = server === 1 ? stats.p1_firstServeWon : stats.p2_firstServeWon;
     const srvSecondWon = server === 1 ? stats.p1_secondServeWon : stats.p2_secondServeWon;
-    // Real serve point win rate: first% * firstWon% + (1-first%) * secondWon%
     const firstP = (srvFirstPct || 60) / 100;
     const firstW = (srvFirstWon || 65) / 100;
     const secondW = (srvSecondWon || 45) / 100;
     const srvPtWinRate = firstP * firstW + (1 - firstP) * secondW;
-    // Break probability from real serve point win rate
     const realHoldProb = gameWinProb(srvPtWinRate, 0, 0, false);
     const baseBreakProb = 1 - realHoldProb;
-
-    // Adjust with break points converted history
     const bpc = server === 1 ? stats.p2_breakPointsConverted : stats.p1_breakPointsConverted;
     const [bpWon, bpTotal] = (bpc || "0/0").split("/").map(Number);
     const bpConvRate = bpTotal > 0 ? bpWon / bpTotal : 0.3;
-
-    // Blend model + real data
     const returnerMom = ewmaMomentum(ewma, returner);
     const serverFat = fatigueIndex(fatigue, server);
     return Math.max(0, Math.min(0.85,
@@ -216,27 +211,36 @@ function breakOppProb(
     ));
   }
 
-  // Fallback: model-only
+  // Model-only: use Elo-derived serve point win probability
   const serverPct = server === 1 ? pServe1 : pServe2;
   const baseBreakProb = 1 - holdProb(serverPct);
   const returnerMom = ewmaMomentum(ewma, returner);
   const momentumAdj = returnerMom * 0.3;
   const serverFat = fatigueIndex(fatigue, server);
   const fatigueAdj = serverFat * 0.15;
+  // Returner leading in the set → pressure on server
   const gameDiff = server === 1
     ? state.currentSet.p2 - state.currentSet.p1
     : state.currentSet.p1 - state.currentSet.p2;
   const pressureAdj = gameDiff > 0 ? gameDiff * 0.03 : 0;
+  // Current game score context: returner leading in game → higher break chance
   const gs = state.currentGame;
   const depth = gs.p1 + gs.p2;
   const depthAdj = depth >= 6 ? 0.05 : depth >= 4 ? 0.02 : 0;
+  // Score-state boost: if returner leads in game points, actual break is imminent
+  const retPts = server === 1 ? gs.p2 : gs.p1;
+  const srvPts = server === 1 ? gs.p1 : gs.p2;
+  let scoreAdj = 0;
+  if (retPts >= 3 && retPts > srvPts) scoreAdj = 0.15; // break point! (30-40, 40-AD)
+  else if (retPts >= 2 && retPts > srvPts) scoreAdj = 0.06; // 15-30, 0-30
+  else if (retPts >= 3 && retPts === srvPts) scoreAdj = 0.03; // deuce
 
-  return Math.max(0, Math.min(0.85, baseBreakProb + momentumAdj + fatigueAdj + pressureAdj + depthAdj));
+  return Math.max(0, Math.min(0.85, baseBreakProb + momentumAdj + fatigueAdj + pressureAdj + depthAdj + scoreAdj));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    Position Signals — GAME / SET / MATCH entry & exit
-   Uses real stats for quantitative edge when available
+   Works from score state alone (auto mode) + stats bonus + manual history
    ═══════════════════════════════════════════════════════════════════════════ */
 
 type SignalType = "ENTRY" | "EXIT" | "HOLD" | "HEDGE" | "NO_POSITION";
@@ -270,113 +274,135 @@ function computePositionSignals(
   const recentProbs = history.slice(-10).map(h => h.p1WinProb);
   const probVol = recentProbs.length > 2 ? stdDev(recentProbs) : 0;
 
-  // ── MATCH LEVEL ──
   const matchEdge = Math.abs(probShift);
+  const cs = state.currentSet;
+  const gs = state.currentGame;
+  const p1SetsWon = state.sets.filter(s => s.p1 > s.p2).length;
+  const p2SetsWon = state.sets.filter(s => s.p2 > s.p1).length;
+  const totalGames = state.sets.reduce((a, s) => a + s.p1 + s.p2, 0) + cs.p1 + cs.p2;
 
-  // Stats-based signals (available in auto mode from SofaScore)
-  if (stats) {
-    const totalPts = (stats.p1_totalPointsWon + stats.p2_totalPointsWon) || 1;
-    const p1PtShare = stats.p1_totalPointsWon / totalPts;
+  // ═══ MATCH LEVEL — always active from Markov probability ═══
 
-    // Serve dominance signal — if one player's 1st serve % is much higher
-    const srvGap = (stats.p1_firstServePercent || 60) - (stats.p2_firstServePercent || 60);
-    if (Math.abs(srvGap) > 15) {
-      const dominant = srvGap > 0 ? 1 : 2;
-      signals.push({
-        level: "MATCH", type: "ENTRY",
-        strength: Math.abs(srvGap) > 25 ? "STRONG" : "MODERATE",
-        side: dominant,
-        reason: `Serve dominance: ${dominant === 1 ? "P1" : "P2"} 1st serve ${dominant === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}% vs ${dominant === 1 ? stats.p2_firstServePercent : stats.p1_firstServePercent}%`,
-        edgePct: Math.abs(srvGap) * 0.3,
-        stopLoss: dominant === 1 ? Math.max(0.25, currentP1Prob - 0.15) : Math.min(0.75, currentP1Prob + 0.15),
-        target: dominant === 1 ? Math.min(0.95, currentP1Prob + 0.10) : Math.max(0.05, currentP1Prob - 0.10),
-      });
-    }
-
-    // Double fault crisis — if one player has 4+ DFs
-    if (stats.p1_doubleFaults >= 4 || stats.p2_doubleFaults >= 4) {
-      const dfCrisis = stats.p1_doubleFaults >= stats.p2_doubleFaults ? 1 : 2;
-      const opponent = dfCrisis === 1 ? 2 : 1;
-      const dfCount = dfCrisis === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults;
-      signals.push({
-        level: "MATCH", type: "ENTRY",
-        strength: dfCount >= 6 ? "STRONG" : "MODERATE",
-        side: opponent,
-        reason: `DF crisis: ${dfCrisis === 1 ? "P1" : "P2"} has ${dfCount} DFs — server under pressure`,
-        edgePct: dfCount * 1.5,
-      });
-    }
-
-    // Total points won imbalance — quantitative momentum
-    if (totalPts > 30 && Math.abs(p1PtShare - 0.5) > 0.08) {
-      const dominant = p1PtShare > 0.5 ? 1 : 2;
-      const ptsWon = dominant === 1 ? stats.p1_totalPointsWon : stats.p2_totalPointsWon;
-      const ptsLost = dominant === 1 ? stats.p2_totalPointsWon : stats.p1_totalPointsWon;
-      if (matchEdge > 0.06) {
-        signals.push({
-          level: "MATCH", type: "ENTRY",
-          strength: Math.abs(p1PtShare - 0.5) > 0.12 ? "STRONG" : "MODERATE",
-          side: dominant,
-          reason: `Points won: ${ptsWon}-${ptsLost} (${Math.round((dominant === 1 ? p1PtShare : 1 - p1PtShare) * 100)}%), P shifted ${(probShift * 100).toFixed(0)}% from pre`,
-          edgePct: Math.abs(p1PtShare - 0.5) * 100,
-          stopLoss: dominant === 1 ? Math.max(0.25, currentP1Prob - 0.15) : Math.min(0.75, currentP1Prob + 0.15),
-          target: dominant === 1 ? Math.min(0.95, currentP1Prob + 0.10) : Math.max(0.05, currentP1Prob - 0.10),
-        });
-      }
-    }
-
-    // Break points converted — quantitative edge
-    const [bp1Won, bp1Tot] = (stats.p1_breakPointsConverted || "0/0").split("/").map(Number);
-    const [bp2Won, bp2Tot] = (stats.p2_breakPointsConverted || "0/0").split("/").map(Number);
-    if (bp1Won > bp2Won + 1 || bp2Won > bp1Won + 1) {
-      const breaker = bp1Won > bp2Won ? 1 : 2;
-      const bpStr = breaker === 1 ? `${bp1Won}/${bp1Tot}` : `${bp2Won}/${bp2Tot}`;
-      signals.push({
-        level: "SET", type: "ENTRY",
-        strength: (breaker === 1 ? bp1Won : bp2Won) >= 3 ? "STRONG" : "MODERATE",
-        side: breaker,
-        reason: `Break pts converted: ${breaker === 1 ? "P1" : "P2"} ${bpStr} — return game dominant`,
-        edgePct: (breaker === 1 ? bp1Won - bp2Won : bp2Won - bp1Won) * 4,
-      });
-    }
-  }
-
-  // Probability shift signals (work in both modes)
-  if (matchEdge > 0.08 && (history.length >= 10 || stats)) {
+  // 1) Probability shift — fires from score state alone (no history/stats gate)
+  if (matchEdge > 0.05) {
     const fav = currentP1Prob > preMatchP1Prob ? 1 : 2;
-    const mom = fav === 1 ? p1Mom : p2Mom;
-    if (mom > 0.03 || stats) {
-      signals.push({
-        level: "MATCH", type: "ENTRY",
-        strength: matchEdge > 0.15 ? "STRONG" : "MODERATE",
-        side: fav,
-        reason: `P shifted ${(probShift * 100).toFixed(0)}% from pre-match${stats ? `, pts: ${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon}` : `, mom ${mom > 0 ? "+" : ""}${(mom * 100).toFixed(0)}%`}`,
-        edgePct: matchEdge * 100,
-        stopLoss: fav === 1 ? Math.max(0.25, currentP1Prob - 0.15) : Math.min(0.75, currentP1Prob + 0.15),
-        target: fav === 1 ? Math.min(0.95, currentP1Prob + 0.10) : Math.max(0.05, currentP1Prob - 0.10),
-      });
-    }
+    const scoreCtx = `${state.sets.map(s => `${s.p1}-${s.p2}`).join(" ")} ${cs.p1}-${cs.p2}`.trim();
+    signals.push({
+      level: "MATCH", type: "ENTRY",
+      strength: matchEdge > 0.15 ? "STRONG" : matchEdge > 0.08 ? "MODERATE" : "WEAK",
+      side: fav,
+      reason: `Markov P shifted ${probShift > 0 ? "+" : ""}${(probShift * 100).toFixed(0)}% from pre-match [${scoreCtx}]${stats ? ` · pts ${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon}` : ""}`,
+      edgePct: matchEdge * 100,
+      stopLoss: fav === 1 ? Math.max(0.20, currentP1Prob - 0.15) : Math.min(0.80, currentP1Prob + 0.15),
+      target: fav === 1 ? Math.min(0.95, currentP1Prob + 0.10) : Math.max(0.05, currentP1Prob - 0.10),
+    });
   }
 
-  // Momentum reversal EXIT (works in both modes)
-  if (matchEdge > 0.05 && (history.length >= 8 || stats)) {
+  // 2) Set lead signal — one player leads in sets
+  if (p1SetsWon !== p2SetsWon && state.sets.length > 0) {
+    const leader = p1SetsWon > p2SetsWon ? 1 : 2;
+    const setDiff = Math.abs(p1SetsWon - p2SetsWon);
+    signals.push({
+      level: "MATCH", type: "ENTRY",
+      strength: setDiff >= 2 || (setDiff === 1 && (leader === 1 ? currentP1Prob : 1 - currentP1Prob) > 0.65) ? "STRONG" : "MODERATE",
+      side: leader,
+      reason: `Set lead ${p1SetsWon}-${p2SetsWon} · ${leader === 1 ? "P1" : "P2"} Markov ${Math.round((leader === 1 ? currentP1Prob : 1 - currentP1Prob) * 100)}%`,
+      edgePct: setDiff * 8 + (matchEdge * 50),
+    });
+  }
+
+  // 3) Match point detection
+  if (p1SetsWon === state.setsToWin - 1 && cs.p1 >= 5 && cs.p1 > cs.p2) {
+    signals.push({ level: "MATCH", type: "ENTRY", strength: "STRONG", side: 1,
+      reason: `P1 serving for match · ${cs.p1}-${cs.p2} in set ${state.sets.length + 1}`, edgePct: 15 });
+  }
+  if (p2SetsWon === state.setsToWin - 1 && cs.p2 >= 5 && cs.p2 > cs.p1) {
+    signals.push({ level: "MATCH", type: "ENTRY", strength: "STRONG", side: 2,
+      reason: `P2 serving for match · ${cs.p1}-${cs.p2} in set ${state.sets.length + 1}`, edgePct: 15 });
+  }
+
+  // 4) Dominant probability — one player is heavy favourite from score
+  if (currentP1Prob > 0.80) {
+    signals.push({ level: "MATCH", type: "ENTRY", strength: "STRONG", side: 1,
+      reason: `P1 dominant at ${Math.round(currentP1Prob * 100)}% — look for value on P2 if odds are long`, edgePct: (currentP1Prob - 0.5) * 60 });
+  } else if (currentP1Prob < 0.20) {
+    signals.push({ level: "MATCH", type: "ENTRY", strength: "STRONG", side: 2,
+      reason: `P2 dominant at ${Math.round((1 - currentP1Prob) * 100)}% — look for value on P1 if odds are long`, edgePct: (0.5 - currentP1Prob) * 60 });
+  }
+
+  // 5) Momentum reversal EXIT — score moving one way but underdog is closing
+  if (matchEdge > 0.05) {
     const wasFav = probShift > 0 ? 1 : 2;
     const momCheck = wasFav === 1 ? p1Mom : p2Mom;
+    // In auto mode without stats, detect reversal from score: fav losing current set
+    const favGames = wasFav === 1 ? cs.p1 : cs.p2;
+    const oppGames = wasFav === 1 ? cs.p2 : cs.p1;
+    const scorePressure = oppGames > favGames + 1;
     const reversed = stats
       ? (wasFav === 1 ? stats.p1_totalPointsWon < stats.p2_totalPointsWon : stats.p2_totalPointsWon < stats.p1_totalPointsWon)
-      : momCheck < -0.08;
+      : (momCheck < -0.05 || scorePressure);
     if (reversed) {
       signals.push({
-        level: "MATCH", type: "EXIT", strength: "STRONG", side: wasFav,
+        level: "MATCH", type: "EXIT", strength: scorePressure ? "STRONG" : "MODERATE", side: wasFav,
         reason: stats
-          ? `${wasFav === 1 ? "P1" : "P2"} losing grip — trailing in total pts despite price advantage`
-          : `Momentum reversed: ${wasFav === 1 ? "P1" : "P2"} EWMA -${(Math.abs(momCheck) * 100).toFixed(0)}%`,
+          ? `${wasFav === 1 ? "P1" : "P2"} trailing in total pts (${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon}) despite Markov advantage`
+          : `${wasFav === 1 ? "P1" : "P2"} losing current set ${cs.p1}-${cs.p2} despite match advantage`,
         edgePct: -matchEdge * 50,
       });
     }
   }
 
-  // ── SET LEVEL ── (manual mode signals from point history)
+  // ═══ SET LEVEL — from score patterns ═══
+
+  // 6) Game lead in current set → service break detected
+  const gameLead = cs.p1 - cs.p2;
+  if (Math.abs(gameLead) >= 2 && totalGames > 2) {
+    const leader = gameLead > 0 ? 1 : 2;
+    const isBreakUp = Math.abs(gameLead) % 2 === 1; // odd game diff implies a break
+    if (isBreakUp) {
+      signals.push({
+        level: "SET", type: "ENTRY", strength: Math.abs(gameLead) >= 3 ? "STRONG" : "MODERATE",
+        side: leader,
+        reason: `${leader === 1 ? "P1" : "P2"} leads ${cs.p1}-${cs.p2} (break advantage) · back for set`,
+        edgePct: Math.abs(gameLead) * 5,
+        stopLoss: leader === 1 ? Math.max(0.30, currentP1Prob - 0.12) : Math.min(0.70, currentP1Prob + 0.12),
+      });
+    }
+  }
+
+  // 7) Close to winning set — 5-3, 5-4, 6-5 (server advantage)
+  if ((cs.p1 >= 5 && cs.p1 > cs.p2 && cs.p2 < 6) || (cs.p2 >= 5 && cs.p2 > cs.p1 && cs.p1 < 6)) {
+    const setLeader = cs.p1 > cs.p2 ? 1 : 2;
+    const isServing = state.server === setLeader;
+    signals.push({
+      level: "SET", type: isServing ? "ENTRY" : "HOLD",
+      strength: isServing ? "STRONG" : "MODERATE",
+      side: setLeader,
+      reason: `${setLeader === 1 ? "P1" : "P2"} ${isServing ? "serving for set" : "close to set"} at ${cs.p1}-${cs.p2}`,
+      edgePct: isServing ? 10 : 5,
+    });
+  }
+
+  // 8) Tiebreak — high volatility moment
+  if (state.tiebreak) {
+    const tbLead = gs.p1 - gs.p2;
+    if (Math.abs(tbLead) >= 3) {
+      const leader = tbLead > 0 ? 1 : 2;
+      signals.push({ level: "SET", type: "ENTRY", strength: "STRONG", side: leader,
+        reason: `TB ${gs.p1}-${gs.p2} · ${leader === 1 ? "P1" : "P2"} has mini-break advantage`, edgePct: Math.abs(tbLead) * 4 });
+    } else {
+      signals.push({ level: "SET", type: "HEDGE", strength: "MODERATE", side: null,
+        reason: `Tiebreak ${gs.p1}-${gs.p2} — high variance, consider hedge`, edgePct: 0 });
+    }
+  }
+
+  // 9) Even set — no edge, hold
+  if (cs.p1 === cs.p2 && cs.p1 >= 3 && !state.tiebreak) {
+    signals.push({ level: "SET", type: "HOLD", strength: "WEAK", side: null,
+      reason: `Set level at ${cs.p1}-${cs.p2} — wait for break opportunity`, edgePct: 0 });
+  }
+
+  // ═══ SET LEVEL — from point history (manual mode) ═══
   if (history.length > 0) {
     const lastPt = history[history.length - 1];
     if (lastPt.isBreak) {
@@ -400,45 +426,144 @@ function computePositionSignals(
     }
   }
 
-  // ── GAME LEVEL ──
-  if (breakOpp > 0.35 && !state.tiebreak) {
+  // ═══ GAME LEVEL — from break opportunity + score context ═══
+
+  // 10) Break point from game score (always works — uses point score)
+  if (!state.tiebreak) {
+    const retPts = state.server === 1 ? gs.p2 : gs.p1;
+    const srvPts = state.server === 1 ? gs.p1 : gs.p2;
+    const returner = state.server === 1 ? 2 : 1;
+    if (retPts >= 3 && retPts > srvPts) {
+      // Actual break point!
+      signals.push({
+        level: "GAME", type: "ENTRY", strength: "STRONG", side: returner,
+        reason: `🔴 BREAK POINT! ${returner === 1 ? "P1" : "P2"} at ${PT_LABELS[Math.min(gs.p1,4)]}-${PT_LABELS[Math.min(gs.p2,4)]}${stats ? ` · srv 1st%: ${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}%` : ""}`,
+        edgePct: 15,
+      });
+    } else if (retPts >= 2 && srvPts <= 1 && retPts > srvPts) {
+      // Building toward break (0-30, 15-30, 0-15 with momentum)
+      signals.push({
+        level: "GAME", type: "ENTRY", strength: "MODERATE", side: returner,
+        reason: `Pressure: ${PT_LABELS[Math.min(gs.p1,4)]}-${PT_LABELS[Math.min(gs.p2,4)]} · server under stress`,
+        edgePct: 6,
+      });
+    }
+  }
+
+  // 11) Break opportunity from model (lowered threshold to 0.28 from 0.35)
+  if (breakOpp > 0.28 && !state.tiebreak) {
     const returner = state.server === 1 ? 2 : 1;
     signals.push({
       level: "GAME", type: "ENTRY",
-      strength: breakOpp > 0.50 ? "STRONG" : "MODERATE",
+      strength: breakOpp > 0.45 ? "STRONG" : breakOpp > 0.35 ? "MODERATE" : "WEAK",
       side: returner,
       reason: stats
-        ? `Break opp ${(breakOpp * 100).toFixed(0)}% — srv DFs:${state.server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults}, 1st%:${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}%`
-        : `Break opp ${(breakOpp * 100).toFixed(0)}% — server ${state.server === 1 ? (p1Fat > 0.4 ? "fatigued" : "stable") : (p2Fat > 0.4 ? "fatigued" : "stable")}`,
-      edgePct: (breakOpp - 0.25) * 40,
+        ? `Break opp ${(breakOpp * 100).toFixed(0)}% · DFs:${state.server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults} 1st%:${state.server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent}%`
+        : `Break opp ${(breakOpp * 100).toFixed(0)}% · hold ${((1 - breakOpp) * 100).toFixed(0)}% [Elo model${p1Fat > 0.3 || p2Fat > 0.3 ? " + fatigue" : ""}]`,
+      edgePct: (breakOpp - 0.20) * 40,
     });
   }
-  if (breakOpp < 0.15 && state.currentGame.p1 + state.currentGame.p2 >= 2) {
+
+  // 12) Server stabilized EXIT
+  if (breakOpp < 0.15 && gs.p1 + gs.p2 >= 2 && !state.tiebreak) {
     signals.push({
       level: "GAME", type: "EXIT", strength: "WEAK", side: null,
-      reason: `Server stabilized — hold prob ${((1 - breakOpp) * 100).toFixed(0)}%, close game pos`,
+      reason: `Server stable — hold ${((1 - breakOpp) * 100).toFixed(0)}%, close game position`,
       edgePct: -1,
     });
   }
 
-  // ── HEDGE ──
-  if (probVol > 0.06 && history.length >= 15) {
-    signals.push({
-      level: "MATCH", type: "HEDGE", strength: "MODERATE", side: null,
-      reason: `High volatility (σ=${(probVol * 100).toFixed(1)}%) — consider delta neutral hedge`,
-      edgePct: 0,
-    });
-  }
-  // Stats-based hedge signal — close total points
+  // ═══ STATS-BASED SIGNALS (bonus when SofaScore is available) ═══
   if (stats) {
-    const tot = stats.p1_totalPointsWon + stats.p2_totalPointsWon;
-    if (tot > 40 && Math.abs(stats.p1_totalPointsWon - stats.p2_totalPointsWon) <= 3) {
+    const totalPts = (stats.p1_totalPointsWon + stats.p2_totalPointsWon) || 1;
+    const p1PtShare = stats.p1_totalPointsWon / totalPts;
+
+    // Serve dominance
+    const srvGap = (stats.p1_firstServePercent || 60) - (stats.p2_firstServePercent || 60);
+    if (Math.abs(srvGap) > 15) {
+      const dominant = srvGap > 0 ? 1 : 2;
+      signals.push({
+        level: "MATCH", type: "ENTRY",
+        strength: Math.abs(srvGap) > 25 ? "STRONG" : "MODERATE",
+        side: dominant,
+        reason: `Serve dom: 1st% ${stats.p1_firstServePercent}% vs ${stats.p2_firstServePercent}%`,
+        edgePct: Math.abs(srvGap) * 0.3,
+      });
+    }
+
+    // DF crisis
+    if (stats.p1_doubleFaults >= 4 || stats.p2_doubleFaults >= 4) {
+      const dfCrisis = stats.p1_doubleFaults >= stats.p2_doubleFaults ? 1 : 2;
+      const dfCount = dfCrisis === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults;
+      signals.push({
+        level: "MATCH", type: "ENTRY", strength: dfCount >= 6 ? "STRONG" : "MODERATE",
+        side: dfCrisis === 1 ? 2 : 1,
+        reason: `DF crisis: ${dfCrisis === 1 ? "P1" : "P2"} has ${dfCount} DFs`, edgePct: dfCount * 1.5,
+      });
+    }
+
+    // Points imbalance
+    if (totalPts > 30 && Math.abs(p1PtShare - 0.5) > 0.06) {
+      const dominant = p1PtShare > 0.5 ? 1 : 2;
+      signals.push({
+        level: "MATCH", type: "ENTRY",
+        strength: Math.abs(p1PtShare - 0.5) > 0.12 ? "STRONG" : "MODERATE",
+        side: dominant,
+        reason: `Points: ${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon} (${Math.round(p1PtShare * 100)}%-${Math.round((1 - p1PtShare) * 100)}%)`,
+        edgePct: Math.abs(p1PtShare - 0.5) * 100,
+      });
+    }
+
+    // Break points converted
+    const [bp1W] = (stats.p1_breakPointsConverted || "0/0").split("/").map(Number);
+    const [bp2W] = (stats.p2_breakPointsConverted || "0/0").split("/").map(Number);
+    if (Math.abs(bp1W - bp2W) >= 1) {
+      const breaker = bp1W > bp2W ? 1 : 2;
+      signals.push({
+        level: "SET", type: "ENTRY", strength: (breaker === 1 ? bp1W : bp2W) >= 3 ? "STRONG" : "MODERATE",
+        side: breaker,
+        reason: `BPs: P1 ${stats.p1_breakPointsConverted} · P2 ${stats.p2_breakPointsConverted}`,
+        edgePct: Math.abs(bp1W - bp2W) * 4,
+      });
+    }
+
+    // Tight match hedge
+    if (totalPts > 40 && Math.abs(stats.p1_totalPointsWon - stats.p2_totalPointsWon) <= 3) {
       signals.push({
         level: "MATCH", type: "HEDGE", strength: "MODERATE", side: null,
-        reason: `Tight match: pts ${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon} — high variance, hedge recommended`,
+        reason: `Tight: pts ${stats.p1_totalPointsWon}-${stats.p2_totalPointsWon} — high variance, hedge`,
         edgePct: 0,
       });
     }
+  }
+
+  // ═══ HEDGE — from score proximity ═══
+  if (probVol > 0.06 && history.length >= 15) {
+    signals.push({
+      level: "MATCH", type: "HEDGE", strength: "MODERATE", side: null,
+      reason: `High volatility σ=${(probVol * 100).toFixed(1)}% — consider hedge`,
+      edgePct: 0,
+    });
+  }
+  // Score-based hedge: match is close overall
+  if (Math.abs(currentP1Prob - 0.5) < 0.08 && totalGames >= 8) {
+    signals.push({
+      level: "MATCH", type: "HEDGE", strength: "MODERATE", side: null,
+      reason: `Match on knife-edge (${Math.round(currentP1Prob * 100)}%-${Math.round((1 - currentP1Prob) * 100)}%) — hedge recommended`,
+      edgePct: 0,
+    });
+  }
+
+  // ═══ ALWAYS: Current position assessment ═══
+  if (signals.filter(s => s.type === "ENTRY").length === 0 && !state.tiebreak) {
+    // No entry signals — show hold status
+    const fav = currentP1Prob >= 0.5 ? 1 : 2;
+    const favProb = Math.max(currentP1Prob, 1 - currentP1Prob);
+    signals.push({
+      level: "MATCH", type: "HOLD", strength: "WEAK", side: fav,
+      reason: `No clear edge — ${fav === 1 ? "P1" : "P2"} at ${Math.round(favProb * 100)}%. Wait for break/score shift.`,
+      edgePct: 0,
+    });
   }
 
   return signals;
@@ -1279,7 +1404,7 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
           <Sec title="POSITION SIGNALS">
             {signals.length === 0
               ? <div className="text-center text-terminal-muted text-[10px] py-3">
-                  {mode === "auto" ? (liveStats ? "No actionable signals from live data" : "Waiting for SofaScore data…") : (history.length < 5 ? "Log more points to generate signals…" : "No actionable signals")}
+                  {mode === "auto" ? "Syncing live score…" : (history.length < 2 ? "Log points to generate signals…" : "No actionable signals")}
                 </div>
               : <div className="space-y-1.5">{signals.map((s,i) => <SigCard key={i} sig={s} p1={match.player1} p2={match.player2} />)}</div>
             }
@@ -1287,23 +1412,26 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
 
           <Sec title="SIGNAL RULES">
             <div className="space-y-1 text-[9px]">
-              <RuleRow icon="📈" lv="MATCH" rule="ENTRY when P shifts >8% + momentum confirms" />
-              <RuleRow icon="📉" lv="MATCH" rule="EXIT when points won trail despite price advantage" />
-              <RuleRow icon="🎯" lv="SET" rule="ENTRY on break pts converted advantage" />
+              <RuleRow icon="📈" lv="MATCH" rule="ENTRY when Markov P shifts >5% from pre-match" />
+              <RuleRow icon="📉" lv="MATCH" rule="EXIT when trailing in set despite match advantage" />
+              <RuleRow icon="🏆" lv="MATCH" rule="ENTRY on set lead or serving for match" />
+              <RuleRow icon="🔴" lv="GAME" rule="ENTRY on break point from live game score" />
+              <RuleRow icon="🎯" lv="GAME" rule={`ENTRY when break opp >28%${liveStats ? " (from real serve %)" : " (Elo model)"}`} />
+              <RuleRow icon="🟢" lv="GAME" rule="EXIT when server stable — hold >85%" />
               <RuleRow icon="↔️" lv="SET" rule="EXIT on break-back — reduce exposure" />
-              <RuleRow icon="🔴" lv="GAME" rule={`ENTRY when break opp >35%${liveStats ? " (from real serve %)" : ""}`} />
-              <RuleRow icon="🟢" lv="GAME" rule="EXIT when server stabilizes, hold >85%" />
-              <RuleRow icon="💪" lv="MATCH" rule="ENTRY on serve dominance (1st serve % gap >15%)" />
-              <RuleRow icon="⚠️" lv="MATCH" rule="ENTRY vs DF crisis (4+ double faults)" />
-              <RuleRow icon="🛡" lv="MATCH" rule="HEDGE when tight match (pts within 3)" />
+              <RuleRow icon="🔷" lv="SET" rule="ENTRY on game lead + break advantage" />
+              <RuleRow icon="💪" lv="MATCH" rule={`ENTRY on serve dominance${liveStats ? " (1st% gap >15%)" : ""}`} />
+              <RuleRow icon="🛡" lv="MATCH" rule="HEDGE on tiebreak, knife-edge, or tight pts" />
+              <RuleRow icon="⏸" lv="MATCH" rule="HOLD when no clear edge — wait" />
             </div>
           </Sec>
 
           <Sec title="POSITION SUMMARY">
-            <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+            <div className="grid grid-cols-4 gap-1.5 text-center text-[10px]">
               <div className="border border-terminal-green/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-green">{entrySigs.length}</div><div className="text-[8px] text-terminal-muted">ENTRY</div></div>
               <div className="border border-terminal-red/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-red">{exitSigs.length}</div><div className="text-[8px] text-terminal-muted">EXIT</div></div>
               <div className="border border-terminal-yellow/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-yellow">{hedgeSigs.length}</div><div className="text-[8px] text-terminal-muted">HEDGE</div></div>
+              <div className="border border-terminal-blue/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-blue">{signals.filter(s => s.type === "HOLD").length}</div><div className="text-[8px] text-terminal-muted">HOLD</div></div>
             </div>
           </Sec>
 
@@ -1433,8 +1561,8 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function SigCard({ sig, p1, p2 }: { sig: PositionSignal; p1: string; p2: string }) {
-  const bg = sig.type === "ENTRY" ? "bg-terminal-green/10 border-terminal-green/30" : sig.type === "EXIT" ? "bg-terminal-red/10 border-terminal-red/30" : sig.type === "HEDGE" ? "bg-terminal-yellow/10 border-terminal-yellow/30" : "bg-terminal-panel/30 border-terminal-border";
-  const tc = sig.type === "ENTRY" ? "text-terminal-green" : sig.type === "EXIT" ? "text-terminal-red" : sig.type === "HEDGE" ? "text-terminal-yellow" : "text-terminal-muted";
+  const bg = sig.type === "ENTRY" ? "bg-terminal-green/10 border-terminal-green/30" : sig.type === "EXIT" ? "bg-terminal-red/10 border-terminal-red/30" : sig.type === "HEDGE" ? "bg-terminal-yellow/10 border-terminal-yellow/30" : "bg-terminal-blue/10 border-terminal-blue/30";
+  const tc = sig.type === "ENTRY" ? "text-terminal-green" : sig.type === "EXIT" ? "text-terminal-red" : sig.type === "HEDGE" ? "text-terminal-yellow" : "text-terminal-blue";
   const lc = sig.level === "MATCH" ? "bg-terminal-blue/20 text-terminal-blue" : sig.level === "SET" ? "bg-terminal-cyan/20 text-terminal-cyan" : "bg-terminal-yellow/20 text-terminal-yellow";
   const icon = sig.strength === "STRONG" ? "🔥" : sig.strength === "MODERATE" ? "⚡" : "—";
   return (
