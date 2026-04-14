@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { ScheduledMatch } from "@/lib/scheduleService";
-import { probToOdds, kellyFraction } from "@/lib/scheduleService";
+import { probToOdds, kellyFraction, fetchLiveScore } from "@/lib/scheduleService";
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    Tennis scoring engine + Markov match-win probability
@@ -462,6 +462,165 @@ function stdDev(arr: number[]): number {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
+   Game Log — Markov probability at each game transition
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+interface GameLogEntry {
+  id: number;
+  setNum: number;
+  p1Games: number;
+  p2Games: number;
+  server: 1 | 2;
+  p1WinProb: number;
+  label: string;        // e.g. "Set 1: 3-2"
+  isBreak: boolean;     // game was a break of serve
+  isTiebreak: boolean;
+}
+
+/** Build a MatchState from ESPN live score data (game-level only, no point data) */
+function buildStateFromLiveScore(
+  liveScore: NonNullable<ScheduledMatch["liveScore"]>,
+  bestOf: number,
+): MatchState {
+  const setsToWin = bestOf === 5 ? 3 : 2;
+  const sets: { p1: number; p2: number }[] = liveScore.completedSets.map(s => ({ ...s }));
+  const currentSet = { ...liveScore.currentSetGames };
+  const tiebreak = currentSet.p1 === 6 && currentSet.p2 === 6;
+
+  // Determine server — ESPN gives us this directly
+  const server = liveScore.server;
+
+  // Check if match is over
+  const p1SetsWon = sets.filter(s => s.p1 > s.p2).length;
+  const p2SetsWon = sets.filter(s => s.p2 > s.p1).length;
+  const matchOver = p1SetsWon >= setsToWin || p2SetsWon >= setsToWin;
+  const winner = matchOver ? (p1SetsWon >= setsToWin ? 1 : 2) : undefined;
+
+  return {
+    sets,
+    currentSet,
+    currentGame: { p1: 0, p2: 0 }, // ESPN doesn't provide point-level score
+    server,
+    tiebreak,
+    matchOver,
+    winner,
+    setsToWin,
+  };
+}
+
+/** Build game log with Markov probabilities from a MatchState's history */
+function buildGameLog(
+  liveScore: NonNullable<ScheduledMatch["liveScore"]>,
+  pS1: number, pS2: number, bestOf: number,
+): GameLogEntry[] {
+  const entries: GameLogEntry[] = [];
+  const setsToWin = bestOf === 5 ? 3 : 2;
+  let id = 0;
+
+  // Helper: compute Markov probability at a given score state
+  const probAt = (
+    completedSets: { p1: number; p2: number }[],
+    curSet: { p1: number; p2: number },
+    server: 1 | 2,
+  ): number => {
+    const tmpState: MatchState = {
+      sets: completedSets,
+      currentSet: curSet,
+      currentGame: { p1: 0, p2: 0 },
+      server,
+      tiebreak: curSet.p1 === 6 && curSet.p2 === 6,
+      matchOver: false,
+      setsToWin,
+    };
+    return matchWinProb(pS1, pS2, tmpState);
+  };
+
+  // Walk through completed sets game by game
+  let prevServer: 1 | 2 = liveScore.server; // approximate start server
+  // We can't know the exact starting server, so we infer from total games played
+  // Total games in completed sets
+  let totalGamesPlayed = 0;
+  for (const s of liveScore.completedSets) totalGamesPlayed += s.p1 + s.p2;
+  totalGamesPlayed += liveScore.currentSetGames.p1 + liveScore.currentSetGames.p2;
+  // Current server has served (totalGamesPlayed % 2 === 0) times since start
+  // If totalGamesPlayed is even, server started. If odd, other player started.
+  const startServer: 1 | 2 = (totalGamesPlayed % 2 === 0) ? liveScore.server : (liveScore.server === 1 ? 2 : 1);
+
+  // Walk each completed set
+  const allSets = [...liveScore.completedSets, liveScore.currentSetGames];
+  const completedBefore: { p1: number; p2: number }[] = [];
+  let runningServer = startServer;
+
+  for (let si = 0; si < allSets.length; si++) {
+    const setData = allSets[si];
+    const isCurrentSet = si === allSets.length - 1 && si >= liveScore.completedSets.length;
+    const maxGames = setData.p1 + setData.p2;
+
+    // Simulate game-by-game progression through this set
+    let g1 = 0, g2 = 0;
+    // We don't know which player won each game, but we know the final score
+    // For the game log, reconstruct with assumption: alternate holds/breaks
+    // But actually we just show the probability at each game score point
+
+    // Add entry at start of set
+    entries.push({
+      id: id++,
+      setNum: si + 1,
+      p1Games: 0,
+      p2Games: 0,
+      server: runningServer,
+      p1WinProb: probAt(completedBefore, { p1: 0, p2: 0 }, runningServer),
+      label: `Set ${si + 1}: 0-0`,
+      isBreak: false,
+      isTiebreak: false,
+    });
+
+    // We can generate intermediate game score entries for each possible game count
+    for (let g = 1; g <= maxGames; g++) {
+      // We don't know the exact order, so generate entries for each game boundary
+      // Use a simple heuristic: distribute games proportionally
+      const frac = g / maxGames;
+      g1 = Math.round(frac * setData.p1);
+      g2 = Math.round(frac * setData.p2);
+      // Clamp
+      g1 = Math.min(g1, setData.p1);
+      g2 = Math.min(g2, setData.p2);
+      if (g1 + g2 !== g) {
+        // Adjust: prefer the leader
+        if (g1 + g2 < g) {
+          if (setData.p1 >= setData.p2 && g1 < setData.p1) g1++;
+          else if (g2 < setData.p2) g2++;
+          else g1++;
+        }
+      }
+
+      const curServer: 1 | 2 = (entries.length % 2 === 0) ? startServer : (startServer === 1 ? 2 : 1);
+      const isTB = g1 === 6 && g2 === 6;
+
+      entries.push({
+        id: id++,
+        setNum: si + 1,
+        p1Games: g1,
+        p2Games: g2,
+        server: curServer,
+        p1WinProb: probAt(completedBefore, { p1: g1, p2: g2 }, curServer),
+        label: isTB ? `Set ${si + 1}: TB` : `Set ${si + 1}: ${g1}-${g2}`,
+        isBreak: false, // Can't determine without game-by-game data
+        isTiebreak: isTB,
+      });
+    }
+
+    if (!isCurrentSet) {
+      completedBefore.push({ ...setData });
+      // After a set, server alternates based on total games in the set
+      if (maxGames % 2 === 1) runningServer = runningServer === 1 ? 2 : 1;
+    }
+  }
+
+  return entries;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
    COMPONENT
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -474,12 +633,64 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
   const [hedgeStake, setHedgeStake] = useState(100);
   const [hedgeOdds, setHedgeOdds] = useState(2.0);
   const [subTab, setSubTab] = useState<"live" | "signals" | "hedge">("live");
+  const [mode, setMode] = useState<"auto" | "manual">(() => match.status === "live" && match.liveScore ? "auto" : "manual");
+  const [liveMatch, setLiveMatch] = useState<ScheduledMatch>(match);
+  const [lastRefresh, setLastRefresh] = useState<number>(Date.now());
+  const [syncing, setSyncing] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Auto-build state from live score when in auto mode
+  const liveState = useMemo(() => {
+    if (mode === "auto" && liveMatch.liveScore) {
+      return buildStateFromLiveScore(liveMatch.liveScore, liveMatch.best_of);
+    }
+    return null;
+  }, [mode, liveMatch.liveScore, liveMatch.best_of]);
+
+  // Game log for live matches
+  const gameLog = useMemo(() => {
+    if (liveMatch.liveScore) {
+      const pS1 = Math.max(0.50, Math.min(0.75, 0.55 + (liveMatch.p1_win_prob - 0.5) * 0.3));
+      const pS2 = Math.max(0.50, Math.min(0.75, 0.55 + (liveMatch.p2_win_prob - 0.5) * 0.3));
+      return buildGameLog(liveMatch.liveScore, pS1, pS2, liveMatch.best_of);
+    }
+    return [];
+  }, [liveMatch]);
+
+  // Use live state when in auto mode, manual state otherwise
+  const activeState = liveState || state;
+
+  // Poll for live score updates every 15 seconds
+  useEffect(() => {
+    if (mode !== "auto" || liveMatch.status !== "live") return;
+    const poll = async () => {
+      setSyncing(true);
+      try {
+        const fresh = await fetchLiveScore(liveMatch.id);
+        if (fresh) {
+          setLiveMatch(fresh);
+          setLastRefresh(Date.now());
+        }
+      } catch { /* */ }
+      finally { setSyncing(false); }
+    };
+    pollRef.current = setInterval(poll, 15_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [mode, liveMatch.id, liveMatch.status]);
+
+  // When match prop changes, update liveMatch
+  useEffect(() => {
+    setLiveMatch(match);
+    if (match.status === "live" && match.liveScore && mode === "auto") {
+      setLastRefresh(Date.now());
+    }
+  }, [match, mode]);
 
   const pServe1 = useMemo(() => Math.max(0.50, Math.min(0.75, 0.55 + (match.p1_win_prob - 0.5) * 0.3)), [match.p1_win_prob]);
   const pServe2 = useMemo(() => Math.max(0.50, Math.min(0.75, 0.55 + (match.p2_win_prob - 0.5) * 0.3)), [match.p2_win_prob]);
-  const currentP1WinProb = useMemo(() => matchWinProb(pServe1, pServe2, state), [pServe1, pServe2, state]);
-  const currentBreakOpp = useMemo(() => breakOppProb(ewma, fatigue, state, pServe1, pServe2), [ewma, fatigue, state, pServe1, pServe2]);
-  const signals = useMemo(() => computePositionSignals(currentP1WinProb, match.p1_win_prob, ewma, fatigue, state, history, currentBreakOpp), [currentP1WinProb, match.p1_win_prob, ewma, fatigue, state, history, currentBreakOpp]);
+  const currentP1WinProb = useMemo(() => matchWinProb(pServe1, pServe2, activeState), [pServe1, pServe2, activeState]);
+  const currentBreakOpp = useMemo(() => breakOppProb(ewma, fatigue, activeState, pServe1, pServe2), [ewma, fatigue, activeState, pServe1, pServe2]);
+  const signals = useMemo(() => computePositionSignals(currentP1WinProb, match.p1_win_prob, ewma, fatigue, activeState, history, currentBreakOpp), [currentP1WinProb, match.p1_win_prob, ewma, fatigue, activeState, history, currentBreakOpp]);
   const hedge = useMemo(() => calcDeltaNeutralHedge(hedgeSide, hedgeStake, hedgeOdds, currentP1WinProb, match.player1, match.player2), [hedgeSide, hedgeStake, hedgeOdds, currentP1WinProb, match.player1, match.player2]);
 
   const logPoint = useCallback((winner: 1 | 2) => {
@@ -555,6 +766,30 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
         <div className="text-[10px] text-terminal-muted">{match.tournament} · {match.surface} · Bo{match.best_of}</div>
       </div>
 
+      {/* Mode toggle + sync status */}
+      <div className="flex items-center justify-between px-2 py-1.5 border border-terminal-border rounded bg-terminal-panel/40">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setMode(mode === "auto" ? "manual" : "auto")}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold transition ${
+              mode === "auto"
+                ? "bg-terminal-red/20 text-terminal-red border border-terminal-red/40"
+                : "bg-terminal-blue/20 text-terminal-blue border border-terminal-blue/40"
+            }`}
+          >
+            {mode === "auto" ? "🔴 LIVE" : "✏️ MANUAL"}
+          </button>
+          {mode === "auto" && (
+            <span className="text-[8px] text-terminal-muted">
+              {syncing ? "⟳ syncing…" : `Last: ${Math.round((Date.now() - lastRefresh) / 1000)}s ago`}
+            </span>
+          )}
+        </div>
+        {mode === "auto" && liveMatch.liveScore?.statusDetail && (
+          <span className="text-[9px] text-terminal-yellow font-mono">{liveMatch.liveScore.statusDetail}</span>
+        )}
+      </div>
+
       {/* Scoreboard */}
       <div className="border border-terminal-border rounded overflow-hidden">
         <div className="bg-terminal-panel/80 px-3 py-2">
@@ -562,7 +797,7 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             <div />
             {[0,1,2,3,4].map(i => (
               <div key={i} className="text-center text-[8px] text-terminal-muted">
-                {i < state.sets.length ? `S${i+1}` : i === state.sets.length ? "S*" : ""}
+                {i < activeState.sets.length ? `S${i+1}` : i === activeState.sets.length ? "S*" : ""}
               </div>
             ))}
             <div className="text-center text-[8px] text-terminal-muted">PTS</div>
@@ -572,22 +807,22 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             return (
               <div key={pl} className="grid grid-cols-[1fr_repeat(5,28px)_40px] gap-1 items-center text-[11px] font-mono mt-0.5">
                 <div className="flex items-center gap-1 truncate">
-                  {state.server === pl && <span className="text-terminal-yellow text-[8px]">●</span>}
-                  <span className={`truncate ${state.winner === pl ? "text-terminal-green font-bold" : "text-slate-200"}`}>{name}</span>
+                  {activeState.server === pl && <span className="text-terminal-yellow text-[8px]">●</span>}
+                  <span className={`truncate ${activeState.winner === pl ? "text-terminal-green font-bold" : "text-slate-200"}`}>{name}</span>
                 </div>
                 {[0,1,2,3,4].map(i => (
                   <div key={i} className="text-center font-bold">
-                    {i < state.sets.length
-                      ? <span className={(pl === 1 ? state.sets[i].p1 > state.sets[i].p2 : state.sets[i].p2 > state.sets[i].p1) ? "text-terminal-green" : "text-slate-400"}>
-                          {pl === 1 ? state.sets[i].p1 : state.sets[i].p2}
+                    {i < activeState.sets.length
+                      ? <span className={(pl === 1 ? activeState.sets[i].p1 > activeState.sets[i].p2 : activeState.sets[i].p2 > activeState.sets[i].p1) ? "text-terminal-green" : "text-slate-400"}>
+                          {pl === 1 ? activeState.sets[i].p1 : activeState.sets[i].p2}
                         </span>
-                      : i === state.sets.length ? <span className="text-slate-200">{pl === 1 ? state.currentSet.p1 : state.currentSet.p2}</span> : ""}
+                      : i === activeState.sets.length ? <span className="text-slate-200">{pl === 1 ? activeState.currentSet.p1 : activeState.currentSet.p2}</span> : ""}
                   </div>
                 ))}
                 <div className="text-center text-terminal-yellow font-bold">
-                  {state.tiebreak ? (pl === 1 ? state.currentGame.p1 : state.currentGame.p2) :
-                    ((pl === 1 ? state.currentGame.p1 : state.currentGame.p2) <= 3
-                      ? PT_LABELS[pl === 1 ? state.currentGame.p1 : state.currentGame.p2]
+                  {activeState.tiebreak ? (pl === 1 ? activeState.currentGame.p1 : activeState.currentGame.p2) :
+                    ((pl === 1 ? activeState.currentGame.p1 : activeState.currentGame.p2) <= 3
+                      ? PT_LABELS[pl === 1 ? activeState.currentGame.p1 : activeState.currentGame.p2]
                       : "AD")}
                 </div>
               </div>
@@ -595,29 +830,31 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
           })}
         </div>
         <div className="px-3 py-1 border-t border-terminal-border bg-terminal-bg text-[9px] text-terminal-muted text-center">
-          {state.matchOver
-            ? <span className="text-terminal-green font-bold">MATCH OVER — {state.winner === 1 ? match.player1 : match.player2} wins!</span>
-            : <>{state.tiebreak ? "TIEBREAK · " : ""}{state.server === 1 ? match.player1 : match.player2} serving</>}
+          {activeState.matchOver
+            ? <span className="text-terminal-green font-bold">MATCH OVER — {activeState.winner === 1 ? match.player1 : match.player2} wins!</span>
+            : <>{activeState.tiebreak ? "TIEBREAK · " : ""}{activeState.server === 1 ? match.player1 : match.player2} serving</>}
         </div>
       </div>
 
-      {/* Point buttons */}
-      {!state.matchOver && (
+      {/* Point buttons — manual mode only */}
+      {mode === "manual" && !activeState.matchOver && (
         <div className="grid grid-cols-2 gap-2">
           <button onClick={() => logPoint(1)} className="py-2 rounded border border-terminal-green/40 bg-terminal-green/10 hover:bg-terminal-green/20 text-terminal-green font-bold text-[11px] transition active:scale-95">
-            {state.server === 1 ? "🟢" : "🔴"} {p1Short} wins pt
+            {activeState.server === 1 ? "🟢" : "🔴"} {p1Short} wins pt
           </button>
           <button onClick={() => logPoint(2)} className="py-2 rounded border border-terminal-cyan/40 bg-terminal-cyan/10 hover:bg-terminal-cyan/20 text-terminal-cyan font-bold text-[11px] transition active:scale-95">
-            {state.server === 2 ? "🟢" : "🔴"} {p2Short} wins pt
+            {activeState.server === 2 ? "🟢" : "🔴"} {p2Short} wins pt
           </button>
         </div>
       )}
 
-      {/* Undo/Reset */}
-      <div className="flex gap-2">
-        <button onClick={undo} disabled={history.length === 0} className="flex-1 text-[9px] py-1 rounded border border-terminal-border text-terminal-muted hover:text-slate-300 disabled:opacity-30">↩ Undo</button>
-        <button onClick={reset} disabled={history.length === 0} className="flex-1 text-[9px] py-1 rounded border border-terminal-border text-terminal-muted hover:text-slate-300 disabled:opacity-30">⟲ Reset</button>
-      </div>
+      {/* Undo/Reset — manual mode only */}
+      {mode === "manual" && (
+        <div className="flex gap-2">
+          <button onClick={undo} disabled={history.length === 0} className="flex-1 text-[9px] py-1 rounded border border-terminal-border text-terminal-muted hover:text-slate-300 disabled:opacity-30">↩ Undo</button>
+          <button onClick={reset} disabled={history.length === 0} className="flex-1 text-[9px] py-1 rounded border border-terminal-border text-terminal-muted hover:text-slate-300 disabled:opacity-30">⟲ Reset</button>
+        </div>
+      )}
 
       {/* Sub-tabs */}
       <div className="flex border border-terminal-border rounded overflow-hidden">
@@ -693,11 +930,11 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
           </Sec>
 
           {/* Break opportunity */}
-          {!state.tiebreak && !state.matchOver && (
+          {!activeState.tiebreak && !activeState.matchOver && (
             <Sec title="BREAK OPPORTUNITY">
               <div className="text-center">
                 <div className={`text-[18px] font-bold ${currentBreakOpp > 0.50 ? "text-terminal-red animate-pulse" : currentBreakOpp > 0.35 ? "text-terminal-yellow" : "text-terminal-muted"}`}>{(currentBreakOpp*100).toFixed(0)}%</div>
-                <div className="text-[8px] text-terminal-muted">{state.server === 1 ? p2Short : p1Short} break chance</div>
+                <div className="text-[8px] text-terminal-muted">{activeState.server === 1 ? p2Short : p1Short} break chance</div>
                 <div className="h-2 mt-1 bg-terminal-border rounded-full overflow-hidden">
                   <div className={`h-full transition-all duration-300 ${currentBreakOpp > 0.50 ? "bg-terminal-red" : currentBreakOpp > 0.35 ? "bg-terminal-yellow" : "bg-terminal-blue"}`} style={{ width: `${currentBreakOpp*100}%` }} />
                 </div>
@@ -710,6 +947,33 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
           {probHist.length > 1 && (
             <Sec title="PROBABILITY + EWMA TIMELINE">
               <DualChart data={probHist} p1Name={match.player1} />
+            </Sec>
+          )}
+
+          {/* Game Log — live Markov probabilities per game */}
+          {gameLog.length > 1 && mode === "auto" && (
+            <Sec title={`GAME LOG — MARKOV PROBABILITY (${gameLog.length})`}>
+              <div className="max-h-[160px] overflow-y-auto space-y-0.5">
+                {gameLog.slice().reverse().map(g => {
+                  const probColor = g.p1WinProb >= 0.6 ? "text-terminal-green" : g.p1WinProb <= 0.4 ? "text-terminal-cyan" : "text-slate-400";
+                  return (
+                    <div key={g.id} className={`flex items-center gap-1.5 text-[9px] py-0.5 px-1 rounded ${g.isTiebreak ? "bg-terminal-yellow/10" : ""}`}>
+                      <span className="text-terminal-muted w-[40px] shrink-0 font-mono">{g.label.replace(/^Set \d+: /, "")}</span>
+                      <span className="text-[7px] text-terminal-muted shrink-0">S{g.setNum}</span>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${g.server === 1 ? "bg-terminal-green" : "bg-terminal-cyan"}`} />
+                      <span className="text-[8px] text-terminal-muted">{g.server === 1 ? p1Short : p2Short} srv</span>
+                      {g.isTiebreak && <span className="text-terminal-yellow text-[7px] font-bold">TB</span>}
+                      <span className={`font-mono font-bold ml-auto shrink-0 ${probColor}`}>{pct(g.p1WinProb)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Mini probability chart from game log */}
+              {gameLog.length > 2 && (
+                <div className="mt-2">
+                  <GameLogChart data={gameLog} p1Name={p1Short} />
+                </div>
+              )}
             </Sec>
           )}
 
@@ -925,6 +1189,37 @@ function DualChart({ data, p1Name }: { data: { id: number; p: number; e1: number
       <div className="flex justify-between text-[8px] text-terminal-muted mt-0.5">
         <span>—— Prob · - - EWMA</span>
         <span>{pct(lastP)} {p1Name.split(" ").pop()}</span>
+      </div>
+    </div>
+  );
+}
+
+function GameLogChart({ data, p1Name }: { data: GameLogEntry[]; p1Name: string }) {
+  const h = 50, w = 260, px = 2, py = 4, iw = w - px * 2, ih = h - py * 2;
+  const pts = data.map((d, i) => `${px + (i / Math.max(data.length - 1, 1)) * iw},${py + (1 - d.p1WinProb) * ih}`);
+  const lastP = data[data.length - 1]?.p1WinProb ?? 0.5;
+
+  // Find set boundaries for vertical dividers
+  const setBounds: number[] = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i].setNum !== data[i - 1].setNum) {
+      setBounds.push(px + (i / Math.max(data.length - 1, 1)) * iw);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[50px]">
+        <line x1={px} y1={h/2} x2={w-px} y2={h/2} stroke="rgba(255,255,255,0.08)" strokeDasharray="2,2" />
+        {setBounds.map((x, i) => (
+          <line key={i} x1={x} y1={py} x2={x} y2={h-py} stroke="rgba(255,255,255,0.15)" strokeDasharray="1,2" />
+        ))}
+        <polyline fill="none" stroke={lastP >= 0.5 ? "#4ade80" : "#22d3ee"} strokeWidth="1.5" points={pts.join(" ")} />
+        <circle cx={parseFloat(pts[pts.length-1]?.split(",")[0]||"0")} cy={parseFloat(pts[pts.length-1]?.split(",")[1]||"25")} r="2.5" fill={lastP >= 0.5 ? "#4ade80" : "#22d3ee"} />
+      </svg>
+      <div className="flex justify-between text-[7px] text-terminal-muted mt-0.5">
+        <span>Game-by-game Markov P</span>
+        <span>{pct(lastP)} {p1Name}</span>
       </div>
     </div>
   );

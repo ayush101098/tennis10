@@ -28,6 +28,14 @@ export interface ScheduledMatch {
   prob_method: string;
   venue?: string;
   score?: { p1_sets: number[]; p2_sets: number[]; winner?: 1 | 2 };
+  /** Live-match extras (only present when status === "live") */
+  liveScore?: {
+    server: 1 | 2;                  // who is serving (from ESPN possession)
+    completedSets: { p1: number; p2: number }[];  // finished sets (games)
+    currentSetGames: { p1: number; p2: number };   // games in current set
+    statusDetail: string;            // "1st Set", "2nd Set", etc.
+    scoreText: string;               // e.g. "Kopriva leads Engel 4-2"
+  };
 }
 
 export interface ScheduleData {
@@ -220,6 +228,38 @@ async function fetchESPN(
           }
         }
 
+        // ── Live score extras (server, set/game breakdown) ──
+        let liveScore: ScheduledMatch["liveScore"];
+        if (status === "live") {
+          // Server from 'possession' field (true = currently serving)
+          const p1Serving = !!p1d.possession;
+          const server: 1 | 2 = p1Serving ? 1 : 2;
+
+          // Build completed sets vs current set from linescores
+          const p1ls: { value: number; winner?: boolean }[] = p1d.linescores || [];
+          const p2ls: { value: number; winner?: boolean }[] = p2d.linescores || [];
+          const completedSets: { p1: number; p2: number }[] = [];
+          let currentSetGames = { p1: 0, p2: 0 };
+
+          const maxSets = Math.max(p1ls.length, p2ls.length);
+          for (let si = 0; si < maxSets; si++) {
+            const g1 = p1ls[si]?.value ?? 0;
+            const g2 = p2ls[si]?.value ?? 0;
+            const isCompleted = p1ls[si]?.winner !== undefined || p2ls[si]?.winner !== undefined;
+            if (isCompleted) {
+              completedSets.push({ p1: g1, p2: g2 });
+            } else {
+              // Current (incomplete) set — last one without a winner
+              currentSetGames = { p1: g1, p2: g2 };
+            }
+          }
+
+          const statusDetail = comp.status?.type?.detail || "";
+          const scoreText = comp.notes?.[0]?.text || "";
+
+          liveScore = { server, completedSets, currentSetGames, statusDetail, scoreText };
+        }
+
         const venue = comp.venue?.fullName || "";
         const { p1_prob, p2_prob, method } = computeProb(p1Rank, p2Rank, p1Seed, p2Seed, surface, bestOf);
 
@@ -233,7 +273,7 @@ async function fetchESPN(
           source: "espn", status, start_time: startTime,
           start_timestamp: startTs,
           p1_win_prob: p1_prob, p2_win_prob: p2_prob,
-          prob_method: method, venue, score,
+          prob_method: method, venue, score, liveScore,
         });
       }
     }
@@ -328,4 +368,17 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
   const tomorrow = [...ato, ...wto].sort(sort);
 
   return { today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr, fetched_at: Date.now() };
+}
+
+/** Fetch fresh live score for a single match by re-querying today's scoreboard */
+export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | null> {
+  const now = new Date();
+  const todayStr = localDateStr(now);
+  const rankMap = await loadRankings();
+  const all = await Promise.all([
+    fetchESPN("atp", todayStr, rankMap),
+    fetchESPN("wta", todayStr, rankMap),
+  ]);
+  const flat = all.flat();
+  return flat.find(m => m.id === matchId) ?? null;
 }
