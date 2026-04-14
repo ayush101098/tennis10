@@ -62,4 +62,5 @@ trading-terminal/index_old.html
 !package-lock.json
 !tsconfig.json
 !vercel.json
+!trading-terminal/public/rankings.json
 nohup.out

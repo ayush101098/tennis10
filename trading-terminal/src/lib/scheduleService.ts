@@ -38,6 +38,67 @@ export interface ScheduleData {
   fetched_at: number;
 }
 
+// ─── Rankings lookup (loaded once from /rankings.json) ───────────────────────
+
+interface RankEntry { rank: number; points: number }
+interface RankingsFile {
+  atp: Record<string, RankEntry>;
+  wta: Record<string, RankEntry>;
+  atp_date: string;
+  wta_date: string;
+}
+
+// Normalise name for fuzzy matching: lowercase, strip hyphens/accents, collapse spaces
+function normName(n: string): string {
+  return n
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")   // strip accents
+    .replace(/-/g, " ")                                   // hyphens → space
+    .replace(/\s+/g, " ")                                 // collapse spaces
+    .trim();
+}
+
+let _rankingsPromise: Promise<Map<string, number>> | null = null;
+
+function loadRankings(): Promise<Map<string, number>> {
+  if (_rankingsPromise) return _rankingsPromise;
+  _rankingsPromise = (async () => {
+    const map = new Map<string, number>();
+    try {
+      const res = await fetch("/rankings.json");
+      if (!res.ok) return map;
+      const data: RankingsFile = await res.json();
+      for (const [name, entry] of Object.entries(data.atp)) {
+        map.set(normName(name), entry.rank);
+      }
+      for (const [name, entry] of Object.entries(data.wta)) {
+        map.set(normName(name), entry.rank);
+      }
+      console.log(`[rankings] loaded ${map.size} players (ATP ${data.atp_date}, WTA ${data.wta_date})`);
+    } catch (e) {
+      console.warn("[rankings] failed to load /rankings.json", e);
+    }
+    return map;
+  })();
+  return _rankingsPromise;
+}
+
+function lookupRank(nameMap: Map<string, number>, displayName: string): number {
+  const key = normName(displayName);
+  const r = nameMap.get(key);
+  if (r) return r;
+  // Try last-name first-name swap (Sackmann uses "First Last", ESPN uses "First Last" too usually)
+  // Also try just last name for common cases
+  const parts = key.split(" ");
+  if (parts.length >= 2) {
+    // Try "last first" order
+    const swapped = parts.slice(1).join(" ") + " " + parts[0];
+    const r2 = nameMap.get(swapped);
+    if (r2) return r2;
+  }
+  return 0;
+}
+
 // ─── ESPN ────────────────────────────────────────────────────────────────────
 
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports/tennis";
@@ -71,6 +132,7 @@ function localDateStr(d: Date): string {
 async function fetchESPN(
   tour: "atp" | "wta",
   targetDate: string, // YYYY-MM-DD — only return matches on this local date
+  rankMap: Map<string, number>,
 ): Promise<ScheduledMatch[]> {
   const espnDate = targetDate.replace(/-/g, "");
   const out: ScheduledMatch[] = [];
@@ -128,9 +190,13 @@ async function fetchESPN(
 
         const p1Seed = parseInt(p1d.seed || "0") || 0;
         const p2Seed = parseInt(p2d.seed || "0") || 0;
+
+        // Rank: try ESPN data first, then Sackmann rankings lookup, then seed fallback
         let p1Rank = 0, p2Rank = 0;
         if (p1a?.rankings?.length) p1Rank = p1a.rankings[0].current || 0;
         if (p2a?.rankings?.length) p2Rank = p2a.rankings[0].current || 0;
+        if (!p1Rank && p1Name) p1Rank = lookupRank(rankMap, p1Name);
+        if (!p2Rank && p2Name) p2Rank = lookupRank(rankMap, p2Name);
         if (!p1Rank && p1Seed) p1Rank = p1Seed;
         if (!p2Rank && p2Seed) p2Rank = p2Seed;
 
@@ -243,11 +309,13 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
   const todayStr = localDateStr(now);
   const tomorrowStr = localDateStr(tom);
 
+  const rankMap = await loadRankings();
+
   const [at, wt, ato, wto] = await Promise.all([
-    fetchESPN("atp", todayStr),
-    fetchESPN("wta", todayStr),
-    fetchESPN("atp", tomorrowStr),
-    fetchESPN("wta", tomorrowStr),
+    fetchESPN("atp", todayStr, rankMap),
+    fetchESPN("wta", todayStr, rankMap),
+    fetchESPN("atp", tomorrowStr, rankMap),
+    fetchESPN("wta", tomorrowStr, rankMap),
   ]);
 
   const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 };
