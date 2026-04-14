@@ -18,8 +18,10 @@ import os
 import sys
 import json
 import time
+import socket
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse
 
 import tls_client
@@ -27,6 +29,7 @@ import tls_client
 SOFA_BASE = "https://www.sofascore.com/api/v1"
 
 # Reuse a single TLS session (Chrome fingerprint) across requests
+_session_lock = threading.Lock()
 _session = tls_client.Session(client_identifier="chrome_120")
 
 # Simple in-memory cache: { url: (timestamp, json_bytes) }
@@ -47,7 +50,8 @@ def _fetch_sofa(path: str) -> tuple[int, bytes]:
                 return 200, data
 
     try:
-        r = _session.get(url)
+        with _session_lock:
+            r = _session.get(url)
         if r.status_code == 200:
             body = r.content
             with _cache_lock:
@@ -60,6 +64,9 @@ def _fetch_sofa(path: str) -> tuple[int, bytes]:
 
 
 class SofaHandler(BaseHTTPRequestHandler):
+    # Increase timeout so connections don't die under load
+    timeout = 30
+
     def do_GET(self):
         parsed = urlparse(self.path)
         sofa_path = parsed.path.lstrip("/")
@@ -78,9 +85,10 @@ class SofaHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "public, max-age=3")
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
-        except BrokenPipeError:
+        except (BrokenPipeError, ConnectionResetError):
             pass  # client disconnected before we finished writing
 
     def do_OPTIONS(self):
@@ -92,28 +100,24 @@ class SofaHandler(BaseHTTPRequestHandler):
 
     # Suppress request logging noise
     def log_message(self, fmt, *args):
-        sys.stderr.write(f"[sofa-proxy] {fmt % args}\n")
+        pass  # silent — remove noise from terminal
 
 
-class ThreadedHTTPServer(HTTPServer):
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """Handle each request in a new thread for concurrent fast polling."""
-    from socketserver import ThreadingMixIn
     allow_reuse_address = True
+    allow_reuse_port = True
     daemon_threads = True
+    request_queue_size = 64  # allow many queued connections (default is 5)
 
-    def process_request(self, request, client_address):
-        """Start a new thread to process each request."""
-        t = threading.Thread(target=self.process_request_thread, args=(request, client_address))
-        t.daemon = True
-        t.start()
-
-    def process_request_thread(self, request, client_address):
+    def server_bind(self):
+        """Set SO_REUSEADDR and increase listen backlog to prevent ECONNRESET."""
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            self.finish_request(request, client_address)
-        except Exception:
-            self.handle_error(request, client_address)
-        finally:
-            self.shutdown_request(request)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except (AttributeError, OSError):
+            pass  # SO_REUSEPORT not available on all platforms
+        super().server_bind()
 
 
 def main():
@@ -121,7 +125,7 @@ def main():
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadedHTTPServer((host, port), SofaHandler)
     print(f"[sofa-proxy] listening on http://{host}:{port}")
-    print(f"[sofa-proxy] TLS impersonation: chrome_120 | cache: {CACHE_TTL}s | threaded")
+    print(f"[sofa-proxy] TLS: chrome_120 | cache: {CACHE_TTL}s | threaded | backlog: {server.request_queue_size}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

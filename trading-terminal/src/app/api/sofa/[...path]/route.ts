@@ -15,6 +15,21 @@ import { NextRequest, NextResponse } from "next/server";
  */
 
 const SOFA_PROXY = process.env.SOFA_PROXY_URL || "http://127.0.0.1:3001";
+const MAX_RETRIES = 2;
+
+async function fetchWithRetry(url: string, retries = MAX_RETRIES): Promise<Response> {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      return res;
+    } catch (err) {
+      if (i === retries) throw err;
+      // Short delay before retry (50ms, 150ms)
+      await new Promise(r => setTimeout(r, 50 + i * 100));
+    }
+  }
+  throw new Error("unreachable");
+}
 
 export async function GET(
   _req: NextRequest,
@@ -25,7 +40,7 @@ export async function GET(
   const url = `${SOFA_PROXY}/${sofaPath}`;
 
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetchWithRetry(url);
 
     if (!res.ok) {
       return NextResponse.json(
