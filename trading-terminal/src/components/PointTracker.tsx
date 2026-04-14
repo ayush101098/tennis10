@@ -1266,6 +1266,7 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
   const fat1 = fatigueIndex(activeFatigue, 1), fat2 = fatigueIndex(activeFatigue, 2);
   const fl1 = fatigueLabel(fat1), fl2 = fatigueLabel(fat2);
   const odds1 = probToOdds(currentP1WinProb), odds2 = probToOdds(1 - currentP1WinProb);
+  const bookOdds = liveMatch.liveScore?.bookmakerOdds;
   const entrySigs = signals.filter(s => s.type === "ENTRY");
   const exitSigs = signals.filter(s => s.type === "EXIT");
   const hedgeSigs = signals.filter(s => s.type === "HEDGE");
@@ -1444,7 +1445,10 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
               </div>
               <div className="flex items-center justify-between"><span className={currentP1WinProb < 0.5 ? "text-terminal-cyan font-bold" : "text-slate-300"}>{match.player2}</span><span className={currentP1WinProb < 0.5 ? "text-terminal-cyan font-bold" : "text-slate-400"}>{pct(1-currentP1WinProb)}</span></div>
             </div>
-            <div className="text-[9px] text-terminal-muted text-center mt-1">Fair: {odds1.toFixed(2)} / {odds2.toFixed(2)} · Pre: {pct(match.p1_win_prob)} / {pct(match.p2_win_prob)}</div>
+            <div className="text-[9px] text-terminal-muted text-center mt-1">
+              {bookOdds && <span className="text-terminal-yellow">Book: {bookOdds.p1.toFixed(2)} / {bookOdds.p2.toFixed(2)} · </span>}
+              Fair: {odds1.toFixed(2)} / {odds2.toFixed(2)} · Pre: {pct(match.p1_win_prob)} / {pct(match.p2_win_prob)}
+            </div>
           </Sec>
 
           {/* Live Match Stats from SofaScore */}

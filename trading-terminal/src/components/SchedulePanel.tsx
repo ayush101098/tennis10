@@ -149,15 +149,17 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function EdgePanel({ match: m }: { match: ScheduledMatch }) {
-  const [odds1, setOdds1] = useState(() => probToOdds(m.p1_win_prob));
-  const [odds2, setOdds2] = useState(() => probToOdds(m.p2_win_prob));
+  const bookOdds = m.liveScore?.bookmakerOdds;
+  const [odds1, setOdds1] = useState(() => bookOdds?.p1 || probToOdds(m.p1_win_prob));
+  const [odds2, setOdds2] = useState(() => bookOdds?.p2 || probToOdds(m.p2_win_prob));
   const [bankroll, setBankroll] = useState(1000);
 
-  // Recalc when match changes
+  // Recalc when match changes — prefer real bookmaker odds
   useEffect(() => {
-    setOdds1(probToOdds(m.p1_win_prob));
-    setOdds2(probToOdds(m.p2_win_prob));
-  }, [m.id, m.p1_win_prob, m.p2_win_prob]);
+    const bk = m.liveScore?.bookmakerOdds;
+    setOdds1(bk?.p1 || probToOdds(m.p1_win_prob));
+    setOdds2(bk?.p2 || probToOdds(m.p2_win_prob));
+  }, [m.id, m.p1_win_prob, m.p2_win_prob, m.liveScore?.bookmakerOdds]);
 
   const imp1 = odds1 > 0 ? 1 / odds1 : 0;
   const imp2 = odds2 > 0 ? 1 / odds2 : 0;
@@ -206,6 +208,7 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
         </div>
         <div className="text-[9px] text-terminal-muted mt-1 text-center">
           Method: {m.prob_method} · Fair odds: {probToOdds(m.p1_win_prob).toFixed(2)} / {probToOdds(m.p2_win_prob).toFixed(2)}
+          {bookOdds && <span className="text-terminal-yellow"> · Book: {bookOdds.p1.toFixed(2)} / {bookOdds.p2.toFixed(2)}</span>}
           {m.p1_rank > 0 && m.p2_rank > 0 && ` · Rank #{m.p1_rank} vs #${m.p2_rank}`}
         </div>
       </Section>

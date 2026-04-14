@@ -41,6 +41,8 @@ export interface ScheduledMatch {
     /** Live match statistics from SofaScore */
     stats?: LiveMatchStats;
     sofaId?: number;                 // SofaScore event ID for stats lookup
+    /** Real bookmaker odds from SofaScore */
+    bookmakerOdds?: { p1: number; p2: number; source?: string };
   };
 }
 
@@ -451,12 +453,11 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
         }
       }
 
-      // Server: use firstToServe + total games to determine
+      // Server: firstToServe indicates who is CURRENTLY serving (1=home, 2=away)
       let server: 1 | 2 = 1;
       if (evt.firstToServe) {
-        const totalGames = completedSets.reduce((a, s) => a + s.p1 + s.p2, 0) + currentSetGames.p1 + currentSetGames.p2;
-        const firstServer: 1 | 2 = evt.firstToServe === 1 ? 1 : 2;
-        server = (totalGames % 2 === 0) ? firstServer : (firstServer === 1 ? 2 : 1);
+        // In SofaScore, firstToServe = current server. P1 is always home for sofa-sourced matches.
+        server = evt.firstToServe === 1 ? 1 : 2;
       }
 
       // Point score
@@ -635,12 +636,14 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
     const sofaMatches = await fetchSofaScheduled(todayStr, rankMap, true);
     const match = sofaMatches.find(m => m.id === matchId) ?? null;
     if (match && match.status === "live" && match.liveScore?.sofaId) {
-      // Fetch stats + live feed IN PARALLEL for speed
-      const [stats, sofaEvents] = await Promise.all([
+      // Fetch stats + live feed + odds IN PARALLEL for speed
+      const [stats, sofaEvents, odds] = await Promise.all([
         fetchSofaStats(match.liveScore.sofaId).catch(() => null),
         fetchSofaLive(),
+        fetchSofaOdds(match.liveScore.sofaId).catch(() => null),
       ]);
       if (stats) match.liveScore.stats = stats;
+      if (odds) match.liveScore.bookmakerOdds = odds;
       const sofaMatch = sofaEvents.find(se => se.id === match.liveScore!.sofaId);
       if (sofaMatch) {
         const p1IsHome = matchNames(match.player1, sofaMatch.homeTeam.name);
@@ -695,7 +698,7 @@ interface SofaLiveEvent {
     period1TieBreak?: number; period2TieBreak?: number; period3TieBreak?: number;
     period4TieBreak?: number; period5TieBreak?: number;
   };
-  firstToServe?: number; // 1 = home, 2 = away
+  firstToServe?: number; // who is currently serving: 1 = home, 2 = away
   status: { code: number; description: string; type: string };
 }
 
@@ -793,6 +796,53 @@ export async function fetchSofaStats(sofaId: number): Promise<LiveMatchStats | n
   }
 }
 
+/** Convert fractional odds string (e.g. "9/4") to decimal odds (e.g. 3.25) */
+function fractionalToDecimal(frac: string): number {
+  if (!frac) return 0;
+  const parts = frac.split("/");
+  if (parts.length !== 2) return parseFloat(frac) || 0;
+  const num = parseFloat(parts[0]);
+  const den = parseFloat(parts[1]);
+  if (!den) return 0;
+  return num / den + 1; // fractional→decimal = numerator/denominator + 1
+}
+
+/** Fetch real bookmaker odds from SofaScore for a given event */
+async function fetchSofaOdds(sofaId: number): Promise<{ p1: number; p2: number; source?: string } | null> {
+  try {
+    const res = await fetch(`/api/sofa/event/${sofaId}/odds/1/all`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const markets: any[] = json.markets || [];
+    if (!markets.length) return null;
+
+    // Use first market (typically most prominent bookmaker)
+    const market = markets[0];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const choices: any[] = market.choices || [];
+    if (choices.length < 2) return null;
+
+    // choices: name "1" = home, name "2" = away
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const homeChoice = choices.find((c: any) => c.name === "1");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const awayChoice = choices.find((c: any) => c.name === "2");
+    if (!homeChoice || !awayChoice) return null;
+
+    const homeOdds = fractionalToDecimal(homeChoice.fractionalValue);
+    const awayOdds = fractionalToDecimal(awayChoice.fractionalValue);
+    if (homeOdds <= 1 || awayOdds <= 1) return null;
+
+    const source = market.marketName || market.sourceName || "SofaScore";
+    // For sofa-sourced matches, P1 = home. Caller maps if needed.
+    return { p1: homeOdds, p2: awayOdds, source };
+  } catch (e) {
+    console.warn("[sofascore] odds fetch failed", e);
+    return null;
+  }
+}
+
 /** Enrich an ESPN match with SofaScore point-level data */
 async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
   if (!match.liveScore || match.status !== "live") return;
@@ -822,16 +872,11 @@ async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
     };
   }
 
-  // Server from SofaScore (more reliable)
+  // Server from SofaScore — firstToServe indicates who is CURRENTLY serving (1=home, 2=away)
   if (sofaMatch.firstToServe) {
     const sofaServerIsHome = sofaMatch.firstToServe === 1;
-    // Determine current server from firstToServe + total games played
-    const totalGames = (match.liveScore.completedSets || []).reduce(
-      (acc, s) => acc + s.p1 + s.p2, 0
-    ) + (match.liveScore.currentSetGames?.p1 || 0) + (match.liveScore.currentSetGames?.p2 || 0);
-    const firstServer: 1 | 2 = (sofaServerIsHome && p1IsHome) || (!sofaServerIsHome && !p1IsHome) ? 1 : 2;
-    // Server alternates every game (simplified)
-    match.liveScore.server = (totalGames % 2 === 0) ? firstServer : (firstServer === 1 ? 2 : 1);
+    // Map SofaScore home/away to our P1/P2
+    match.liveScore.server = (sofaServerIsHome && p1IsHome) || (!sofaServerIsHome && !p1IsHome) ? 1 : 2;
   }
 
   // Check for tiebreak scores
@@ -849,9 +894,18 @@ async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
   // Store sofaId for stats fetch
   match.liveScore.sofaId = sofaMatch.id;
 
-  // Fetch live stats
+  // Fetch live stats + bookmaker odds
   try {
-    const stats = await fetchSofaStats(sofaMatch.id);
+    const [stats, odds] = await Promise.all([
+      fetchSofaStats(sofaMatch.id),
+      fetchSofaOdds(sofaMatch.id),
+    ]);
+    if (odds) {
+      // Map home/away odds to P1/P2
+      match.liveScore.bookmakerOdds = p1IsHome
+        ? odds
+        : { p1: odds.p2, p2: odds.p1, source: odds.source };
+    }
     if (stats) {
       // If P1 is away in SofaScore, swap the stats
       if (!p1IsHome) {
