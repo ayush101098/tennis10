@@ -1168,7 +1168,7 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
       finally { setSyncing(false); }
     };
     poll(); // immediate first poll
-    pollRef.current = setInterval(poll, 10_000);
+    pollRef.current = setInterval(poll, 3_000); // 3s — fastest local polling
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [mode, liveMatch.id, liveMatch.status]);
 

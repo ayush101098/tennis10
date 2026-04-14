@@ -520,10 +520,10 @@ const SOFA_CAT_URLS: Record<string, string> = {
   "itf-women": "/api/sofa/category/213/scheduled-events",
 };
 
-/** Cache SofaScore scheduled data per date — 60s TTL for schedule, 8s for live polling */
+/** Cache SofaScore scheduled data per date — 12s TTL for schedule, 2s for live polling */
 const _sofaSchedCache: Record<string, { data: ScheduledMatch[]; ts: number }> = {};
-const SOFA_SCHED_TTL = 60_000;
-const SOFA_SCHED_LIVE_TTL = 8_000;
+const SOFA_SCHED_TTL = 12_000;
+const SOFA_SCHED_LIVE_TTL = 2_000;
 
 /** Fetch a single SofaScore scheduled endpoint, return raw events array */
 async function fetchSofaEndpoint(url: string): Promise<unknown[]> {
@@ -635,16 +635,14 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
     const sofaMatches = await fetchSofaScheduled(todayStr, rankMap, true);
     const match = sofaMatches.find(m => m.id === matchId) ?? null;
     if (match && match.status === "live" && match.liveScore?.sofaId) {
-      // Fetch detailed stats
-      try {
-        const stats = await fetchSofaStats(match.liveScore.sofaId);
-        if (stats) match.liveScore.stats = stats;
-      } catch { /* stats are optional */ }
-      // Refresh point-level data from live feed
-      const sofaEvents = await fetchSofaLive();
+      // Fetch stats + live feed IN PARALLEL for speed
+      const [stats, sofaEvents] = await Promise.all([
+        fetchSofaStats(match.liveScore.sofaId).catch(() => null),
+        fetchSofaLive(),
+      ]);
+      if (stats) match.liveScore.stats = stats;
       const sofaMatch = sofaEvents.find(se => se.id === match.liveScore!.sofaId);
       if (sofaMatch) {
-        // Update point score
         const p1IsHome = matchNames(match.player1, sofaMatch.homeTeam.name);
         const hPt = sofaMatch.homeScore.point;
         const aPt = sofaMatch.awayScore.point;
@@ -715,9 +713,9 @@ function matchNames(espnName: string, sofaName: string): boolean {
   return false;
 }
 
-/** Cache SofaScore data to avoid hammering the API */
+/** Cache SofaScore data — ultra-fast for local use */
 let _sofaCache: { data: SofaLiveEvent[]; ts: number } | null = null;
-const SOFA_CACHE_TTL = 5_000; // 5 seconds
+const SOFA_CACHE_TTL = 2_000; // 2 seconds — fastest local
 
 async function fetchSofaLive(): Promise<SofaLiveEvent[]> {
   if (_sofaCache && Date.now() - _sofaCache.ts < SOFA_CACHE_TTL) {

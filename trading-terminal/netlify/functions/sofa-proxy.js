@@ -51,7 +51,7 @@ exports.handler = async (event) => {
       statusCode: res.status,
       headers: {
         "Content-Type": "application/json",
-        "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60",
+        "Cache-Control": "public, s-maxage=3, stale-while-revalidate=5",
         "Access-Control-Allow-Origin": "*",
       },
       body,

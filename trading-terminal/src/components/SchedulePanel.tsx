@@ -26,7 +26,7 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
 
   useEffect(() => {
     refresh();
-    const iv = setInterval(refresh, 90_000);
+    const iv = setInterval(refresh, 15_000); // 15s — fast schedule refresh
     return () => clearInterval(iv);
   }, [refresh]);
 

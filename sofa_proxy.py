@@ -32,7 +32,7 @@ _session = tls_client.Session(client_identifier="chrome_120")
 # Simple in-memory cache: { url: (timestamp, json_bytes) }
 _cache: dict[str, tuple[float, bytes]] = {}
 _cache_lock = threading.Lock()
-CACHE_TTL = 30  # seconds
+CACHE_TTL = 3  # seconds — fast local polling
 
 
 def _fetch_sofa(path: str) -> tuple[int, bytes]:
@@ -77,7 +77,7 @@ class SofaHandler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Cache-Control", "public, max-age=30")
+            self.send_header("Cache-Control", "public, max-age=3")
             self.end_headers()
             self.wfile.write(body)
         except BrokenPipeError:
@@ -95,12 +95,33 @@ class SofaHandler(BaseHTTPRequestHandler):
         sys.stderr.write(f"[sofa-proxy] {fmt % args}\n")
 
 
+class ThreadedHTTPServer(HTTPServer):
+    """Handle each request in a new thread for concurrent fast polling."""
+    from socketserver import ThreadingMixIn
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def process_request(self, request, client_address):
+        """Start a new thread to process each request."""
+        t = threading.Thread(target=self.process_request_thread, args=(request, client_address))
+        t.daemon = True
+        t.start()
+
+    def process_request_thread(self, request, client_address):
+        try:
+            self.finish_request(request, client_address)
+        except Exception:
+            self.handle_error(request, client_address)
+        finally:
+            self.shutdown_request(request)
+
+
 def main():
     port = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 else 3001))
     host = os.environ.get("HOST", "0.0.0.0")
-    server = HTTPServer((host, port), SofaHandler)
+    server = ThreadedHTTPServer((host, port), SofaHandler)
     print(f"[sofa-proxy] listening on http://{host}:{port}")
-    print(f"[sofa-proxy] TLS impersonation: chrome_120")
+    print(f"[sofa-proxy] TLS impersonation: chrome_120 | cache: {CACHE_TTL}s | threaded")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
