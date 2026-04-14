@@ -1,8 +1,7 @@
 /**
  * Client-side tennis schedule service.
- * Fetches today/tomorrow matches directly from ESPN API (CORS-enabled).
- * Computes ranking-based win probabilities using Elo conversion.
- * No backend required — works on static Netlify deploy.
+ * Fetches ATP / WTA matches from ESPN API (CORS-enabled, no backend).
+ * Filters by actual match date, computes Elo-based probabilities.
  */
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -17,8 +16,8 @@ export interface ScheduledMatch {
   p2_seed: number;
   tournament: string;
   round: string;
-  tour: string; // ATP, WTA
-  surface: string; // Hard, Clay, Grass
+  tour: string;
+  surface: string;
   best_of: number;
   source: string;
   status: "scheduled" | "live" | "finished" | "cancelled";
@@ -27,12 +26,8 @@ export interface ScheduledMatch {
   p1_win_prob: number;
   p2_win_prob: number;
   prob_method: string;
-  // Score (for live/finished)
-  score?: {
-    p1_sets: number[];
-    p2_sets: number[];
-    winner?: 1 | 2;
-  };
+  venue?: string;
+  score?: { p1_sets: number[]; p2_sets: number[]; winner?: 1 | 2 };
 }
 
 export interface ScheduleData {
@@ -43,322 +38,226 @@ export interface ScheduleData {
   fetched_at: number;
 }
 
-// ─── ESPN API ────────────────────────────────────────────────────────────────
+// ─── ESPN ────────────────────────────────────────────────────────────────────
 
-const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/tennis";
-const TOURS = ["atp", "wta"] as const;
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/tennis";
 
-// Surface detection from event/venue data
 function detectSurface(event: Record<string, unknown>): string {
-  const venue = event.venue as Record<string, unknown> | undefined;
-  const name = ((event.name as string) || "").toLowerCase();
-  const venueSurface = (venue?.surface as string || "").toLowerCase();
-
-  // Check venue surface field
-  if (venueSurface.includes("clay") || venueSurface.includes("terre")) return "Clay";
-  if (venueSurface.includes("grass") || venueSurface.includes("lawn")) return "Grass";
-  if (venueSurface.includes("hard") || venueSurface.includes("decoturf") || venueSurface.includes("plexicushion") || venueSurface.includes("laykold")) return "Hard";
-
-  // Detect from tournament name
-  if (name.includes("roland garros") || name.includes("barcelona") || 
-      name.includes("monte carlo") || name.includes("rome") || name.includes("madrid") ||
-      name.includes("geneva") || name.includes("lyon") || name.includes("hamburg") ||
-      name.includes("buenos aires") || name.includes("rio") || name.includes("umag") ||
-      name.includes("bastad") || name.includes("kitzbühel") || name.includes("gstaad") ||
-      name.includes("parma") || name.includes("prague") || name.includes("bucharest") ||
-      name.includes("palermo") || name.includes("rabat") || name.includes("bogota") ||
-      name.includes("oeiras")) return "Clay";
-  if (name.includes("wimbledon") || name.includes("halle") || name.includes("queen") ||
-      name.includes("stuttgart") || name.includes("eastbourne") || name.includes("berlin") ||
-      name.includes("s-hertogenbosch") || name.includes("nottingham") || name.includes("mallorca") ||
-      name.includes("bad homburg")) return "Grass";
+  const v = (event.venue as Record<string, unknown>)?.surface as string || "";
+  const n = ((event.name as string) || "").toLowerCase();
+  const vs = v.toLowerCase();
+  if (vs.includes("clay") || vs.includes("terre")) return "Clay";
+  if (vs.includes("grass") || vs.includes("lawn")) return "Grass";
+  if (vs.includes("hard") || vs.includes("deco") || vs.includes("plexi") || vs.includes("laykold")) return "Hard";
+  if (/roland garros|barcelona|monte.carlo|rome|madrid|geneva|lyon|hamburg|buenos aires|rio|umag|bastad|kitzb|gstaad|parma|prague|bucharest|palermo|rabat|bogota|oeiras|marrakech|cordoba|houston|winston.salem clay/i.test(n)) return "Clay";
+  if (/wimbledon|halle|queen|s-hertogenbosch|nottingham|mallorca|bad homburg|eastbourne|berlin grass|stuttgart grass/i.test(n)) return "Grass";
   return "Hard";
 }
 
-// Detect best-of from event context
-function detectBestOf(eventName: string, tour: string): number {
-  const n = eventName.toLowerCase();
-  if (tour === "ATP" && (
-    n.includes("australian open") || n.includes("roland garros") || 
-    n.includes("french open") || n.includes("wimbledon") || n.includes("us open")
-  )) return 5;
+function detectBestOf(name: string, tour: string): number {
+  const n = name.toLowerCase();
+  if (tour === "ATP" && /australian open|roland garros|french open|wimbledon|us open/i.test(n)) return 5;
   return 3;
 }
 
-interface ESPNCompetitor {
-  id?: string;
-  order?: number;
-  winner?: boolean;
-  seed?: string;
-  athlete?: {
-    displayName?: string;
-    shortName?: string;
-    fullName?: string;
-    rankings?: Array<{ current?: number }>;
-  } | string;
-  linescores?: Array<{ value: number; winner: boolean }>;
+/** Get local YYYY-MM-DD for a Date object (not UTC!) */
+function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
 }
 
-interface ESPNCompetition {
-  id?: string;
-  date?: string;
-  startDate?: string;
-  status?: {
-    type?: {
-      state?: string;
-      description?: string;
-      completed?: boolean;
-    };
-  };
-  competitors?: ESPNCompetitor[];
-  notes?: Array<{ headline?: string }>;
-  description?: string;
-  round?: { displayName?: string };
-}
-
-async function fetchESPNTour(
-  tour: (typeof TOURS)[number],
-  dateStr: string, // YYYYMMDD
-  eventDate: string, // YYYY-MM-DD for display
+async function fetchESPN(
+  tour: "atp" | "wta",
+  targetDate: string, // YYYY-MM-DD — only return matches on this local date
 ): Promise<ScheduledMatch[]> {
-  const matches: ScheduledMatch[] = [];
+  const espnDate = targetDate.replace(/-/g, "");
+  const out: ScheduledMatch[] = [];
   try {
-    const res = await fetch(
-      `${ESPN_BASE}/${tour}/scoreboard?dates=${dateStr}`,
-    );
+    const res = await fetch(`${ESPN}/${tour}/scoreboard?dates=${espnDate}`);
     if (!res.ok) return [];
     const data = await res.json();
 
     for (const event of data.events || []) {
-      const tournamentName = event.name || "";
+      const tName = event.name || "";
       const surface = detectSurface(event);
-      const bestOf = detectBestOf(tournamentName, tour.toUpperCase());
+      const bestOf = detectBestOf(tName, tour.toUpperCase());
 
-      // Collect all competitions from groupings or direct
-      const allComps: ESPNCompetition[] = [];
+      // Gather all competitions
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const allComps: any[] = [];
       for (const g of event.groupings || []) {
-        for (const c of g.competitions || []) {
-          allComps.push(c);
-        }
+        for (const c of g.competitions || []) allComps.push(c);
       }
-      if (allComps.length === 0) {
-        for (const c of event.competitions || []) {
-          allComps.push(c);
-        }
+      if (!allComps.length) {
+        for (const c of event.competitions || []) allComps.push(c);
       }
 
       for (const comp of allComps) {
+        // ── Filter by actual match date ──
+        const rawDate = comp.startDate || comp.date || "";
+        if (!rawDate) continue;
+        let matchDt: Date;
+        try {
+          matchDt = new Date(rawDate);
+        } catch {
+          continue;
+        }
+        const matchLocalDate = localDateStr(matchDt);
+        if (matchLocalDate !== targetDate) continue;
+
+        // ── Singles only: type=athlete ──
         const competitors = comp.competitors || [];
         if (competitors.length < 2) continue;
+        // Skip doubles (type=team with roster)
+        if (competitors[0]?.type === "team") continue;
 
-        // Sort by order
-        let p1Data = competitors[0];
-        let p2Data = competitors[1];
+        let p1d = competitors[0];
+        let p2d = competitors[1];
         for (const c of competitors) {
-          if (c.order === 1) p1Data = c;
-          else if (c.order === 2) p2Data = c;
+          if (c.order === 1) p1d = c;
+          else if (c.order === 2) p2d = c;
         }
 
-        // Player names
-        const p1Ath = typeof p1Data.athlete === "object" ? p1Data.athlete : null;
-        const p2Ath = typeof p2Data.athlete === "object" ? p2Data.athlete : null;
-        const p1Name = p1Ath?.displayName || p1Ath?.fullName || "";
-        const p2Name = p2Ath?.displayName || p2Ath?.fullName || "";
+        const p1a = typeof p1d.athlete === "object" ? p1d.athlete : null;
+        const p2a = typeof p2d.athlete === "object" ? p2d.athlete : null;
+        const p1Name = p1a?.displayName || p1a?.fullName || "";
+        const p2Name = p2a?.displayName || p2a?.fullName || "";
         if (!p1Name || !p2Name) continue;
 
-        // Seeds
-        const p1Seed = parseInt(p1Data.seed || "0") || 0;
-        const p2Seed = parseInt(p2Data.seed || "0") || 0;
-
-        // Rankings (ESPN sometimes has them)
-        let p1Rank = 0;
-        let p2Rank = 0;
-        if (p1Ath?.rankings?.length) p1Rank = p1Ath.rankings[0].current || 0;
-        if (p2Ath?.rankings?.length) p2Rank = p2Ath.rankings[0].current || 0;
-        // If rank unknown but seed known, use seed as rough rank proxy
+        const p1Seed = parseInt(p1d.seed || "0") || 0;
+        const p2Seed = parseInt(p2d.seed || "0") || 0;
+        let p1Rank = 0, p2Rank = 0;
+        if (p1a?.rankings?.length) p1Rank = p1a.rankings[0].current || 0;
+        if (p2a?.rankings?.length) p2Rank = p2a.rankings[0].current || 0;
         if (!p1Rank && p1Seed) p1Rank = p1Seed;
         if (!p2Rank && p2Seed) p2Rank = p2Seed;
 
-        // Status
-        const stateStr = comp.status?.type?.state || "pre";
+        const state = comp.status?.type?.state || "pre";
         const status: ScheduledMatch["status"] =
-          stateStr === "in" ? "live" : stateStr === "post" ? "finished" : "scheduled";
+          state === "in" ? "live" : state === "post" ? "finished" : "scheduled";
 
-        // Start time
-        const rawDate = comp.startDate || comp.date || event.date || "";
-        let startTime = "";
-        let startTs = 0;
-        if (rawDate) {
-          try {
-            const dt = new Date(rawDate);
-            startTime = dt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
-            startTs = dt.getTime() / 1000;
-          } catch { /* ignore */ }
-        }
+        const startTime = matchDt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+        const startTs = matchDt.getTime() / 1000;
 
-        // Round
         let roundName = "";
         if (comp.round?.displayName) roundName = comp.round.displayName;
         else if (comp.notes?.length) roundName = comp.notes[0].headline || "";
-        else if (comp.description) roundName = comp.description;
 
-        // Score for live/finished
-        let score: ScheduledMatch["score"] = undefined;
+        let score: ScheduledMatch["score"];
         if (status !== "scheduled") {
-          const p1Sets = (p1Data.linescores || []).map((l) => l.value);
-          const p2Sets = (p2Data.linescores || []).map((l) => l.value);
-          const winner = p1Data.winner ? 1 : p2Data.winner ? 2 : undefined;
-          if (p1Sets.length > 0 || p2Sets.length > 0) {
-            score = { p1_sets: p1Sets, p2_sets: p2Sets, winner };
+          const p1s = (p1d.linescores || []).map((l: { value: number }) => l.value);
+          const p2s = (p2d.linescores || []).map((l: { value: number }) => l.value);
+          if (p1s.length || p2s.length) {
+            score = { p1_sets: p1s, p2_sets: p2s, winner: p1d.winner ? 1 : p2d.winner ? 2 : undefined };
           }
         }
 
-        // Compute probability
-        const { p1_prob, p2_prob, method } = computeProbability(
-          p1Rank, p2Rank, p1Seed, p2Seed, surface, bestOf,
-        );
+        const venue = comp.venue?.fullName || "";
+        const { p1_prob, p2_prob, method } = computeProb(p1Rank, p2Rank, p1Seed, p2Seed, surface, bestOf);
 
-        const matchId = `espn_${tour}_${event.id || ""}_${comp.id || ""}`;
-
-        matches.push({
-          id: matchId,
-          player1: p1Name,
-          player2: p2Name,
-          p1_rank: p1Rank,
-          p2_rank: p2Rank,
-          p1_seed: p1Seed,
-          p2_seed: p2Seed,
-          tournament: tournamentName,
-          round: roundName,
-          tour: tour.toUpperCase(),
-          surface,
-          best_of: bestOf,
-          source: "espn",
-          status,
-          start_time: startTime,
+        out.push({
+          id: `espn_${tour}_${event.id}_${comp.id}`,
+          player1: p1Name, player2: p2Name,
+          p1_rank: p1Rank, p2_rank: p2Rank,
+          p1_seed: p1Seed, p2_seed: p2Seed,
+          tournament: tName, round: roundName,
+          tour: tour.toUpperCase(), surface, best_of: bestOf,
+          source: "espn", status, start_time: startTime,
           start_timestamp: startTs,
-          p1_win_prob: p1_prob,
-          p2_win_prob: p2_prob,
-          prob_method: method,
-          score,
+          p1_win_prob: p1_prob, p2_win_prob: p2_prob,
+          prob_method: method, venue, score,
         });
       }
     }
-  } catch (err) {
-    console.warn(`ESPN ${tour} fetch failed:`, err);
+  } catch (e) {
+    console.warn(`ESPN ${tour} fetch failed`, e);
   }
-  return matches;
+  return out;
 }
 
-// ─── Probability Engine (Elo-based) ──────────────────────────────────────────
+// ─── Elo probability ─────────────────────────────────────────────────────────
 
-function rankingToElo(rank: number): number {
+function elo(rank: number): number {
   if (rank <= 0) return 1700;
   if (rank === 1) return 2400;
   return Math.max(1300, 2400 - 180 * Math.log(rank));
 }
 
-function eloWinProb(elo1: number, elo2: number): number {
-  return 1.0 / (1.0 + Math.pow(10, (elo2 - elo1) / 400));
+function eloP(e1: number, e2: number): number {
+  return 1 / (1 + Math.pow(10, (e2 - e1) / 400));
 }
 
-function surfaceAdj(p: number, surface: string): number {
-  if (surface === "Clay") return p * 0.92 + 0.04; // compress toward 50%
-  if (surface === "Grass") return p * 1.03 - 0.015; // amplify
-  return p;
-}
-
-function bestOfAdj(p: number, bestOf: number): number {
-  if (bestOf !== 5) return p;
-  const q = 1 - p;
-  return Math.pow(p, 1.22) / (Math.pow(p, 1.22) + Math.pow(q, 1.22));
-}
-
-function computeProbability(
-  p1Rank: number,
-  p2Rank: number,
-  p1Seed: number,
-  p2Seed: number,
-  surface: string,
-  bestOf: number,
+function computeProb(
+  r1: number, r2: number, s1: number, s2: number,
+  surface: string, bestOf: number,
 ): { p1_prob: number; p2_prob: number; method: string } {
   let method = "ranking";
-  let p1: number;
+  let p: number;
 
-  if (p1Rank > 0 && p2Rank > 0) {
-    p1 = eloWinProb(rankingToElo(p1Rank), rankingToElo(p2Rank));
-  } else if (p1Seed > 0 && p2Seed > 0) {
-    method = "seed";
-    p1 = eloWinProb(rankingToElo(p1Seed), rankingToElo(p2Seed));
-  } else if (p1Rank > 0 || p2Rank > 0) {
-    const r1 = p1Rank || 150;
-    const r2 = p2Rank || 150;
-    p1 = eloWinProb(rankingToElo(r1), rankingToElo(r2));
-  } else if (p1Seed > 0 || p2Seed > 0) {
-    method = "seed";
-    const s1 = p1Seed || 16;
-    const s2 = p2Seed || 16;
-    p1 = eloWinProb(rankingToElo(s1), rankingToElo(s2));
+  if (r1 > 0 && r2 > 0) {
+    p = eloP(elo(r1), elo(r2));
+  } else if (s1 > 0 && s2 > 0) {
+    method = "seed"; p = eloP(elo(s1), elo(s2));
+  } else if (r1 > 0 || r2 > 0) {
+    p = eloP(elo(r1 || 150), elo(r2 || 150));
+  } else if (s1 > 0 || s2 > 0) {
+    method = "seed"; p = eloP(elo(s1 || 16), elo(s2 || 16));
   } else {
     return { p1_prob: 0.5, p2_prob: 0.5, method: "unknown" };
   }
 
-  p1 = surfaceAdj(p1, surface);
-  p1 = bestOfAdj(p1, bestOf);
-  p1 = Math.max(0.03, Math.min(0.97, p1));
+  // Surface adjustment
+  if (surface === "Clay") p = p * 0.92 + 0.04;
+  else if (surface === "Grass") p = p * 1.03 - 0.015;
 
-  return {
-    p1_prob: Math.round(p1 * 10000) / 10000,
-    p2_prob: Math.round((1 - p1) * 10000) / 10000,
-    method,
-  };
+  // Bo5 adjustment
+  if (bestOf === 5) {
+    const q = 1 - p;
+    p = Math.pow(p, 1.22) / (Math.pow(p, 1.22) + Math.pow(q, 1.22));
+  }
+
+  p = Math.max(0.03, Math.min(0.97, p));
+  return { p1_prob: Math.round(p * 1e4) / 1e4, p2_prob: Math.round((1 - p) * 1e4) / 1e4, method };
 }
 
-// ─── Main Fetch ──────────────────────────────────────────────────────────────
+// ─── Public API ──────────────────────────────────────────────────────────────
 
-function formatDate(d: Date): string {
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+export function probToOdds(p: number): number {
+  return p > 0 ? Math.round((1 / p) * 100) / 100 : 99;
 }
 
-function formatESPNDate(d: Date): string {
-  return d.toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
+export function kellyFraction(trueProb: number, odds: number): number {
+  const b = odds - 1;
+  if (b <= 0) return 0;
+  const f = (trueProb * b - (1 - trueProb)) / b;
+  return Math.max(0, f);
 }
 
 export async function fetchScheduleClient(): Promise<ScheduleData> {
   const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tom = new Date(now);
+  tom.setDate(tom.getDate() + 1);
 
-  const todayStr = formatESPNDate(now);
-  const tomorrowStr = formatESPNDate(tomorrow);
+  const todayStr = localDateStr(now);
+  const tomorrowStr = localDateStr(tom);
 
-  // Fetch all tours for both days in parallel
-  const [atpToday, wtaToday, atpTomorrow, wtaTomorrow] = await Promise.all([
-    fetchESPNTour("atp", todayStr, formatDate(now)),
-    fetchESPNTour("wta", todayStr, formatDate(now)),
-    fetchESPNTour("atp", tomorrowStr, formatDate(tomorrow)),
-    fetchESPNTour("wta", tomorrowStr, formatDate(tomorrow)),
+  const [at, wt, ato, wto] = await Promise.all([
+    fetchESPN("atp", todayStr),
+    fetchESPN("wta", todayStr),
+    fetchESPN("atp", tomorrowStr),
+    fetchESPN("wta", tomorrowStr),
   ]);
 
-  const todayMatches = [...atpToday, ...wtaToday];
-  const tomorrowMatches = [...atpTomorrow, ...wtaTomorrow];
-
-  // Sort: live first, then scheduled, then finished. Within each group by start time.
-  const statusOrder = { live: 0, scheduled: 1, finished: 2, cancelled: 3 };
-  const sorter = (a: ScheduledMatch, b: ScheduledMatch) => {
-    const sa = statusOrder[a.status] ?? 2;
-    const sb = statusOrder[b.status] ?? 2;
-    if (sa !== sb) return sa - sb;
-    return (a.start_timestamp || 9e9) - (b.start_timestamp || 9e9);
+  const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 };
+  const sort = (a: ScheduledMatch, b: ScheduledMatch) => {
+    const d = (order[a.status] ?? 2) - (order[b.status] ?? 2);
+    return d !== 0 ? d : (a.start_timestamp || 9e9) - (b.start_timestamp || 9e9);
   };
-  todayMatches.sort(sorter);
-  tomorrowMatches.sort(sorter);
 
-  return {
-    today: todayMatches,
-    tomorrow: tomorrowMatches,
-    today_date: formatDate(now),
-    tomorrow_date: formatDate(tomorrow),
-    fetched_at: Date.now(),
-  };
+  const today = [...at, ...wt].sort(sort);
+  const tomorrow = [...ato, ...wto].sort(sort);
+
+  return { today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr, fetched_at: Date.now() };
 }
