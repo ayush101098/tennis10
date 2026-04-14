@@ -511,10 +511,31 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
   };
 }
 
+/**
+ * Category-specific endpoints for ITF (the generic scheduled-events endpoint
+ * does NOT include ITF events — only ATP, WTA, Challenger, W125).
+ */
+const SOFA_CAT_URLS: Record<string, string> = {
+  "itf-men": "https://www.sofascore.com/api/v1/category/785/scheduled-events",
+  "itf-women": "https://www.sofascore.com/api/v1/category/213/scheduled-events",
+};
+
 /** Cache SofaScore scheduled data per date — 60s TTL for schedule, 8s for live polling */
 const _sofaSchedCache: Record<string, { data: ScheduledMatch[]; ts: number }> = {};
 const SOFA_SCHED_TTL = 60_000;
 const SOFA_SCHED_LIVE_TTL = 8_000;
+
+/** Fetch a single SofaScore scheduled endpoint, return raw events array */
+async function fetchSofaEndpoint(url: string): Promise<unknown[]> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.events || [];
+  } catch {
+    return [];
+  }
+}
 
 async function fetchSofaScheduled(
   targetDate: string,
@@ -526,18 +547,32 @@ async function fetchSofaScheduled(
   if (cached && Date.now() - cached.ts < ttl) return cached.data;
 
   try {
-    const res = await fetch(`${SOFA_SCHEDULED}/${targetDate}`);
-    if (!res.ok) return cached?.data || [];
-    const json = await res.json();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const events: any[] = json.events || [];
+    // Fetch generic endpoint + category-specific ITF endpoints in parallel
+    const [genericEvents, itfMenEvents, itfWomenEvents] = await Promise.all([
+      fetchSofaEndpoint(`${SOFA_SCHEDULED}/${targetDate}`),
+      fetchSofaEndpoint(`${SOFA_CAT_URLS["itf-men"]}/${targetDate}`),
+      fetchSofaEndpoint(`${SOFA_CAT_URLS["itf-women"]}/${targetDate}`),
+    ]);
+
+    // Merge all events, deduplicate by SofaScore event ID
+    const seen = new Set<number>();
+    const allEvents: unknown[] = [];
+    for (const evt of [...genericEvents, ...itfMenEvents, ...itfWomenEvents]) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const id = (evt as any).id as number;
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        allEvents.push(evt);
+      }
+    }
+
     const matches: ScheduledMatch[] = [];
-    for (const evt of events) {
+    for (const evt of allEvents) {
       const m = sofaEventToMatch(evt, rankMap);
       if (m) matches.push(m);
     }
     _sofaSchedCache[targetDate] = { data: matches, ts: Date.now() };
-    console.log(`[sofascore] ${targetDate}: ${matches.length} ITF/Chal/W125 singles matches`);
+    console.log(`[sofascore] ${targetDate}: ${matches.length} ITF/Chal/W125 singles (generic=${genericEvents.length}, itfM=${itfMenEvents.length}, itfW=${itfWomenEvents.length})`);
     return matches;
   } catch (e) {
     console.warn("[sofascore] scheduled fetch failed", e);
