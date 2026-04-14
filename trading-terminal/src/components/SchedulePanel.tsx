@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { fetchScheduleClient, probToOdds, kellyFraction } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
+import PointTracker from "@/components/PointTracker";
 
 interface Props {
   onSelectMatch?: (match: ScheduledMatch) => void;
@@ -15,6 +16,7 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
   const [tourFilter, setTourFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [rightTab, setRightTab] = useState<"edge" | "tracker">("edge");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -109,10 +111,32 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
           )}
         </div>
 
-        {/* Right: edge panel */}
+        {/* Right: edge + tracker panel */}
         {selected && (
-          <div className="w-1/2 overflow-y-auto">
-            <EdgePanel match={selected} />
+          <div className="w-1/2 flex flex-col min-h-0">
+            {/* Tab bar */}
+            <div className="flex border-b border-terminal-border shrink-0">
+              <button onClick={() => setRightTab("edge")}
+                className={`flex-1 text-[10px] font-bold uppercase tracking-wider py-1.5 transition ${
+                  rightTab === "edge"
+                    ? "text-terminal-yellow border-b-2 border-terminal-yellow bg-terminal-yellow/5"
+                    : "text-terminal-muted hover:text-slate-300"
+                }`}>
+                ⚡ Edge
+              </button>
+              <button onClick={() => setRightTab("tracker")}
+                className={`flex-1 text-[10px] font-bold uppercase tracking-wider py-1.5 transition ${
+                  rightTab === "tracker"
+                    ? "text-terminal-cyan border-b-2 border-terminal-cyan bg-terminal-cyan/5"
+                    : "text-terminal-muted hover:text-slate-300"
+                }`}>
+                🎾 Tracker
+              </button>
+            </div>
+            {/* Tab content */}
+            <div className="flex-1 overflow-y-auto">
+              {rightTab === "edge" ? <EdgePanel match={selected} /> : <PointTracker match={selected} />}
+            </div>
           </div>
         )}
       </div>
