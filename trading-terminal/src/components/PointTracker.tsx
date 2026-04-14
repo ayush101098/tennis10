@@ -277,6 +277,7 @@ interface PositionSignal {
   edgePct: number;
   stopLoss?: number;
   target?: number;
+  hedgePct?: number; // recommended hedge stake as % of position (for HEDGE signals)
 }
 
 function computePositionSignals(
@@ -544,6 +545,134 @@ function computePositionSignals(
       reason: `Server stable — hold ${((1 - breakOpp) * 100).toFixed(0)}%, close game position`,
       edgePct: -1,
     });
+  }
+
+  // ═══ GAME-LEVEL HEDGE — probability going against position ═══
+
+  // 13) Server was strong but now under pressure → hedge hold position
+  if (!state.tiebreak && breakOpp > 0.35 && breakOpp < 0.55) {
+    const srvPts = state.server === 1 ? gs.p1 : gs.p2;
+    const retPts = state.server === 1 ? gs.p2 : gs.p1;
+    // Server was ahead earlier in game but returner fought back (e.g. 30-0 → 30-30)
+    if (srvPts >= 2 && retPts >= 2 && retPts >= srvPts) {
+      signals.push({
+        level: "GAME", type: "HEDGE", strength: "MODERATE", side: null,
+        reason: `Server losing grip ${PT_LABELS[Math.min(gs.p1,4)]}-${PT_LABELS[Math.min(gs.p2,4)]} · break risk ${Math.round(breakOpp*100)}% — partial hedge`,
+        edgePct: 0, hedgePct: 40,
+      });
+    }
+  }
+
+  // 14) Break point saved but game still dangerous → hedge if backed breaker
+  if (!state.tiebreak) {
+    const srvPts = state.server === 1 ? gs.p1 : gs.p2;
+    const retPts = state.server === 1 ? gs.p2 : gs.p1;
+    // Deuce after break point → server survived, but game volatile
+    if (srvPts >= 3 && retPts >= 3 && srvPts === retPts) {
+      signals.push({
+        level: "GAME", type: "HEDGE", strength: "MODERATE", side: null,
+        reason: `Deuce grind — break point saved, high variance · hedge ${Math.round(breakOpp*100)}% break risk`,
+        edgePct: 0, hedgePct: 50,
+      });
+    }
+  }
+
+  // 15) Server at 0-30 or 0-40 — if you backed server, hedge urgently
+  if (!state.tiebreak) {
+    const srvPts = state.server === 1 ? gs.p1 : gs.p2;
+    const retPts = state.server === 1 ? gs.p2 : gs.p1;
+    if (srvPts === 0 && retPts >= 2) {
+      signals.push({
+        level: "GAME", type: "HEDGE", strength: retPts >= 3 ? "STRONG" : "MODERATE",
+        side: state.server, // hedge AGAINST server
+        reason: `🛡 Server collapse ${PT_LABELS[Math.min(gs.p1,4)]}-${PT_LABELS[Math.min(gs.p2,4)]} · break ${Math.round(breakOpp*100)}% — hedge server position`,
+        edgePct: -(breakOpp * 30), hedgePct: retPts >= 3 ? 90 : 60,
+      });
+    }
+  }
+
+  // 16) Probability reversed against earlier entry — hedge to protect
+  if (Math.abs(probShift) > 0.08) {
+    const wasEntryFor = probShift > 0 ? 1 : 2;  // who we would have entered on
+    const nowFav = currentP1Prob >= 0.5 ? 1 : 2;
+    // Probability went one way initially but current score/momentum reversed
+    if (wasEntryFor !== nowFav && Math.abs(currentP1Prob - 0.5) < 0.12) {
+      const hedgeAmt = Math.min(90, Math.round(Math.abs(probShift) * 400));
+      signals.push({
+        level: "GAME", type: "HEDGE", strength: Math.abs(currentP1Prob - 0.5) < 0.05 ? "STRONG" : "MODERATE",
+        side: wasEntryFor,
+        reason: `⚠️ Prob reversed: was ${wasEntryFor === 1 ? "P1" : "P2"} +${Math.round(Math.abs(probShift)*100)}%, now ${Math.round(currentP1Prob*100)}%-${Math.round((1-currentP1Prob)*100)}% — hedge ${hedgeAmt}%`,
+        edgePct: -Math.abs(probShift) * 50, hedgePct: hedgeAmt,
+      });
+    }
+  }
+
+  // 17) Break advantage slipping — backed breaker but server fighting back
+  if (!state.tiebreak) {
+    const totalGamesInSet = cs.p1 + cs.p2;
+    if (totalGamesInSet >= 3) {
+      const firstServerInSet: 1 | 2 = totalGamesInSet % 2 === 0
+        ? state.server : (state.server === 1 ? 2 : 1);
+      const p1SrvGames = firstServerInSet === 1
+        ? Math.ceil(totalGamesInSet / 2) : Math.floor(totalGamesInSet / 2);
+      const expectedDiff = p1SrvGames - (totalGamesInSet - p1SrvGames);
+      const netBreaks = (cs.p1 - cs.p2 - expectedDiff) / 2;
+      // Had a break but returner now has 0-30+ on breaker's serve → break-back imminent
+      if (Math.abs(netBreaks) >= 1) {
+        const breaker = netBreaks > 0 ? 1 : 2;
+        const breakerServing = state.server === breaker;
+        if (breakerServing && breakOpp > 0.30) {
+          signals.push({
+            level: "GAME", type: "HEDGE", strength: breakOpp > 0.45 ? "STRONG" : "MODERATE",
+            side: breaker,
+            reason: `🛡 Break-back danger! ${breaker === 1 ? "P1" : "P2"} serving with break lead but ${Math.round(breakOpp*100)}% break risk — hedge set position`,
+            edgePct: -(breakOpp * 20), hedgePct: Math.min(80, Math.round(breakOpp * 150)),
+          });
+        }
+      }
+    }
+  }
+
+  // 18) Tiebreak entry → hedge any set position (coin-flip territory)
+  if (state.tiebreak && Math.abs(gs.p1 - gs.p2) <= 2) {
+    signals.push({
+      level: "GAME", type: "HEDGE", strength: "MODERATE", side: null,
+      reason: `Tiebreak ${gs.p1}-${gs.p2} — coin-flip variance, hedge set exposure 70%`,
+      edgePct: 0, hedgePct: 70,
+    });
+  }
+
+  // 19) Match point against your position → emergency hedge
+  {
+    const p1SetsWon2 = state.sets.filter(s => s.p1 > s.p2).length;
+    const p2SetsWon2 = state.sets.filter(s => s.p2 > s.p1).length;
+    const setsToWin = state.setsToWin;
+    // P2 has match point
+    if (p2SetsWon2 === setsToWin - 1 && cs.p2 >= 5 && cs.p2 > cs.p1) {
+      const retPts = state.server === 1 ? gs.p2 : gs.p1;
+      const srvPts = state.server === 1 ? gs.p1 : gs.p2;
+      if ((state.server === 1 && retPts >= 3 && retPts > srvPts) ||
+          (state.server === 2 && srvPts >= 3 && srvPts > retPts)) {
+        signals.push({
+          level: "GAME", type: "HEDGE", strength: "STRONG", side: 1,
+          reason: `🚨 MATCH POINT P2 — emergency hedge any P1 position`,
+          edgePct: -20, hedgePct: 95,
+        });
+      }
+    }
+    // P1 has match point
+    if (p1SetsWon2 === setsToWin - 1 && cs.p1 >= 5 && cs.p1 > cs.p2) {
+      const retPts = state.server === 1 ? gs.p2 : gs.p1;
+      const srvPts = state.server === 1 ? gs.p1 : gs.p2;
+      if ((state.server === 1 && srvPts >= 3 && srvPts > retPts) ||
+          (state.server === 2 && retPts >= 3 && retPts > srvPts)) {
+        signals.push({
+          level: "GAME", type: "HEDGE", strength: "STRONG", side: 2,
+          reason: `🚨 MATCH POINT P1 — emergency hedge any P2 position`,
+          edgePct: -20, hedgePct: 95,
+        });
+      }
+    }
   }
 
   // ═══ STATS-BASED SIGNALS (bonus when SofaScore is available) ═══
@@ -1497,17 +1626,22 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
               <RuleRow icon="↔️" lv="SET" rule="EXIT on break-back — reduce exposure" />
               <RuleRow icon="🔷" lv="SET" rule="ENTRY on game lead + break advantage" />
               <RuleRow icon="💪" lv="MATCH" rule={`ENTRY on serve dominance${liveStats ? " (1st% gap >15%)" : ""}`} />
+              <RuleRow icon="🛡" lv="GAME" rule="HEDGE when server losing grip (30-30+, 0-30+)" />
+              <RuleRow icon="⚠️" lv="GAME" rule="HEDGE when prob reverses against entry" />
+              <RuleRow icon="🔄" lv="GAME" rule="HEDGE on break-back danger or deuce grind" />
+              <RuleRow icon="🚨" lv="GAME" rule="HEDGE 95% on match point against" />
               <RuleRow icon="🛡" lv="MATCH" rule="HEDGE on tiebreak, knife-edge, or tight pts" />
               <RuleRow icon="⏸" lv="MATCH" rule="HOLD when no clear edge — wait" />
             </div>
           </Sec>
 
           <Sec title="POSITION SUMMARY">
-            <div className="grid grid-cols-4 gap-1.5 text-center text-[10px]">
+            <div className="grid grid-cols-5 gap-1 text-center text-[10px]">
               <div className="border border-terminal-green/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-green">{entrySigs.length}</div><div className="text-[8px] text-terminal-muted">ENTRY</div></div>
               <div className="border border-terminal-red/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-red">{exitSigs.length}</div><div className="text-[8px] text-terminal-muted">EXIT</div></div>
               <div className="border border-terminal-yellow/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-yellow">{hedgeSigs.length}</div><div className="text-[8px] text-terminal-muted">HEDGE</div></div>
               <div className="border border-terminal-blue/30 rounded p-1.5"><div className="text-[14px] font-bold text-terminal-blue">{signals.filter(s => s.type === "HOLD").length}</div><div className="text-[8px] text-terminal-muted">HOLD</div></div>
+              <div className="border border-orange-500/30 rounded p-1.5"><div className="text-[14px] font-bold text-orange-400">{hedgeSigs.length > 0 ? Math.max(...hedgeSigs.map(s => s.hedgePct || 0)) : 0}%</div><div className="text-[8px] text-terminal-muted">MAX H%</div></div>
             </div>
           </Sec>
 
@@ -1649,11 +1783,18 @@ function SigCard({ sig, p1, p2 }: { sig: PositionSignal; p1: string; p2: string 
         {sig.side && <span className="text-[9px] text-slate-300 ml-auto">{sig.side === 1 ? p1.split(" ").pop() : p2.split(" ").pop()}</span>}
       </div>
       <div className="text-[9px] text-terminal-muted">{sig.reason}</div>
-      {sig.edgePct !== 0 && (
-        <div className={`text-[8px] mt-0.5 ${sig.edgePct > 0 ? "text-terminal-green" : "text-terminal-red"}`}>
-          Edge: {sig.edgePct > 0 ? "+" : ""}{sig.edgePct.toFixed(1)}%{sig.stopLoss ? ` · Stop: ${pct(sig.stopLoss)}` : ""}{sig.target ? ` · TP: ${pct(sig.target)}` : ""}
-        </div>
-      )}
+      <div className="flex items-center gap-2 mt-0.5">
+        {sig.edgePct !== 0 && (
+          <span className={`text-[8px] ${sig.edgePct > 0 ? "text-terminal-green" : "text-terminal-red"}`}>
+            Edge: {sig.edgePct > 0 ? "+" : ""}{sig.edgePct.toFixed(1)}%{sig.stopLoss ? ` · Stop: ${pct(sig.stopLoss)}` : ""}{sig.target ? ` · TP: ${pct(sig.target)}` : ""}
+          </span>
+        )}
+        {sig.hedgePct && sig.hedgePct > 0 && (
+          <span className="text-[8px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 font-bold ml-auto">
+            🛡 Hedge {sig.hedgePct}%
+          </span>
+        )}
+      </div>
     </div>
   );
 }
