@@ -447,7 +447,14 @@ function Pill({ active, onClick, children, color }: {
 }
 
 function TourBadge({ t }: { t?: string }) {
-  const c: Record<string, string> = { ATP: "text-blue-400 bg-blue-400/10", WTA: "text-pink-400 bg-pink-400/10" };
+  const c: Record<string, string> = {
+    ATP: "text-blue-400 bg-blue-400/10",
+    WTA: "text-pink-400 bg-pink-400/10",
+    "ITF M": "text-emerald-400 bg-emerald-400/10",
+    "ITF W": "text-rose-300 bg-rose-300/10",
+    CHAL: "text-amber-400 bg-amber-400/10",
+    W125: "text-fuchsia-400 bg-fuchsia-400/10",
+  };
   return <span className={`text-[7px] font-bold px-1 rounded ${c[t || ""] || "text-terminal-muted bg-terminal-muted/10"}`}>{t}</span>;
 }
 

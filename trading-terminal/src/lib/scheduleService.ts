@@ -345,6 +345,206 @@ function computeProb(
   return { p1_prob: Math.round(p * 1e4) / 1e4, p2_prob: Math.round((1 - p) * 1e4) / 1e4, method };
 }
 
+// ─── SofaScore Scheduled Events (ITF + Challenger + WTA 125) ─────────────────
+
+const SOFA_SCHEDULED = "https://www.sofascore.com/api/v1/sport/tennis/scheduled-events";
+
+/** SofaScore category slugs we pull that ESPN doesn't cover */
+const SOFA_EXTRA_CATS = new Set(["itf-men", "itf-women", "challenger", "wta-125"]);
+
+function sofaCatToTour(slug: string): string {
+  if (slug === "itf-men") return "ITF M";
+  if (slug === "itf-women") return "ITF W";
+  if (slug === "challenger") return "CHAL";
+  if (slug === "wta-125") return "W125";
+  return slug.toUpperCase();
+}
+
+function sofaStatusToMatch(code: number): ScheduledMatch["status"] {
+  if (code === 0) return "scheduled";
+  if (code >= 6 && code <= 14) return "live";     // 6–10 = set 1-5, 12=halted
+  if (code >= 100) return "finished";
+  if (code === 70 || code === 60) return "cancelled"; // canceled / postponed
+  return "scheduled";
+}
+
+function sofaGroundToSurface(gt?: string): string {
+  if (!gt) return "Hard";
+  const g = gt.toLowerCase();
+  if (g.includes("clay")) return "Clay";
+  if (g.includes("grass")) return "Grass";
+  return "Hard";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatch | null {
+  // Singles only — skip doubles (type===2 or "/" in name)
+  const p1Name: string = evt.homeTeam?.name || "";
+  const p2Name: string = evt.awayTeam?.name || "";
+  if (!p1Name || !p2Name) return null;
+  if (p1Name.includes("/") || p2Name.includes("/")) return null;
+  if (evt.homeTeam?.type === 2 || evt.awayTeam?.type === 2) return null;
+
+  const catSlug: string = evt.tournament?.category?.slug || "";
+  if (!SOFA_EXTRA_CATS.has(catSlug)) return null;
+
+  // Filter by eventFilters (if available) to ensure singles
+  const ef = evt.eventFilters;
+  if (ef?.category && Array.isArray(ef.category) && !ef.category.includes("singles")) return null;
+
+  const tour = sofaCatToTour(catSlug);
+  const tName: string = evt.tournament?.uniqueTournament?.name || evt.tournament?.name || "";
+  const surface = sofaGroundToSurface(evt.groundType);
+  const bestOf = 3; // ITF/Challenger/W125 are always best of 3
+
+  const status = sofaStatusToMatch(evt.status?.code || 0);
+  const startTs = evt.startTimestamp || 0;
+  const startTime = startTs ? new Date(startTs * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
+
+  const p1Rank = lookupRank(rankMap, p1Name);
+  const p2Rank = lookupRank(rankMap, p2Name);
+  const { p1_prob, p2_prob, method } = computeProb(p1Rank, p2Rank, 0, 0, surface, bestOf);
+
+  const roundName = evt.roundInfo?.name || "";
+  const sofaId = evt.id as number;
+
+  // Build live score from SofaScore data
+  let liveScore: ScheduledMatch["liveScore"];
+  let score: ScheduledMatch["score"];
+
+  const hs = evt.homeScore || {};
+  const as = evt.awayScore || {};
+
+  if (status === "live" || status === "finished") {
+    // Extract set scores
+    const p1Sets: number[] = [];
+    const p2Sets: number[] = [];
+    for (let si = 1; si <= 5; si++) {
+      const pk = `period${si}` as string;
+      if (hs[pk] !== undefined) {
+        p1Sets.push(hs[pk] ?? 0);
+        p2Sets.push(as[pk] ?? 0);
+      }
+    }
+
+    if (p1Sets.length) {
+      score = {
+        p1_sets: p1Sets,
+        p2_sets: p2Sets,
+        winner: status === "finished" ? ((hs.current ?? 0) > (as.current ?? 0) ? 1 : 2) : undefined,
+      };
+    }
+
+    if (status === "live") {
+      // Completed vs current set
+      const completedSets: { p1: number; p2: number }[] = [];
+      let currentSetGames = { p1: 0, p2: 0 };
+
+      for (let si = 0; si < p1Sets.length; si++) {
+        const g1 = p1Sets[si];
+        const g2 = p2Sets[si];
+        // Last set with no clear winner is the current set
+        if (si === p1Sets.length - 1 && !(g1 >= 6 && g1 - g2 >= 2) && !(g2 >= 6 && g2 - g1 >= 2) && !(g1 === 7 || g2 === 7)) {
+          currentSetGames = { p1: g1, p2: g2 };
+        } else {
+          completedSets.push({ p1: g1, p2: g2 });
+        }
+      }
+
+      // Server: use firstToServe + total games to determine
+      let server: 1 | 2 = 1;
+      if (evt.firstToServe) {
+        const totalGames = completedSets.reduce((a, s) => a + s.p1 + s.p2, 0) + currentSetGames.p1 + currentSetGames.p2;
+        const firstServer: 1 | 2 = evt.firstToServe === 1 ? 1 : 2;
+        server = (totalGames % 2 === 0) ? firstServer : (firstServer === 1 ? 2 : 1);
+      }
+
+      // Point score
+      let pointScore: { p1: string; p2: string } | undefined;
+      if (hs.point !== undefined && as.point !== undefined) {
+        pointScore = { p1: String(hs.point), p2: String(as.point) };
+      }
+
+      // Tiebreak score
+      let tiebreakScore: { p1: number; p2: number } | undefined;
+      const numSets = completedSets.length + 1;
+      const tbKey = `period${numSets}TieBreak`;
+      if (hs[tbKey] !== undefined) {
+        tiebreakScore = { p1: hs[tbKey] ?? 0, p2: as[tbKey] ?? 0 };
+      }
+
+      liveScore = {
+        server,
+        completedSets,
+        currentSetGames,
+        statusDetail: evt.status?.description || "",
+        scoreText: `${p1Name} vs ${p2Name}`,
+        pointScore,
+        tiebreakScore,
+        sofaId,
+      };
+    }
+  }
+
+  return {
+    id: `sofa_${catSlug}_${sofaId}`,
+    player1: p1Name,
+    player2: p2Name,
+    p1_rank: p1Rank,
+    p2_rank: p2Rank,
+    p1_seed: 0,
+    p2_seed: 0,
+    tournament: tName,
+    round: roundName,
+    tour,
+    surface,
+    best_of: bestOf,
+    source: "sofascore",
+    status,
+    start_time: startTime,
+    start_timestamp: startTs,
+    p1_win_prob: p1_prob,
+    p2_win_prob: p2_prob,
+    prob_method: method,
+    score,
+    liveScore,
+  };
+}
+
+/** Cache SofaScore scheduled data per date — 60s TTL for schedule, 8s for live polling */
+const _sofaSchedCache: Record<string, { data: ScheduledMatch[]; ts: number }> = {};
+const SOFA_SCHED_TTL = 60_000;
+const SOFA_SCHED_LIVE_TTL = 8_000;
+
+async function fetchSofaScheduled(
+  targetDate: string,
+  rankMap: Map<string, number>,
+  forceFresh = false,
+): Promise<ScheduledMatch[]> {
+  const cached = _sofaSchedCache[targetDate];
+  const ttl = forceFresh ? SOFA_SCHED_LIVE_TTL : SOFA_SCHED_TTL;
+  if (cached && Date.now() - cached.ts < ttl) return cached.data;
+
+  try {
+    const res = await fetch(`${SOFA_SCHEDULED}/${targetDate}`);
+    if (!res.ok) return cached?.data || [];
+    const json = await res.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const events: any[] = json.events || [];
+    const matches: ScheduledMatch[] = [];
+    for (const evt of events) {
+      const m = sofaEventToMatch(evt, rankMap);
+      if (m) matches.push(m);
+    }
+    _sofaSchedCache[targetDate] = { data: matches, ts: Date.now() };
+    console.log(`[sofascore] ${targetDate}: ${matches.length} ITF/Chal/W125 singles matches`);
+    return matches;
+  } catch (e) {
+    console.warn("[sofascore] scheduled fetch failed", e);
+    return cached?.data || [];
+  }
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export function probToOdds(p: number): number {
@@ -368,11 +568,13 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
 
   const rankMap = await loadRankings();
 
-  const [at, wt, ato, wto] = await Promise.all([
+  const [at, wt, ato, wto, sofaToday, sofaTomorrow] = await Promise.all([
     fetchESPN("atp", todayStr, rankMap),
     fetchESPN("wta", todayStr, rankMap),
     fetchESPN("atp", tomorrowStr, rankMap),
     fetchESPN("wta", tomorrowStr, rankMap),
+    fetchSofaScheduled(todayStr, rankMap),
+    fetchSofaScheduled(tomorrowStr, rankMap),
   ]);
 
   const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 };
@@ -381,8 +583,8 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
     return d !== 0 ? d : (a.start_timestamp || 9e9) - (b.start_timestamp || 9e9);
   };
 
-  const today = [...at, ...wt].sort(sort);
-  const tomorrow = [...ato, ...wto].sort(sort);
+  const today = [...at, ...wt, ...sofaToday].sort(sort);
+  const tomorrow = [...ato, ...wto, ...sofaTomorrow].sort(sort);
 
   return { today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr, fetched_at: Date.now() };
 }
@@ -392,6 +594,37 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
   const now = new Date();
   const todayStr = localDateStr(now);
   const rankMap = await loadRankings();
+
+  // SofaScore-sourced matches: refresh from SofaScore scheduled API
+  if (matchId.startsWith("sofa_")) {
+    const sofaMatches = await fetchSofaScheduled(todayStr, rankMap, true);
+    const match = sofaMatches.find(m => m.id === matchId) ?? null;
+    if (match && match.status === "live" && match.liveScore?.sofaId) {
+      // Fetch detailed stats
+      try {
+        const stats = await fetchSofaStats(match.liveScore.sofaId);
+        if (stats) match.liveScore.stats = stats;
+      } catch { /* stats are optional */ }
+      // Refresh point-level data from live feed
+      const sofaEvents = await fetchSofaLive();
+      const sofaMatch = sofaEvents.find(se => se.id === match.liveScore!.sofaId);
+      if (sofaMatch) {
+        // Update point score
+        const p1IsHome = matchNames(match.player1, sofaMatch.homeTeam.name);
+        const hPt = sofaMatch.homeScore.point;
+        const aPt = sofaMatch.awayScore.point;
+        if (hPt !== undefined && aPt !== undefined) {
+          match.liveScore.pointScore = {
+            p1: String(p1IsHome ? hPt : aPt),
+            p2: String(p1IsHome ? aPt : hPt),
+          };
+        }
+      }
+    }
+    return match;
+  }
+
+  // ESPN-sourced matches
   const all = await Promise.all([
     fetchESPN("atp", todayStr, rankMap),
     fetchESPN("wta", todayStr, rankMap),
