@@ -4,6 +4,8 @@
  * Filters by actual match date, computes Elo-based probabilities.
  */
 
+import { computeBreakHoldSignals, type BreakHoldSignals } from "./breakHoldEngine";
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface ScheduledMatch {
@@ -43,8 +45,12 @@ export interface ScheduledMatch {
     sofaId?: number;                 // SofaScore event ID for stats lookup
     /** Real bookmaker odds from SofaScore */
     bookmakerOdds?: { p1: number; p2: number; source?: string };
+    /** Break/Hold signal engine output */
+    breakHoldSignals?: BreakHoldSignals;
   };
 }
+
+export type { BreakHoldSignals };
 
 /** Real-time match statistics from SofaScore */
 export interface LiveMatchStats {
@@ -164,7 +170,10 @@ async function fetchESPN(
   const espnDate = targetDate.replace(/-/g, "");
   const out: ScheduledMatch[] = [];
   try {
-    const res = await fetch(`${ESPN}/${tour}/scoreboard?dates=${espnDate}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout
+    const res = await fetch(`${ESPN}/${tour}/scoreboard?dates=${espnDate}`, { signal: controller.signal });
+    clearTimeout(timeout);
     if (!res.ok) return [];
     const data = await res.json();
 
@@ -347,14 +356,18 @@ function computeProb(
   return { p1_prob: Math.round(p * 1e4) / 1e4, p2_prob: Math.round((1 - p) * 1e4) / 1e4, method };
 }
 
-// ─── SofaScore Scheduled Events (ITF + Challenger + WTA 125) ─────────────────
+// ─── SofaScore Scheduled Events (ALL professional tours) ─────────────────────
 
 const SOFA_SCHEDULED = "/api/sofa/sport/tennis/scheduled-events";
 
-/** SofaScore category slugs we pull that ESPN doesn't cover */
-const SOFA_EXTRA_CATS = new Set(["itf-men", "itf-women", "challenger", "wta-125"]);
+/** SofaScore category slugs to include (all professional tennis) */
+const SOFA_INCLUDE_CATS = new Set([
+  "atp", "wta", "challenger", "wta-125", "itf-men", "itf-women",
+]);
 
 function sofaCatToTour(slug: string): string {
+  if (slug === "atp") return "ATP";
+  if (slug === "wta") return "WTA";
   if (slug === "itf-men") return "ITF M";
   if (slug === "itf-women") return "ITF W";
   if (slug === "challenger") return "CHAL";
@@ -388,7 +401,7 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
   if (evt.homeTeam?.type === 2 || evt.awayTeam?.type === 2) return null;
 
   const catSlug: string = evt.tournament?.category?.slug || "";
-  if (!SOFA_EXTRA_CATS.has(catSlug)) return null;
+  if (!SOFA_INCLUDE_CATS.has(catSlug)) return null;
 
   // Filter by eventFilters (if available) to ensure singles
   const ef = evt.eventFilters;
@@ -397,7 +410,10 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
   const tour = sofaCatToTour(catSlug);
   const tName: string = evt.tournament?.uniqueTournament?.name || evt.tournament?.name || "";
   const surface = sofaGroundToSurface(evt.groundType);
-  const bestOf = 3; // ITF/Challenger/W125 are always best of 3
+  // Grand Slams are best of 5, everything else is 3
+  const utName = (evt.tournament?.uniqueTournament?.name || "").toLowerCase();
+  const isGrandSlam = tour === "ATP" && /australian open|roland garros|french open|wimbledon|us open/i.test(utName);
+  const bestOf = isGrandSlam ? 5 : 3;
 
   const status = sofaStatusToMatch(evt.status?.code || 0);
   const startTs = evt.startTimestamp || 0;
@@ -453,10 +469,11 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
         }
       }
 
-      // Server: firstToServe indicates who is CURRENTLY serving (1=home, 2=away)
+      // Server: firstToServe = who is CURRENTLY serving (dynamic, updates every game)
+      // 1 = home is serving, 2 = away is serving
       let server: 1 | 2 = 1;
       if (evt.firstToServe) {
-        // In SofaScore, firstToServe = current server. P1 is always home for sofa-sourced matches.
+        // P1 = home for sofa-sourced matches
         server = evt.firstToServe === 1 ? 1 : 2;
       }
 
@@ -513,8 +530,8 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
 }
 
 /**
- * Category-specific endpoints for ITF (the generic scheduled-events endpoint
- * does NOT include ITF events — only ATP, WTA, Challenger, W125).
+ * Category-specific endpoints for ITF — fetched in parallel alongside
+ * the generic endpoint to ensure maximum coverage.
  */
 const SOFA_CAT_URLS: Record<string, string> = {
   "itf-men": "/api/sofa/category/785/scheduled-events",
@@ -529,7 +546,10 @@ const SOFA_SCHED_LIVE_TTL = 2_000;
 /** Fetch a single SofaScore scheduled endpoint, return raw events array */
 async function fetchSofaEndpoint(url: string): Promise<unknown[]> {
   try {
-    const res = await fetch(url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45_000); // 45s timeout
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
     if (!res.ok) return [];
     const json = await res.json();
     return json.events || [];
@@ -573,7 +593,7 @@ async function fetchSofaScheduled(
       if (m) matches.push(m);
     }
     _sofaSchedCache[targetDate] = { data: matches, ts: Date.now() };
-    console.log(`[sofascore] ${targetDate}: ${matches.length} ITF/Chal/W125 singles (generic=${genericEvents.length}, itfM=${itfMenEvents.length}, itfW=${itfWomenEvents.length})`);
+    console.log(`[sofascore] ${targetDate}: ${matches.length} singles (generic=${genericEvents.length}, itfM=${itfMenEvents.length}, itfW=${itfWomenEvents.length}, deduped from ${allEvents.length})`);
     return matches;
   } catch (e) {
     console.warn("[sofascore] scheduled fetch failed", e);
@@ -594,7 +614,16 @@ export function kellyFraction(trueProb: number, odds: number): number {
   return Math.max(0, f);
 }
 
+/** Top-level schedule cache — returns cached data while a refresh is in-flight */
+let _scheduleCache: { data: ScheduleData; ts: number } | null = null;
+const SCHEDULE_CACHE_TTL = 20_000; // 20s TTL for schedule data
+
 export async function fetchScheduleClient(): Promise<ScheduleData> {
+  // Return cached data if fresh enough
+  if (_scheduleCache && Date.now() - _scheduleCache.ts < SCHEDULE_CACHE_TTL) {
+    return _scheduleCache.data;
+  }
+
   const now = new Date();
   const tom = new Date(now);
   tom.setDate(tom.getDate() + 1);
@@ -619,10 +648,33 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
     return d !== 0 ? d : (a.start_timestamp || 9e9) - (b.start_timestamp || 9e9);
   };
 
-  const today = [...at, ...wt, ...sofaToday].sort(sort);
-  const tomorrow = [...ato, ...wto, ...sofaTomorrow].sort(sort);
+  // Deduplicate: ESPN matches take priority, then SofaScore fills gaps
+  const dedup = (espn: ScheduledMatch[], sofa: ScheduledMatch[]): ScheduledMatch[] => {
+    const seen = new Set<string>();
+    const out: ScheduledMatch[] = [];
+    // Add ESPN matches first (better metadata: seeds, rankings, venue)
+    for (const m of espn) {
+      const key = [normName(m.player1), normName(m.player2)].sort().join("|");
+      seen.add(key);
+      out.push(m);
+    }
+    // Add SofaScore matches that ESPN doesn't have
+    for (const m of sofa) {
+      const key = [normName(m.player1), normName(m.player2)].sort().join("|");
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(m);
+      }
+    }
+    return out;
+  };
 
-  return { today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr, fetched_at: Date.now() };
+  const today = dedup([...at, ...wt], sofaToday).sort(sort);
+  const tomorrow = dedup([...ato, ...wto], sofaTomorrow).sort(sort);
+
+  const result: ScheduleData = { today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr, fetched_at: Date.now() };
+  _scheduleCache = { data: result, ts: Date.now() };
+  return result;
 }
 
 /** Fetch fresh live score for a single match by re-querying today's scoreboard */
@@ -642,19 +694,101 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
         fetchSofaLive(),
         fetchSofaOdds(match.liveScore.sofaId).catch(() => null),
       ]);
-      if (stats) match.liveScore.stats = stats;
-      if (odds) match.liveScore.bookmakerOdds = odds;
       const sofaMatch = sofaEvents.find(se => se.id === match.liveScore!.sofaId);
       if (sofaMatch) {
         const p1IsHome = matchNames(match.player1, sofaMatch.homeTeam.name);
-        const hPt = sofaMatch.homeScore.point;
-        const aPt = sofaMatch.awayScore.point;
-        if (hPt !== undefined && aPt !== undefined) {
+        const homeScore = sofaMatch.homeScore;
+        const awayScore = sofaMatch.awayScore;
+
+        // ── Server: live feed firstToServe is most current ──
+        if (sofaMatch.firstToServe) {
+          const serverIsHome = sofaMatch.firstToServe === 1;
+          match.liveScore.server = (serverIsHome && p1IsHome) || (!serverIsHome && !p1IsHome) ? 1 : 2;
+        }
+
+        // ── Point score ──
+        if (homeScore.point !== undefined && awayScore.point !== undefined) {
           match.liveScore.pointScore = {
-            p1: String(p1IsHome ? hPt : aPt),
-            p2: String(p1IsHome ? aPt : hPt),
+            p1: String(p1IsHome ? homeScore.point : awayScore.point),
+            p2: String(p1IsHome ? awayScore.point : homeScore.point),
           };
         }
+
+        // ── Set/game scores from live feed (more current than schedule) ──
+        const p1Sets: number[] = [];
+        const p2Sets: number[] = [];
+        for (let si = 1; si <= 5; si++) {
+          const pk = `period${si}` as keyof typeof homeScore;
+          if (homeScore[pk] !== undefined) {
+            const h = homeScore[pk] as number;
+            const a = (awayScore[pk] as number) || 0;
+            p1Sets.push(p1IsHome ? h : a);
+            p2Sets.push(p1IsHome ? a : h);
+          }
+        }
+        if (p1Sets.length) {
+          const completedSets: { p1: number; p2: number }[] = [];
+          let currentSetGames = { p1: 0, p2: 0 };
+          for (let si = 0; si < p1Sets.length; si++) {
+            const g1 = p1Sets[si];
+            const g2 = p2Sets[si];
+            if (si === p1Sets.length - 1 && !(g1 >= 6 && g1 - g2 >= 2) && !(g2 >= 6 && g2 - g1 >= 2) && !(g1 === 7 || g2 === 7)) {
+              currentSetGames = { p1: g1, p2: g2 };
+            } else {
+              completedSets.push({ p1: g1, p2: g2 });
+            }
+          }
+          match.liveScore.completedSets = completedSets;
+          match.liveScore.currentSetGames = currentSetGames;
+          match.score = { p1_sets: p1Sets, p2_sets: p2Sets };
+        }
+
+        // ── Tiebreak ──
+        const numSets = (match.liveScore.completedSets?.length || 0) + 1;
+        const tbKey = `period${numSets}TieBreak` as keyof typeof homeScore;
+        if (homeScore[tbKey] !== undefined) {
+          const hTB = homeScore[tbKey] as number;
+          const aTB = (awayScore[tbKey] as number) || 0;
+          match.liveScore.tiebreakScore = {
+            p1: p1IsHome ? hTB : aTB,
+            p2: p1IsHome ? aTB : hTB,
+          };
+        } else {
+          match.liveScore.tiebreakScore = undefined;
+        }
+
+        // ── Stats: map home/away → P1/P2 ──
+        if (stats) {
+          if (!p1IsHome) {
+            match.liveScore.stats = {
+              p1_aces: stats.p2_aces, p2_aces: stats.p1_aces,
+              p1_doubleFaults: stats.p2_doubleFaults, p2_doubleFaults: stats.p1_doubleFaults,
+              p1_firstServePercent: stats.p2_firstServePercent, p2_firstServePercent: stats.p1_firstServePercent,
+              p1_firstServeWon: stats.p2_firstServeWon, p2_firstServeWon: stats.p1_firstServeWon,
+              p1_secondServeWon: stats.p2_secondServeWon, p2_secondServeWon: stats.p1_secondServeWon,
+              p1_breakPointsConverted: stats.p2_breakPointsConverted, p2_breakPointsConverted: stats.p1_breakPointsConverted,
+              p1_totalPointsWon: stats.p2_totalPointsWon, p2_totalPointsWon: stats.p1_totalPointsWon,
+            };
+          } else {
+            match.liveScore.stats = stats;
+          }
+        }
+
+        // ── Odds: map home/away → P1/P2 ──
+        if (odds) {
+          match.liveScore.bookmakerOdds = p1IsHome
+            ? odds
+            : { p1: odds.p2, p2: odds.p1, source: odds.source };
+        }
+      } else {
+        // No live feed match found — still apply stats/odds unmapped
+        if (stats) match.liveScore.stats = stats;
+        if (odds) match.liveScore.bookmakerOdds = odds;
+      }
+
+      // ── Compute Break/Hold Signals ──
+      if (match.liveScore) {
+        attachBreakHoldSignals(match);
       }
     }
     return match;
@@ -670,6 +804,8 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
   if (match && match.status === "live" && match.liveScore) {
     // Enrich with SofaScore point-level data
     await enrichWithSofaScore(match);
+    // ── Compute Break/Hold Signals ──
+    attachBreakHoldSignals(match);
   }
   return match;
 }
@@ -872,11 +1008,12 @@ async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
     };
   }
 
-  // Server from SofaScore — firstToServe indicates who is CURRENTLY serving (1=home, 2=away)
+  // Server: firstToServe = who is CURRENTLY serving (dynamic, updates every game)
+  // 1 = home is serving, 2 = away is serving
   if (sofaMatch.firstToServe) {
-    const sofaServerIsHome = sofaMatch.firstToServe === 1;
+    const serverIsHome = sofaMatch.firstToServe === 1;
     // Map SofaScore home/away to our P1/P2
-    match.liveScore.server = (sofaServerIsHome && p1IsHome) || (!sofaServerIsHome && !p1IsHome) ? 1 : 2;
+    match.liveScore.server = (serverIsHome && p1IsHome) || (!serverIsHome && !p1IsHome) ? 1 : 2;
   }
 
   // Check for tiebreak scores
@@ -923,4 +1060,26 @@ async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
       }
     }
   } catch { /* stats are optional */ }
+}
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Break/Hold Signal Engine — attaches signals to any live match
+   ═══════════════════════════════════════════════════════════════ */
+
+function attachBreakHoldSignals(match: ScheduledMatch): void {
+  if (!match.liveScore) return;
+  const ls = match.liveScore;
+  try {
+    ls.breakHoldSignals = computeBreakHoldSignals(
+      ls.server,
+      ls.pointScore,
+      ls.currentSetGames || { p1: 0, p2: 0 },
+      ls.completedSets || [],
+      ls.stats || null,
+      ls.tiebreakScore,
+      match.best_of || 3,
+      match.p1_win_prob,
+    );
+  } catch (e) {
+    console.warn("[breakHoldEngine] computation failed:", e);
+  }
 }

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { fetchScheduleClient, probToOdds, kellyFraction } from "@/lib/scheduleService";
-import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
+import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
 import PointTracker from "@/components/PointTracker";
 
 interface Props {
@@ -17,16 +17,28 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<"edge" | "tracker">("edge");
+  const refreshingRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    // Guard: skip if a refresh is already in progress
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
     setLoading(true);
-    try { setData(await fetchScheduleClient()); } catch { /* */ }
-    finally { setLoading(false); }
+    try {
+      const result = await fetchScheduleClient();
+      console.log("[SchedulePanel] loaded:", result?.today?.length, "today,", result?.tomorrow?.length, "tomorrow");
+      setData(result);
+    } catch (err) {
+      console.error("[SchedulePanel] fetchScheduleClient FAILED:", err);
+    } finally {
+      setLoading(false);
+      refreshingRef.current = false;
+    }
   }, []);
 
   useEffect(() => {
     refresh();
-    const iv = setInterval(refresh, 15_000); // 15s — fast schedule refresh
+    const iv = setInterval(refresh, 30_000); // 30s — avoids flooding proxy
     return () => clearInterval(iv);
   }, [refresh]);
 
@@ -298,16 +310,295 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
       {m.score && (
         <Section title={m.status === "live" ? "LIVE SCORE" : "FINAL SCORE"}>
           <div className="font-mono text-[12px] text-center space-y-0.5">
-            <div className={m.score.winner === 1 ? "text-terminal-green font-bold" : "text-slate-300"}>
-              {m.player1}  {m.score.p1_sets.join("  ")}
+            <div className={`flex items-center justify-center gap-2 ${m.score.winner === 1 ? "text-terminal-green font-bold" : "text-slate-300"}`}>
+              {m.status === "live" && m.liveScore?.server === 1 && <span className="text-[8px]">🎾</span>}
+              <span className="w-[120px] text-right truncate">{m.player1}</span>
+              <span>{m.score.p1_sets.join("  ")}</span>
+              {m.status === "live" && m.liveScore?.pointScore && (
+                <span className="text-terminal-yellow font-bold w-[20px]">{m.liveScore.pointScore.p1}</span>
+              )}
             </div>
-            <div className={m.score.winner === 2 ? "text-terminal-green font-bold" : "text-slate-300"}>
-              {m.player2}  {m.score.p2_sets.join("  ")}
+            <div className={`flex items-center justify-center gap-2 ${m.score.winner === 2 ? "text-terminal-green font-bold" : "text-slate-300"}`}>
+              {m.status === "live" && m.liveScore?.server === 2 && <span className="text-[8px]">🎾</span>}
+              <span className="w-[120px] text-right truncate">{m.player2}</span>
+              <span>{m.score.p2_sets.join("  ")}</span>
+              {m.status === "live" && m.liveScore?.pointScore && (
+                <span className="text-terminal-yellow font-bold w-[20px]">{m.liveScore.pointScore.p2}</span>
+              )}
             </div>
+          </div>
+          {m.status === "live" && m.liveScore?.tiebreakScore && (
+            <div className="text-[9px] text-terminal-cyan text-center mt-1">Tiebreak: {m.liveScore.tiebreakScore.p1}-{m.liveScore.tiebreakScore.p2}</div>
+          )}
+          {m.status === "live" && m.liveScore?.statusDetail && (
+            <div className="text-[9px] text-terminal-muted text-center mt-1">{m.liveScore.statusDetail}</div>
+          )}
+        </Section>
+      )}
+
+      {/* Live match statistics */}
+      {m.status === "live" && m.liveScore?.stats && (
+        <Section title="📊 LIVE STATS">
+          <div className="grid grid-cols-3 gap-y-1 text-[10px] text-center">
+            <span className="text-terminal-muted text-left">Stat</span>
+            <span className="text-slate-300 font-bold">{m.player1.split(' ').pop()}</span>
+            <span className="text-slate-300 font-bold">{m.player2.split(' ').pop()}</span>
+
+            <span className="text-terminal-muted text-left">Aces</span>
+            <StatVal v={m.liveScore.stats.p1_aces} o={m.liveScore.stats.p2_aces} />
+            <StatVal v={m.liveScore.stats.p2_aces} o={m.liveScore.stats.p1_aces} />
+
+            <span className="text-terminal-muted text-left">Double Faults</span>
+            <StatVal v={m.liveScore.stats.p1_doubleFaults} o={m.liveScore.stats.p2_doubleFaults} lower />
+            <StatVal v={m.liveScore.stats.p2_doubleFaults} o={m.liveScore.stats.p1_doubleFaults} lower />
+
+            <span className="text-terminal-muted text-left">1st Serve %</span>
+            <StatVal v={m.liveScore.stats.p1_firstServePercent} o={m.liveScore.stats.p2_firstServePercent} pct />
+            <StatVal v={m.liveScore.stats.p2_firstServePercent} o={m.liveScore.stats.p1_firstServePercent} pct />
+
+            <span className="text-terminal-muted text-left">1st Serve Won</span>
+            <StatVal v={m.liveScore.stats.p1_firstServeWon} o={m.liveScore.stats.p2_firstServeWon} pct />
+            <StatVal v={m.liveScore.stats.p2_firstServeWon} o={m.liveScore.stats.p1_firstServeWon} pct />
+
+            <span className="text-terminal-muted text-left">2nd Serve Won</span>
+            <StatVal v={m.liveScore.stats.p1_secondServeWon} o={m.liveScore.stats.p2_secondServeWon} pct />
+            <StatVal v={m.liveScore.stats.p2_secondServeWon} o={m.liveScore.stats.p1_secondServeWon} pct />
+
+            <span className="text-terminal-muted text-left">Break Points</span>
+            <span className="text-slate-200 font-mono">{m.liveScore.stats.p1_breakPointsConverted}</span>
+            <span className="text-slate-200 font-mono">{m.liveScore.stats.p2_breakPointsConverted}</span>
+
+            <span className="text-terminal-muted text-left">Points Won</span>
+            <StatVal v={m.liveScore.stats.p1_totalPointsWon} o={m.liveScore.stats.p2_totalPointsWon} />
+            <StatVal v={m.liveScore.stats.p2_totalPointsWon} o={m.liveScore.stats.p1_totalPointsWon} />
+          </div>
+          {(() => {
+            const s = m.liveScore!.stats!;
+            const tot = (s.p1_totalPointsWon + s.p2_totalPointsWon) || 1;
+            const dominance = s.p1_totalPointsWon / tot;
+            const srvGap = s.p1_firstServePercent - s.p2_firstServePercent;
+            return (
+              <div className="mt-2 pt-2 border-t border-terminal-border space-y-1">
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-terminal-muted">Point Dominance</span>
+                  <span className={dominance > 0.52 ? "text-terminal-green font-bold" : dominance < 0.48 ? "text-terminal-red font-bold" : "text-slate-300"}>
+                    {Math.round(dominance * 100)}% - {Math.round((1 - dominance) * 100)}%
+                  </span>
+                </div>
+                <div className="h-1.5 bg-terminal-border rounded-full overflow-hidden">
+                  <div className="h-full bg-terminal-green rounded-full" style={{ width: `${dominance * 100}%` }} />
+                </div>
+                {Math.abs(srvGap) > 10 && (
+                  <div className="text-[9px] text-terminal-yellow">
+                    ⚡ {srvGap > 0 ? m.player1.split(' ').pop() : m.player2.split(' ').pop()} serve dominance (+{Math.abs(Math.round(srvGap))}% 1st serve)
+                  </div>
+                )}
+                {(s.p1_doubleFaults >= 4 || s.p2_doubleFaults >= 4) && (
+                  <div className="text-[9px] text-terminal-red">
+                    ⚠ {s.p1_doubleFaults >= s.p2_doubleFaults ? m.player1.split(' ').pop() : m.player2.split(' ').pop()} DF crisis ({Math.max(s.p1_doubleFaults, s.p2_doubleFaults)} DFs)
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </Section>
+      )}
+
+      {/* ═══ BREAK/HOLD SIGNAL ENGINE ═══ */}
+      {m.status === "live" && m.liveScore?.breakHoldSignals && (
+        <BreakHoldPanel signals={m.liveScore.breakHoldSignals} m={m} />
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   BREAK/HOLD SIGNAL PANEL — Industry-grade serve analysis
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function BreakHoldPanel({ signals: bh, m }: { signals: BreakHoldSignals; m: ScheduledMatch }) {
+  const srvName = bh.server === 1 ? m.player1.split(" ").pop() : m.player2.split(" ").pop();
+  const retName = bh.server === 1 ? m.player2.split(" ").pop() : m.player1.split(" ").pop();
+
+  const dangerColors: Record<string, string> = {
+    SAFE: "text-terminal-green",
+    ALERT: "text-terminal-cyan",
+    WARNING: "text-terminal-yellow",
+    DANGER: "text-orange-400",
+    CRITICAL: "text-terminal-red",
+  };
+  const dangerBg: Record<string, string> = {
+    SAFE: "bg-terminal-green/10 border-terminal-green/30",
+    ALERT: "bg-terminal-cyan/10 border-terminal-cyan/30",
+    WARNING: "bg-terminal-yellow/10 border-terminal-yellow/30",
+    DANGER: "bg-orange-400/10 border-orange-400/30",
+    CRITICAL: "bg-terminal-red/10 border-terminal-red/30",
+  };
+  const dangerEmoji: Record<string, string> = {
+    SAFE: "🟢", ALERT: "🔵", WARNING: "🟡", DANGER: "🟠", CRITICAL: "🔴",
+  };
+
+  const serTierColors: Record<string, string> = {
+    ELITE: "text-terminal-green", STRONG: "text-terminal-cyan",
+    AVERAGE: "text-slate-300", WEAK: "text-terminal-yellow", CRISIS: "text-terminal-red",
+  };
+  const rpiTierColors: Record<string, string> = {
+    DOMINANT: "text-terminal-red", AGGRESSIVE: "text-orange-400",
+    NEUTRAL: "text-slate-300", PASSIVE: "text-terminal-cyan", ABSENT: "text-terminal-green",
+  };
+
+  return (
+    <>
+      {/* Primary Signal Banner */}
+      <div className={`p-2 rounded border ${dangerBg[bh.dangerLevel] || dangerBg.SAFE}`}>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm">{bh.primarySignal.emoji}</span>
+          <span className={`text-[11px] font-bold flex-1 ${dangerColors[bh.dangerLevel]}`}>
+            {bh.primarySignal.label}
+          </span>
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${dangerBg[bh.dangerLevel]}`}>
+            {dangerEmoji[bh.dangerLevel]} {bh.dangerLevel}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-[9px] text-terminal-muted">
+          <span>Phase: <b className="text-slate-300">{bh.gamePhase.replace(/_/g, " ")}</b></span>
+          <span>Server: <b className="text-slate-300">{srvName}</b> 🎾</span>
+          {bh.pointsToBreakPoint === 0 && <span className="text-terminal-red font-bold">● BREAK POINT</span>}
+          {bh.pointsToBreakPoint > 0 && bh.pointsToBreakPoint <= 2 && (
+            <span className="text-terminal-yellow">{bh.pointsToBreakPoint}pt to BP</span>
+          )}
+        </div>
+      </div>
+
+      {/* Hold / Break Probability Gauges */}
+      <Section title="🎯 HOLD / BREAK PROBABILITY">
+        <div className="space-y-2">
+          {/* Hold gauge */}
+          <div>
+            <div className="flex items-center justify-between text-[10px] mb-0.5">
+              <span className="text-terminal-muted">🛡 {srvName} Hold</span>
+              <span className={`font-bold font-mono ${bh.holdProb > 0.75 ? "text-terminal-green" : bh.holdProb > 0.55 ? "text-terminal-yellow" : "text-terminal-red"}`}>
+                {Math.round(bh.holdProb * 100)}%
+              </span>
+            </div>
+            <div className="h-2.5 bg-terminal-border rounded-full overflow-hidden relative">
+              <div className={`h-full rounded-full transition-all ${bh.holdProb > 0.75 ? "bg-terminal-green" : bh.holdProb > 0.55 ? "bg-terminal-yellow" : "bg-terminal-red"}`}
+                style={{ width: `${bh.holdProb * 100}%` }} />
+              {/* Tour average marker */}
+              <div className="absolute top-0 h-full w-px bg-slate-400" style={{ left: "82%" }} title="Tour avg hold: 82%" />
+            </div>
+          </div>
+          {/* Break gauge */}
+          <div>
+            <div className="flex items-center justify-between text-[10px] mb-0.5">
+              <span className="text-terminal-muted">⚔️ {retName} Break</span>
+              <span className={`font-bold font-mono ${bh.breakProb > 0.40 ? "text-terminal-red" : bh.breakProb > 0.25 ? "text-terminal-yellow" : "text-terminal-green"}`}>
+                {Math.round(bh.breakProb * 100)}%
+              </span>
+            </div>
+            <div className="h-2.5 bg-terminal-border rounded-full overflow-hidden relative">
+              <div className={`h-full rounded-full transition-all ${bh.breakProb > 0.40 ? "bg-terminal-red" : bh.breakProb > 0.25 ? "bg-terminal-yellow" : "bg-terminal-green/50"}`}
+                style={{ width: `${bh.breakProb * 100}%` }} />
+              <div className="absolute top-0 h-full w-px bg-slate-400" style={{ left: "18%" }} title="Tour avg break: 18%" />
+            </div>
+          </div>
+          {/* Pressure bar */}
+          <div className="flex items-center gap-2 text-[9px]">
+            <span className="text-terminal-muted shrink-0">Pressure</span>
+            <div className="flex-1 h-1.5 bg-terminal-border rounded-full overflow-hidden">
+              <div className={`h-full rounded-full ${bh.serverPressure > 60 ? "bg-terminal-red" : bh.serverPressure > 35 ? "bg-terminal-yellow" : "bg-terminal-green"}`}
+                style={{ width: `${bh.serverPressure}%` }} />
+            </div>
+            <span className={`font-mono ${bh.serverPressure > 60 ? "text-terminal-red" : bh.serverPressure > 35 ? "text-terminal-yellow" : "text-terminal-green"}`}>
+              {Math.round(bh.serverPressure)}
+            </span>
+          </div>
+        </div>
+      </Section>
+
+      {/* Serve Efficiency Rating */}
+      <Section title="📡 SERVE EFFICIENCY RATING (SER)">
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-terminal-muted">{srvName}</span>
+            <span className={`text-[11px] font-bold font-mono ${serTierColors[bh.serverSERTier]}`}>
+              {bh.serverSER}/100
+            </span>
+          </div>
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+            bh.serverSERTier === "ELITE" ? "bg-terminal-green/15 text-terminal-green" :
+            bh.serverSERTier === "STRONG" ? "bg-terminal-cyan/15 text-terminal-cyan" :
+            bh.serverSERTier === "CRISIS" ? "bg-terminal-red/15 text-terminal-red" :
+            bh.serverSERTier === "WEAK" ? "bg-terminal-yellow/15 text-terminal-yellow" :
+            "bg-slate-700/50 text-slate-300"
+          }`}>
+            {bh.serverSERTier}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[9px]">
+          <KV label="1st Serve In" value={`${bh.serveBreakdown.firstServeIn}%`} color={bh.serveBreakdown.firstServeIn >= 60 ? "green" : bh.serveBreakdown.firstServeIn < 50 ? "red" : undefined} />
+          <KV label="1st Serve Won" value={`${bh.serveBreakdown.firstServeWon}%`} color={bh.serveBreakdown.firstServeWon >= 70 ? "green" : bh.serveBreakdown.firstServeWon < 60 ? "red" : undefined} />
+          <KV label="2nd Serve Won" value={`${bh.serveBreakdown.secondServeWon}%`} color={bh.serveBreakdown.secondServeWon >= 50 ? "green" : bh.serveBreakdown.secondServeWon < 40 ? "red" : undefined} />
+          <KV label="DF/Game" value={bh.serveBreakdown.doubleFaultRate.toFixed(1)} color={bh.serveBreakdown.doubleFaultRate > 0.8 ? "red" : bh.serveBreakdown.doubleFaultRate < 0.3 ? "green" : undefined} />
+          <KV label="Ace/Game" value={bh.serveBreakdown.aceRate.toFixed(1)} color={bh.serveBreakdown.aceRate > 1 ? "green" : undefined} />
+          <KV label="Serve Trend" value={bh.serveTrend > 0 ? `↑ +${(bh.serveTrend * 100).toFixed(0)}%` : `↓ ${(bh.serveTrend * 100).toFixed(0)}%`}
+            color={bh.serveTrend > 0.05 ? "green" : bh.serveTrend < -0.05 ? "red" : "muted"} />
+        </div>
+      </Section>
+
+      {/* Return Pressure Index */}
+      <Section title="🎯 RETURN PRESSURE INDEX (RPI)">
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-terminal-muted">{retName}</span>
+            <span className={`text-[11px] font-bold font-mono ${rpiTierColors[bh.returnerRPITier]}`}>
+              {bh.returnerRPI}/100
+            </span>
+          </div>
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+            bh.returnerRPITier === "DOMINANT" ? "bg-terminal-red/15 text-terminal-red" :
+            bh.returnerRPITier === "AGGRESSIVE" ? "bg-orange-400/15 text-orange-400" :
+            bh.returnerRPITier === "ABSENT" ? "bg-terminal-green/15 text-terminal-green" :
+            bh.returnerRPITier === "PASSIVE" ? "bg-terminal-cyan/15 text-terminal-cyan" :
+            "bg-slate-700/50 text-slate-300"
+          }`}>
+            {bh.returnerRPITier}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[9px]">
+          <KV label="Ret Pts Won" value={`${bh.returnBreakdown.returnPointsWon}%`} color={bh.returnBreakdown.returnPointsWon >= 42 ? "red" : bh.returnBreakdown.returnPointsWon < 30 ? "green" : undefined} />
+          <KV label="BP Conversion" value={`${bh.returnBreakdown.breakPointConversion}%`} color={bh.returnBreakdown.breakPointConversion >= 50 ? "red" : bh.returnBreakdown.breakPointConversion < 30 ? "green" : undefined} />
+          <KV label="2nd Srv Return" value={`${bh.returnBreakdown.secondServeReturnWon}%`} color={bh.returnBreakdown.secondServeReturnWon >= 55 ? "red" : undefined} />
+          <KV label="Return Trend" value={bh.returnTrend > 0 ? `↑ +${(bh.returnTrend * 100).toFixed(0)}%` : `↓ ${(bh.returnTrend * 100).toFixed(0)}%`}
+            color={bh.returnTrend > 0.05 ? "red" : bh.returnTrend < -0.05 ? "green" : "muted"} />
+        </div>
+      </Section>
+
+      {/* Active Signals */}
+      {bh.signals.length > 0 && (
+        <Section title="⚡ LIVE TRADE SIGNALS">
+          <div className="space-y-1">
+            {bh.signals.slice(0, 6).map((sig, i) => (
+              <div key={i} className={`flex items-center gap-2 p-1.5 rounded text-[10px] ${
+                sig.actionable ? "bg-terminal-yellow/5 border border-terminal-yellow/20" : "bg-terminal-panel/30 border border-terminal-border"
+              }`}>
+                <span className="text-sm shrink-0">{sig.emoji}</span>
+                <span className={`flex-1 ${sig.actionable ? "text-slate-200 font-medium" : "text-terminal-muted"}`}>
+                  {sig.label}
+                </span>
+                <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
+                  sig.strength >= 70 ? "bg-terminal-red/20 text-terminal-red" :
+                  sig.strength >= 40 ? "bg-terminal-yellow/20 text-terminal-yellow" :
+                  "bg-terminal-panel text-terminal-muted"
+                }`}>
+                  {sig.strength}
+                </span>
+              </div>
+            ))}
           </div>
         </Section>
       )}
-    </div>
+    </>
   );
 }
 
@@ -356,6 +647,7 @@ function MatchRow({ m, active, onClick }: { m: ScheduledMatch; active: boolean; 
   const known = m.prob_method !== "unknown";
   const live = m.status === "live";
   const fin = m.status === "finished";
+  const bh = m.liveScore?.breakHoldSignals;
 
   return (
     <button onClick={onClick} className={`w-full text-left px-3 py-2 border-b border-terminal-border transition ${
@@ -380,22 +672,51 @@ function MatchRow({ m, active, onClick }: { m: ScheduledMatch; active: boolean; 
         {/* Players */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1">
-            {fav1 && known && <span className="text-[7px] text-terminal-green">▶</span>}
+            {live && m.liveScore?.server === 1 && <span className="text-[7px] text-terminal-green">🎾</span>}
+            {!live && fav1 && known && <span className="text-[7px] text-terminal-green">▶</span>}
             {m.score?.winner === 1 && <span className="text-[7px] text-terminal-green">✓</span>}
             <span className={`text-[11px] truncate ${fav1 && known ? "text-slate-100 font-medium" : "text-slate-300"}`}>{m.player1}</span>
             {m.p1_rank > 0 && <span className="text-[8px] text-terminal-muted shrink-0">#{m.p1_rank}</span>}
             {m.p1_seed > 0 && <span className="text-[8px] text-terminal-cyan/70 shrink-0">[{m.p1_seed}]</span>}
             {m.score && <span className="text-[9px] text-terminal-muted ml-auto shrink-0 font-mono">{m.score.p1_sets.join(" ")}</span>}
+            {live && m.liveScore?.pointScore && <span className="text-[9px] text-terminal-yellow font-bold shrink-0 font-mono w-[18px] text-right">{m.liveScore.pointScore.p1}</span>}
           </div>
           <div className="flex items-center gap-1 mt-0.5">
-            {!fav1 && known && <span className="text-[7px] text-terminal-green">▶</span>}
+            {live && m.liveScore?.server === 2 && <span className="text-[7px] text-terminal-green">🎾</span>}
+            {!live && !fav1 && known && <span className="text-[7px] text-terminal-green">▶</span>}
             {m.score?.winner === 2 && <span className="text-[7px] text-terminal-green">✓</span>}
             <span className={`text-[11px] truncate ${!fav1 && known ? "text-slate-100 font-medium" : "text-slate-300"}`}>{m.player2}</span>
             {m.p2_rank > 0 && <span className="text-[8px] text-terminal-muted shrink-0">#{m.p2_rank}</span>}
             {m.p2_seed > 0 && <span className="text-[8px] text-terminal-cyan/70 shrink-0">[{m.p2_seed}]</span>}
             {m.score && <span className="text-[9px] text-terminal-muted ml-auto shrink-0 font-mono">{m.score.p2_sets.join(" ")}</span>}
+            {live && m.liveScore?.pointScore && <span className="text-[9px] text-terminal-yellow font-bold shrink-0 font-mono w-[18px] text-right">{m.liveScore.pointScore.p2}</span>}
           </div>
         </div>
+
+        {/* Break/Hold badges */}
+        {live && bh && (
+          <div className="w-[40px] shrink-0 flex flex-col items-center gap-0.5">
+            {bh.isBreakPoint && (
+              <span className="text-[7px] font-bold px-1 py-0 rounded bg-terminal-red/20 text-terminal-red animate-pulse">BP!</span>
+            )}
+            {!bh.isBreakPoint && bh.dangerLevel === "CRITICAL" && (
+              <span className="text-[7px] font-bold px-1 py-0 rounded bg-orange-400/20 text-orange-400">⚠</span>
+            )}
+            {!bh.isBreakPoint && bh.dangerLevel === "DANGER" && (
+              <span className="text-[7px] font-bold px-1 py-0 rounded bg-terminal-yellow/20 text-terminal-yellow">⚡</span>
+            )}
+            {bh.holdProb > 0.85 && bh.dangerLevel === "SAFE" && (
+              <span className="text-[7px] font-bold px-1 py-0 rounded bg-terminal-green/20 text-terminal-green">🛡</span>
+            )}
+            <span className={`text-[7px] font-mono ${
+              bh.breakProb > 0.40 ? "text-terminal-red" :
+              bh.breakProb > 0.25 ? "text-terminal-yellow" :
+              "text-terminal-muted"
+            }`}>
+              {Math.round(bh.breakProb * 100)}%
+            </span>
+          </div>
+        )}
 
         {/* Prob column */}
         {known && (
@@ -431,6 +752,14 @@ function KV({ label, value, color }: { label: string; value: string; color?: str
       <span className={`font-mono ${c}`}>{value}</span>
     </div>
   );
+}
+
+/** Stat value cell — highlights who has the better stat (green = better, red = worse) */
+function StatVal({ v, o, lower, pct: isPct }: { v: number; o: number; lower?: boolean; pct?: boolean }) {
+  const better = lower ? v < o : v > o;
+  const worse = lower ? v > o : v < o;
+  const color = better ? "text-terminal-green font-bold" : worse ? "text-terminal-red" : "text-slate-200";
+  return <span className={`font-mono ${color}`}>{v}{isPct ? "%" : ""}</span>;
 }
 
 function Pill({ active, onClick, children, color }: {
