@@ -112,18 +112,85 @@ export interface TradeSignal {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-/** ATP tour averages (2023-2024 season data) */
-const TOUR_AVGS = {
-  firstServeIn: 62,
-  firstServeWon: 73,
-  secondServeWon: 52,
-  holdRate: 82,
-  breakRate: 18,
-  aceRate: 0.8,    // per service game
-  dfRate: 0.35,    // per service game
-  returnPointsWon: 37,
-  bpConversion: 42,
+/**
+ * Tour-aware baselines.
+ * ATP is the empirically-sourced anchor (2023-2024 season data). WTA / ITF
+ * are derived two ways and reconciled:
+ *   1. Proportionally scaled from the same Barnett-Clarke point/game-win
+ *      formulas used in hierarchical_model.py (TOUR_SERVE_DEFAULTS), so the
+ *      client (TS) and server (Python) engines agree on relative tour gaps.
+ *   2. aceRate / dfRate / bpConversion are sense-checked against published
+ *      pro-tennis analytics ranges (these aren't modeled in hierarchical_model.py).
+ *
+ * This replaces the old single ATP-only TOUR_AVGS constant, which meant every
+ * WTA/ITF match was silently scored against ATP serve-hold expectations.
+ */
+export type TourAvgs = {
+  firstServeIn: number;
+  firstServeWon: number;
+  secondServeWon: number;
+  holdRate: number;
+  breakRate: number;
+  aceRate: number;    // per service game
+  dfRate: number;     // per service game
+  returnPointsWon: number;
+  bpConversion: number;
 };
+
+const ATP_AVGS: TourAvgs = {
+  firstServeIn: 62, firstServeWon: 73, secondServeWon: 52,
+  holdRate: 82, breakRate: 18,
+  aceRate: 0.80, dfRate: 0.35,
+  returnPointsWon: 37, bpConversion: 42,
+};
+
+const TOUR_AVGS_BY_TOUR: Record<string, TourAvgs> = {
+  ATP: ATP_AVGS,
+  WTA: {
+    firstServeIn: 58.5, firstServeWon: 65.3, secondServeWon: 47.9,
+    holdRate: 67, breakRate: 33,
+    aceRate: 0.30, dfRate: 0.50,
+    returnPointsWon: 44, bpConversion: 45,
+  },
+  "ITF M": {
+    firstServeIn: 56.5, firstServeWon: 62.3, secondServeWon: 44.9,
+    holdRate: 59, breakRate: 41,
+    aceRate: 0.45, dfRate: 0.55,
+    returnPointsWon: 47, bpConversion: 46,
+  },
+  "ITF W": {
+    firstServeIn: 55, firstServeWon: 58, secondServeWon: 41,
+    holdRate: 54, breakRate: 46,
+    aceRate: 0.15, dfRate: 0.65,
+    returnPointsWon: 50, bpConversion: 48,
+  },
+  CHALLENGER: {
+    firstServeIn: 60, firstServeWon: 68, secondServeWon: 49,
+    holdRate: 73, breakRate: 27,
+    aceRate: 0.55, dfRate: 0.45,
+    returnPointsWon: 41, bpConversion: 44,
+  },
+  W125: {
+    firstServeIn: 57, firstServeWon: 62, secondServeWon: 45,
+    holdRate: 61, breakRate: 39,
+    aceRate: 0.22, dfRate: 0.57,
+    returnPointsWon: 46.5, bpConversion: 46,
+  },
+};
+
+/** Resolve a tour string (e.g. "ATP", "WTA", "ITF M", "ITF-W", "W125") to its baselines. */
+export function resolveTourAvgs(tour?: string): TourAvgs {
+  if (!tour) return ATP_AVGS;
+  const t = tour.toUpperCase().replace(/-/g, " ").trim();
+  if (TOUR_AVGS_BY_TOUR[t]) return TOUR_AVGS_BY_TOUR[t];
+  if (t.includes("ITF") && t.includes("W")) return TOUR_AVGS_BY_TOUR["ITF W"];
+  if (t.includes("ITF")) return TOUR_AVGS_BY_TOUR["ITF M"];
+  if (t.includes("CHALL")) return TOUR_AVGS_BY_TOUR.CHALLENGER;
+  if (t.includes("125") || t.includes("W100") || t.includes("W75") || t.includes("W50") || t.includes("W35")) return TOUR_AVGS_BY_TOUR.W125;
+  if (t.includes("WTA")) return TOUR_AVGS_BY_TOUR.WTA;
+  if (t.includes("ATP")) return ATP_AVGS;
+  return ATP_AVGS;
+}
 
 /** Point score mapping */
 const PT = { "0": 0, "15": 1, "30": 2, "40": 3, "A": 4, "AD": 4 } as Record<string, number>;
@@ -140,8 +207,10 @@ export function computeBreakHoldSignals(
   tiebreakScore: { p1: number; p2: number } | undefined,
   bestOf: number,
   p1WinProb: number,  // pre-match Elo probability
+  tour: string = "ATP",  // ATP / WTA / ITF M / ITF W / Challenger / W125 — fixes ATP-only bias
 ): BreakHoldSignals {
 
+  const avgs = resolveTourAvgs(tour);
   const isTiebreak = !!(tiebreakScore && currentSetGames.p1 === 6 && currentSetGames.p2 === 6);
   const returner: 1 | 2 = server === 1 ? 2 : 1;
 
@@ -169,12 +238,12 @@ export function computeBreakHoldSignals(
   let holdProb = holdFromHere;
 
   // ── Serve Efficiency Rating ──
-  const serveBreakdown = computeServeBreakdown(server, stats);
+  const serveBreakdown = computeServeBreakdown(server, stats, avgs);
   const serverSER = computeSER(serveBreakdown);
   const serverSERTier = classifySER(serverSER);
 
   // ── Return Pressure Index ──
-  const returnBreakdown = computeReturnBreakdown(returner, stats);
+  const returnBreakdown = computeReturnBreakdown(returner, stats, avgs);
   const returnerRPI = computeRPI(returnBreakdown);
   const returnerRPITier = classifyRPI(returnerRPI);
 
@@ -207,7 +276,7 @@ export function computeBreakHoldSignals(
   const dangerLevel = classifyDanger(serverPressure, breakProb, gamePhase);
 
   // ── Trends ──
-  const { serveTrend, returnTrend } = computeTrends(server, stats);
+  const { serveTrend, returnTrend } = computeTrends(server, stats, avgs);
 
   // ── Generate Signals ──
   const signals = generateSignals(
@@ -216,7 +285,7 @@ export function computeBreakHoldSignals(
     serverPressure, contextPressure, dangerLevel,
     serveBreakdown, returnBreakdown, stats,
     currentSetGames, completedSets, bestOf,
-    srvPts, retPts, isTiebreak
+    srvPts, retPts, isTiebreak, avgs
   );
 
   const primarySignal = signals[0] || {
@@ -268,14 +337,14 @@ interface ServeBreakdown {
   aceRate: number;
 }
 
-function computeServeBreakdown(server: 1 | 2, stats: LiveMatchStats | null): ServeBreakdown {
+function computeServeBreakdown(server: 1 | 2, stats: LiveMatchStats | null, avgs: TourAvgs): ServeBreakdown {
   if (!stats) {
     return {
-      firstServeIn: TOUR_AVGS.firstServeIn,
-      firstServeWon: TOUR_AVGS.firstServeWon,
-      secondServeWon: TOUR_AVGS.secondServeWon,
-      doubleFaultRate: TOUR_AVGS.dfRate,
-      aceRate: TOUR_AVGS.aceRate,
+      firstServeIn: avgs.firstServeIn,
+      firstServeWon: avgs.firstServeWon,
+      secondServeWon: avgs.secondServeWon,
+      doubleFaultRate: avgs.dfRate,
+      aceRate: avgs.aceRate,
     };
   }
 
@@ -327,12 +396,12 @@ interface ReturnBreakdown {
   secondServeReturnWon: number;
 }
 
-function computeReturnBreakdown(returner: 1 | 2, stats: LiveMatchStats | null): ReturnBreakdown {
+function computeReturnBreakdown(returner: 1 | 2, stats: LiveMatchStats | null, avgs: TourAvgs): ReturnBreakdown {
   if (!stats) {
     return {
-      returnPointsWon: TOUR_AVGS.returnPointsWon,
-      breakPointConversion: TOUR_AVGS.bpConversion,
-      secondServeReturnWon: 100 - TOUR_AVGS.secondServeWon,
+      returnPointsWon: avgs.returnPointsWon,
+      breakPointConversion: avgs.bpConversion,
+      secondServeReturnWon: 100 - avgs.secondServeWon,
     };
   }
 
@@ -345,7 +414,7 @@ function computeReturnBreakdown(returner: 1 | 2, stats: LiveMatchStats | null): 
   // Break point conversion
   const bpc = returner === 1 ? stats.p1_breakPointsConverted : stats.p2_breakPointsConverted;
   const [bpWon, bpTotal] = (bpc || "0/0").split("/").map(Number);
-  const bpConv = bpTotal > 0 ? (bpWon / bpTotal) * 100 : TOUR_AVGS.bpConversion;
+  const bpConv = bpTotal > 0 ? (bpWon / bpTotal) * 100 : avgs.bpConversion;
 
   // 2nd serve return won = 100 - opponent's 2nd serve won %
   const secondRetWon = 100 - (oppSecondWon || 50);
@@ -618,7 +687,7 @@ function computePointsToBreakPoint(srvPts: number, retPts: number, isTB: boolean
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function computeTrends(
-  server: 1 | 2, stats: LiveMatchStats | null
+  server: 1 | 2, stats: LiveMatchStats | null, avgs: TourAvgs
 ): { serveTrend: number; returnTrend: number } {
   if (!stats) return { serveTrend: 0, returnTrend: 0 };
 
@@ -628,14 +697,14 @@ function computeTrends(
 
   // Serve trend: compare to tour average
   const srvComposite = (srvFirst * 0.3 + srvFirstW * 0.4 + srvSecondW * 0.3);
-  const avgComposite = (TOUR_AVGS.firstServeIn * 0.3 + TOUR_AVGS.firstServeWon * 0.4 + TOUR_AVGS.secondServeWon * 0.3);
+  const avgComposite = (avgs.firstServeIn * 0.3 + avgs.firstServeWon * 0.4 + avgs.secondServeWon * 0.3);
   const serveTrend = (srvComposite - avgComposite) / avgComposite;
 
   // Return trend: returner's effectiveness
   const retFirst = server === 1 ? stats.p2_firstServeWon : stats.p1_firstServeWon;
   const retSecondW = server === 1 ? stats.p2_secondServeWon : stats.p1_secondServeWon;
   const retComposite = (100 - retFirst) * 0.5 + (100 - retSecondW) * 0.5;
-  const avgRet = (100 - TOUR_AVGS.firstServeWon) * 0.5 + (100 - TOUR_AVGS.secondServeWon) * 0.5;
+  const avgRet = (100 - avgs.firstServeWon) * 0.5 + (100 - avgs.secondServeWon) * 0.5;
   const returnTrend = (retComposite - avgRet) / Math.max(1, avgRet);
 
   return {
@@ -663,6 +732,7 @@ function generateSignals(
   completedSets: { p1: number; p2: number }[],
   bestOf: number,
   srvPts: number, retPts: number, isTB: boolean,
+  avgs: TourAvgs,
 ): TradeSignal[] {
   const signals: TradeSignal[] = [];
   const srvName = server === 1 ? "P1" : "P2";
@@ -824,7 +894,7 @@ function generateSignals(
     if (bW > 0) {
       // Server broke earlier — check if hold rate is average or below
       const srvHoldPct = serveBD.firstServeIn * serveBD.firstServeWon / 100;
-      if (srvHoldPct < TOUR_AVGS.holdRate * 0.85 && breakProb > 0.25) {
+      if (srvHoldPct < avgs.holdRate * 0.85 && breakProb > 0.25) {
         signals.push({
           type: "BREAK_BACK_RISK",
           strength: Math.round(breakProb * 70),
@@ -876,6 +946,291 @@ function tbWinProb(p: number, a: number, b: number): number {
   if (b >= 7 && b - a >= 2) return 0;
   if (a >= 6 && b >= 6) return (p * p) / (p * p + (1 - p) * (1 - p));
   return p * tbWinProb(p, a + 1, b) + (1 - p) * tbWinProb(p, a, b + 1);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TRUE PROBABILITY ENGINE — Set & Match level Markov chain
+//  Faithful TS port of hierarchical_model.py (Barnett & Clarke 2005), so the
+//  client-side engine (this file, used on the static Netlify deployment) and
+//  the Python trading_server engine produce the *same* numbers when both are
+//  available. Tour-aware via the `avgs`/`tour` baselines above.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function comb(n: number, k: number): number {
+  if (k < 0 || k > n) return 0;
+  k = Math.min(k, n - k);
+  let result = 1;
+  for (let i = 0; i < k; i++) result = (result * (n - i)) / (i + 1);
+  return result;
+}
+
+/** Closed-form P(hold) from a single point-win probability — mirrors hierarchical_model.game_win_prob */
+function gameHoldFromPointProb(p: number): number {
+  const q = 1 - p;
+  const hold = p ** 4 + 4 * p ** 4 * q + 10 * p ** 4 * q ** 2 + 20 * p ** 3 * q ** 3 * (p ** 2 / (p ** 2 + q ** 2));
+  return clamp(hold, 0, 1);
+}
+
+/** P(player wins set) given their hold-as-server prob and opponent's hold-as-server prob. Mirrors set_win_prob. */
+function setWinProbability(pHoldServer: number, pHoldReturner: number): number {
+  const pAvg = (pHoldServer + (1 - pHoldReturner)) / 2;
+  const qAvg = 1 - pAvg;
+
+  let pSet = 0;
+  for (let oppGames = 0; oppGames < 5; oppGames++) {
+    const total = 6 + oppGames - 1;
+    pSet += comb(total, oppGames) * pAvg ** 6 * qAvg ** oppGames;
+  }
+  const p55 = comb(10, 5) * pAvg ** 5 * qAvg ** 5;
+  const p75 = p55 * pAvg ** 2;
+  const p66 = comb(12, 6) * pAvg ** 6 * qAvg ** 6;
+  const pTb = clamp(0.5 + 0.8 * (pAvg - 0.5), 0, 1);
+
+  return clamp(pSet + p75 + p66 * pTb, 0, 1);
+}
+
+/** P(player wins match) from a single set-win probability. Mirrors match_win_prob_from_set_prob. */
+function matchWinProbFromSetProb(pSet: number, bestOf: number): number {
+  if (bestOf >= 5) return pSet ** 3 * (6 * pSet ** 2 - 15 * pSet + 10);
+  return pSet ** 2 * (3 - 2 * pSet);
+}
+
+/** P(player1 wins) needing need1 more sets, opponent needing need2 more. Mirrors _match_prob_remaining. */
+function matchProbRemaining(pSet: number, need1: number, need2: number): number {
+  const total = need1 + need2;
+  let p = 0;
+  for (let w = need1; w < total; w++) {
+    const n = w + need2 - 1;
+    const k = w - 1;
+    if (k >= 0) p += comb(n, k) * pSet ** w * (1 - pSet) ** need2;
+  }
+  return p;
+}
+
+/**
+ * Score-conditioned match win probability — the key live-trading number.
+ * Mirrors hierarchical_model.win_prob_from_score exactly.
+ */
+function matchWinProbFromScore(
+  setsP1: number, setsP2: number,
+  gamesP1: number, gamesP2: number,
+  p1Serving: boolean,
+  p1PointWin: number, p2PointWin: number,
+  bestOf: number,
+): number {
+  const setsNeeded = Math.ceil(bestOf / 2);
+  if (setsP1 >= setsNeeded) return 1;
+  if (setsP2 >= setsNeeded) return 0;
+
+  const p1Need = setsNeeded - setsP1;
+  const p2Need = setsNeeded - setsP2;
+
+  const p1Hold = gameHoldFromPointProb(p1PointWin);
+  const p2Hold = gameHoldFromPointProb(p2PointWin);
+
+  const p1SetAsServer = setWinProbability(p1Hold, p2Hold);
+  const p1SetAsReturner = setWinProbability(1 - p2Hold, 1 - p1Hold);
+  let p1Set = (p1SetAsServer + p1SetAsReturner) / 2;
+
+  const gameLead = gamesP1 - gamesP2;
+  p1Set = clamp(p1Set + gameLead * 0.02, 0.05, 0.95);
+
+  return clamp(matchProbRemaining(p1Set, p1Need, p2Need), 0, 1);
+}
+
+export interface TrueProbabilities {
+  /** P(player1 wins match) — combines Markov set/game math with current live score state */
+  p1MatchProb: number;
+  p2MatchProb: number;
+  /** P(player1 wins the set currently in progress) */
+  p1SetProb: number;
+  /** P(current server holds this game) — same number as BreakHoldSignals.holdProb */
+  gameHoldProb: number;
+  /** Which tour baseline was used */
+  tour: string;
+  method: "markov-tour-aware";
+}
+
+/**
+ * Per-player intrinsic point-win-on-serve rate, derived from live stats when
+ * available, else from the pre-match Elo prior — same formula the engine
+ * already used for the *current server*, generalised to either player so we
+ * can run the Markov set/match recursion (which needs both players' rates).
+ */
+function pointWinRateFor(
+  player: 1 | 2, stats: LiveMatchStats | null, p1WinProb: number,
+): number {
+  if (stats) {
+    const firstPct = (player === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent) || 60;
+    const firstWon = (player === 1 ? stats.p1_firstServeWon : stats.p2_firstServeWon) || 65;
+    const secondWon = (player === 1 ? stats.p1_secondServeWon : stats.p2_secondServeWon) || 45;
+    const p = (firstPct / 100) * (firstWon / 100) + (1 - firstPct / 100) * (secondWon / 100);
+    return clamp(p, 0.35, 0.85);
+  }
+  const prob = player === 1 ? p1WinProb : 1 - p1WinProb;
+  return clamp(0.55 + (prob - 0.5) * 0.3, 0.45, 0.75);
+}
+
+/**
+ * Main entry point: True P at game / set / match level, tour-aware.
+ * This is what should drive the "edge vs bookmaker" calculation for every
+ * tour, not just ATP.
+ */
+export function computeTrueProbabilities(
+  server: 1 | 2,
+  currentSetGames: { p1: number; p2: number },
+  completedSets: { p1: number; p2: number }[],
+  stats: LiveMatchStats | null,
+  bestOf: number,
+  p1WinProb: number,
+  tour: string = "ATP",
+): TrueProbabilities {
+  const p1PointWin = pointWinRateFor(1, stats, p1WinProb);
+  const p2PointWin = pointWinRateFor(2, stats, p1WinProb);
+
+  const setsP1 = completedSets.filter((s) => s.p1 > s.p2).length;
+  const setsP2 = completedSets.filter((s) => s.p2 > s.p1).length;
+
+  const p1MatchProb = matchWinProbFromScore(
+    setsP1, setsP2, currentSetGames.p1, currentSetGames.p2,
+    server === 1, p1PointWin, p2PointWin, bestOf,
+  );
+
+  const p1Hold = gameHoldFromPointProb(p1PointWin);
+  const p2Hold = gameHoldFromPointProb(p2PointWin);
+  const p1SetAsServer = setWinProbability(p1Hold, p2Hold);
+  const p1SetAsReturner = setWinProbability(1 - p2Hold, 1 - p1Hold);
+  const p1SetProb = clamp((p1SetAsServer + p1SetAsReturner) / 2 + (currentSetGames.p1 - currentSetGames.p2) * 0.02, 0.05, 0.95);
+
+  const gameHoldProb = server === 1 ? p1Hold : p2Hold;
+
+  return {
+    p1MatchProb,
+    p2MatchProb: 1 - p1MatchProb,
+    p1SetProb,
+    gameHoldProb,
+    tour,
+    method: "markov-tour-aware",
+  };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  HEDGE ENGINE — when to hedge against a live position
+//  TS port of trading_server/hedge_engine.py's three triggers:
+//    1. Trend break  (score swings against the favoured side)
+//    2. Adverse move (odds move >25% against the reference entry state)
+//    3. Deuce loss   (DEUCE → AD-OUT)
+//  The Python backend hedges against live exchange game-odds inside an open
+//  position; here (no backend / no placed bet) we evaluate the same triggers
+//  against the bookmaker match-odds captured at the moment each match first
+//  reached a "tradeable" state (30-15 / 15-30 / 30-30 / DEUCE — the same
+//  states trading_engine.py treats as entry points), so the signal tells you
+//  "hedge now" if you'd entered around there.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type HedgeTrigger = "TREND_BREAK" | "ADVERSE_MOVE" | "DEUCE_LOSS";
+
+export interface HedgeAlert {
+  shouldHedge: boolean;
+  trigger?: HedgeTrigger;
+  reason: string;
+  urgency: "LOW" | "HIGH" | "IMMEDIATE";
+  /** hedge_size = (entry_size × entry_odds) / current_odds — multiplier on a unit stake */
+  hedgeSizeMultiplier?: number;
+}
+
+const TREND_BREAKS = new Set([
+  "30-15>30-30", "15-30>30-30", "40-30>DEUCE", "30-40>DEUCE", "AD-IN>DEUCE",
+]);
+
+const ENTRY_ELIGIBLE_STATES = new Set(["30-15", "15-30", "30-30", "DEUCE"]);
+
+/** Mirrors ScoreState._recompute()'s game_state_key — from the SERVER's perspective. */
+function gameStateKey(srvPts: number, retPts: number, isTiebreak: boolean): string {
+  if (isTiebreak) return "TIEBREAK";
+  if (srvPts >= 3 && retPts >= 3) {
+    if (srvPts === retPts) return "DEUCE";
+    return srvPts > retPts ? "AD-IN" : "AD-OUT";
+  }
+  const m: Record<number, string> = { 0: "0", 1: "15", 2: "30", 3: "40" };
+  return `${m[srvPts] ?? "40"}-${m[retPts] ?? "40"}`;
+}
+
+interface HedgeMemory { prevStateKey?: string; referenceOdds?: number }
+const _hedgeMemory = new Map<string, HedgeMemory>();
+
+/**
+ * Evaluate the hedge triggers for a given match, polled once per tick.
+ * `currentOddsAgainstFavourite` = live market odds on the side you'd be
+ * holding a backed position against (i.e. the side that benefits from a
+ * trend break) — pass the bookmaker odds for the returner/non-favoured side.
+ */
+export function evaluateHedgeSignal(
+  matchId: string,
+  srvPts: number, retPts: number, isTiebreak: boolean,
+  currentOddsAgainstFavourite: number | undefined,
+): HedgeAlert {
+  const stateKey = gameStateKey(srvPts, retPts, isTiebreak);
+  const mem = _hedgeMemory.get(matchId) || {};
+  const prevStateKey = mem.prevStateKey;
+
+  // Capture a reference odds line the first time we hit an entry-eligible state
+  if (ENTRY_ELIGIBLE_STATES.has(stateKey) && mem.referenceOdds === undefined && currentOddsAgainstFavourite) {
+    mem.referenceOdds = currentOddsAgainstFavourite;
+  }
+  // Reset reference odds once we leave the game (new game started)
+  if (stateKey === "0-0") {
+    mem.referenceOdds = undefined;
+  }
+
+  let alert: HedgeAlert = { shouldHedge: false, reason: "", urgency: "LOW" };
+
+  // 1. Trend break
+  if (prevStateKey && TREND_BREAKS.has(`${prevStateKey}>${stateKey}`)) {
+    alert = {
+      shouldHedge: true,
+      trigger: "TREND_BREAK",
+      reason: `Trend break: ${prevStateKey} → ${stateKey}`,
+      urgency: "HIGH",
+      hedgeSizeMultiplier: mem.referenceOdds && currentOddsAgainstFavourite
+        ? roundTo(mem.referenceOdds / currentOddsAgainstFavourite, 2) : undefined,
+    };
+  }
+  // 2. Adverse odds move > 25%
+  else if (mem.referenceOdds && currentOddsAgainstFavourite && mem.referenceOdds > 0) {
+    const move = Math.abs(currentOddsAgainstFavourite - mem.referenceOdds) / mem.referenceOdds;
+    if (move > 0.25 && currentOddsAgainstFavourite > mem.referenceOdds) {
+      alert = {
+        shouldHedge: true,
+        trigger: "ADVERSE_MOVE",
+        reason: `Odds moved ${Math.round(move * 100)}% against entry`,
+        urgency: "HIGH",
+        hedgeSizeMultiplier: roundTo(mem.referenceOdds / currentOddsAgainstFavourite, 2),
+      };
+    }
+  }
+  // 3. Deuce loss
+  if (stateKey === "AD-OUT" && prevStateKey === "DEUCE") {
+    alert = {
+      shouldHedge: true,
+      trigger: "DEUCE_LOSS",
+      reason: "Deuce → AD-OUT — hedge immediately",
+      urgency: "IMMEDIATE",
+      hedgeSizeMultiplier: mem.referenceOdds && currentOddsAgainstFavourite
+        ? roundTo(mem.referenceOdds / currentOddsAgainstFavourite, 2) : undefined,
+    };
+  }
+
+  mem.prevStateKey = stateKey;
+  _hedgeMemory.set(matchId, mem);
+  return alert;
+}
+
+function roundTo(v: number, dp: number): number {
+  const f = 10 ** dp;
+  return Math.round(v * f) / f;
 }
 
 

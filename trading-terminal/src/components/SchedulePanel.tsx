@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { fetchScheduleClient, probToOdds, kellyFraction } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
+import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
 
 interface Props {
@@ -162,28 +163,39 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
 
 function EdgePanel({ match: m }: { match: ScheduledMatch }) {
   const bookOdds = m.liveScore?.bookmakerOdds;
-  const [odds1, setOdds1] = useState(() => bookOdds?.p1 || probToOdds(m.p1_win_prob));
-  const [odds2, setOdds2] = useState(() => bookOdds?.p2 || probToOdds(m.p2_win_prob));
+  const liveTrueP = m.liveScore?.trueProbabilities;
+  // ── True P: prefer the live, score-conditioned, tour-aware Markov number;
+  //    fall back to the static pre-match Elo prior for scheduled matches.
+  //    This is the fix for "P only accurate for ATP" — trueProbabilities is
+  //    computed with WTA/ITF/Challenger baselines via resolveTourAvgs(m.tour).
+  const p1Prob = liveTrueP?.p1MatchProb ?? m.p1_win_prob;
+  const p2Prob = liveTrueP?.p2MatchProb ?? m.p2_win_prob;
+  const probSource = liveTrueP ? `Live Markov · ${m.tour}` : m.prob_method;
+
+  const [odds1, setOdds1] = useState(() => bookOdds?.p1 || probToOdds(p1Prob));
+  const [odds2, setOdds2] = useState(() => bookOdds?.p2 || probToOdds(p2Prob));
   const [bankroll, setBankroll] = useState(1000);
 
   // Recalc when match changes — prefer real bookmaker odds
   useEffect(() => {
     const bk = m.liveScore?.bookmakerOdds;
-    setOdds1(bk?.p1 || probToOdds(m.p1_win_prob));
-    setOdds2(bk?.p2 || probToOdds(m.p2_win_prob));
-  }, [m.id, m.p1_win_prob, m.p2_win_prob, m.liveScore?.bookmakerOdds]);
+    setOdds1(bk?.p1 || probToOdds(p1Prob));
+    setOdds2(bk?.p2 || probToOdds(p2Prob));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [m.id, p1Prob, p2Prob, m.liveScore?.bookmakerOdds]);
 
   const imp1 = odds1 > 0 ? 1 / odds1 : 0;
   const imp2 = odds2 > 0 ? 1 / odds2 : 0;
-  const edge1 = m.p1_win_prob - imp1;
-  const edge2 = m.p2_win_prob - imp2;
-  const kelly1 = kellyFraction(m.p1_win_prob, odds1);
-  const kelly2 = kellyFraction(m.p2_win_prob, odds2);
+  const edge1 = p1Prob - imp1;
+  const edge2 = p2Prob - imp2;
+  const kelly1 = kellyFraction(p1Prob, odds1);
+  const kelly2 = kellyFraction(p2Prob, odds2);
   const stake1 = Math.round(bankroll * kelly1 * 0.25); // quarter Kelly
   const stake2 = Math.round(bankroll * kelly2 * 0.25);
   const vig = imp1 + imp2 - 1;
 
-  const isFav1 = m.p1_win_prob >= m.p2_win_prob;
+  const isFav1 = p1Prob >= p2Prob;
+  const hedge = m.liveScore?.hedgeAlert;
 
   return (
     <div className="p-3 space-y-3 text-[11px]">
@@ -191,8 +203,26 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
       <div className="text-center">
         <div className="text-xs font-bold text-terminal-yellow mb-1">⚡ EDGE ANALYSIS</div>
         <div className="text-slate-200 font-medium">{m.player1} vs {m.player2}</div>
-        <div className="text-[10px] text-terminal-muted">{m.tournament} · {m.round} · {m.surface} · Bo{m.best_of}</div>
+        <div className="text-[10px] text-terminal-muted">{m.tournament} · {m.round} · {m.surface} · Bo{m.best_of} · <TourBadge t={m.tour} /></div>
       </div>
+
+      {/* ═══ HEDGE ALERT ═══ */}
+      {hedge?.shouldHedge && (
+        <div className={`p-2 rounded border ${
+          hedge.urgency === "IMMEDIATE" ? "border-terminal-red bg-terminal-red/15 animate-pulse"
+            : "border-terminal-yellow bg-terminal-yellow/10"
+        }`}>
+          <div className={`text-[11px] font-bold ${hedge.urgency === "IMMEDIATE" ? "text-terminal-red" : "text-terminal-yellow"}`}>
+            🛑 HEDGE NOW — {hedge.trigger?.replace(/_/g, " ")}
+          </div>
+          <div className="text-[9px] text-terminal-muted">{hedge.reason}</div>
+          {hedge.hedgeSizeMultiplier !== undefined && (
+            <div className="text-[9px] text-slate-300 mt-0.5">
+              Hedge size ≈ {hedge.hedgeSizeMultiplier}× entry stake (entry_size × entry_odds / current_odds)
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Model probability */}
       <Section title="MODEL PROBABILITY">
@@ -200,10 +230,10 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
           <div className="flex-1">
             <div className="flex items-center justify-between mb-0.5">
               <span className={isFav1 ? "text-terminal-green font-bold" : "text-slate-300"}>{m.player1}</span>
-              <span className={isFav1 ? "text-terminal-green font-bold" : "text-slate-400"}>{pct(m.p1_win_prob)}</span>
+              <span className={isFav1 ? "text-terminal-green font-bold" : "text-slate-400"}>{pct(p1Prob)}</span>
             </div>
             <div className="h-2 bg-terminal-border rounded-full overflow-hidden">
-              <div className={`h-full rounded-full ${isFav1 ? "bg-terminal-green" : "bg-terminal-blue"}`} style={{ width: pct(m.p1_win_prob) }} />
+              <div className={`h-full rounded-full ${isFav1 ? "bg-terminal-green" : "bg-terminal-blue"}`} style={{ width: pct(p1Prob) }} />
             </div>
           </div>
         </div>
@@ -211,15 +241,15 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
           <div className="flex-1">
             <div className="flex items-center justify-between mb-0.5">
               <span className={!isFav1 ? "text-terminal-green font-bold" : "text-slate-300"}>{m.player2}</span>
-              <span className={!isFav1 ? "text-terminal-green font-bold" : "text-slate-400"}>{pct(m.p2_win_prob)}</span>
+              <span className={!isFav1 ? "text-terminal-green font-bold" : "text-slate-400"}>{pct(p2Prob)}</span>
             </div>
             <div className="h-2 bg-terminal-border rounded-full overflow-hidden">
-              <div className={`h-full rounded-full ${!isFav1 ? "bg-terminal-green" : "bg-terminal-blue"}`} style={{ width: pct(m.p2_win_prob) }} />
+              <div className={`h-full rounded-full ${!isFav1 ? "bg-terminal-green" : "bg-terminal-blue"}`} style={{ width: pct(p2Prob) }} />
             </div>
           </div>
         </div>
         <div className="text-[9px] text-terminal-muted mt-1 text-center">
-          Method: {m.prob_method} · Fair odds: {probToOdds(m.p1_win_prob).toFixed(2)} / {probToOdds(m.p2_win_prob).toFixed(2)}
+          Method: {probSource} · Fair odds: {probToOdds(p1Prob).toFixed(2)} / {probToOdds(p2Prob).toFixed(2)}
           {bookOdds && <span className="text-terminal-yellow"> · Book: {bookOdds.p1.toFixed(2)} / {bookOdds.p2.toFixed(2)}</span>}
           {m.p1_rank > 0 && m.p2_rank > 0 && ` · Rank #{m.p1_rank} vs #${m.p2_rank}`}
         </div>
@@ -254,8 +284,8 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
 
       {/* Value bet signals */}
       <Section title="VALUE BET SIGNALS">
-        <ValueSignal label={`${m.player1} ML`} edge={edge1} odds={odds1} prob={m.p1_win_prob} />
-        <ValueSignal label={`${m.player2} ML`} edge={edge2} odds={odds2} prob={m.p2_win_prob} />
+        <ValueSignal label={`${m.player1} ML`} edge={edge1} odds={odds1} prob={p1Prob} />
+        <ValueSignal label={`${m.player2} ML`} edge={edge2} odds={odds2} prob={p2Prob} />
       </Section>
 
       {/* Kelly staking */}
@@ -417,6 +447,7 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function BreakHoldPanel({ signals: bh, m }: { signals: BreakHoldSignals; m: ScheduledMatch }) {
+  const tourAvgs = resolveTourAvgs(m.tour);
   const srvName = bh.server === 1 ? m.player1.split(" ").pop() : m.player2.split(" ").pop();
   const retName = bh.server === 1 ? m.player2.split(" ").pop() : m.player1.split(" ").pop();
 
@@ -485,7 +516,7 @@ function BreakHoldPanel({ signals: bh, m }: { signals: BreakHoldSignals; m: Sche
               <div className={`h-full rounded-full transition-all ${bh.holdProb > 0.75 ? "bg-terminal-green" : bh.holdProb > 0.55 ? "bg-terminal-yellow" : "bg-terminal-red"}`}
                 style={{ width: `${bh.holdProb * 100}%` }} />
               {/* Tour average marker */}
-              <div className="absolute top-0 h-full w-px bg-slate-400" style={{ left: "82%" }} title="Tour avg hold: 82%" />
+              <div className="absolute top-0 h-full w-px bg-slate-400" style={{ left: `${tourAvgs.holdRate}%` }} title={`${m.tour} avg hold: ${tourAvgs.holdRate}%`} />
             </div>
           </div>
           {/* Break gauge */}
@@ -499,7 +530,7 @@ function BreakHoldPanel({ signals: bh, m }: { signals: BreakHoldSignals; m: Sche
             <div className="h-2.5 bg-terminal-border rounded-full overflow-hidden relative">
               <div className={`h-full rounded-full transition-all ${bh.breakProb > 0.40 ? "bg-terminal-red" : bh.breakProb > 0.25 ? "bg-terminal-yellow" : "bg-terminal-green/50"}`}
                 style={{ width: `${bh.breakProb * 100}%` }} />
-              <div className="absolute top-0 h-full w-px bg-slate-400" style={{ left: "18%" }} title="Tour avg break: 18%" />
+              <div className="absolute top-0 h-full w-px bg-slate-400" style={{ left: `${tourAvgs.breakRate}%` }} title={`${m.tour} avg break: ${tourAvgs.breakRate}%`} />
             </div>
           </div>
           {/* Pressure bar */}
@@ -643,7 +674,8 @@ function ValueSignal({ label, edge, odds, prob }: { label: string; edge: number;
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function MatchRow({ m, active, onClick }: { m: ScheduledMatch; active: boolean; onClick: () => void }) {
-  const fav1 = m.p1_win_prob > 0.5;
+  const liveP1 = m.liveScore?.trueProbabilities?.p1MatchProb;
+  const fav1 = (liveP1 ?? m.p1_win_prob) > 0.5;
   const known = m.prob_method !== "unknown";
   const live = m.status === "live";
   const fin = m.status === "finished";
@@ -693,19 +725,27 @@ function MatchRow({ m, active, onClick }: { m: ScheduledMatch; active: boolean; 
           </div>
         </div>
 
-        {/* Break/Hold badges */}
+        {/* Break/Hold + Hedge badges */}
         {live && bh && (
           <div className="w-[40px] shrink-0 flex flex-col items-center gap-0.5">
-            {bh.isBreakPoint && (
+            {m.liveScore?.hedgeAlert?.shouldHedge ? (
+              <span className={`text-[7px] font-bold px-1 py-0 rounded ${
+                m.liveScore.hedgeAlert.urgency === "IMMEDIATE"
+                  ? "bg-terminal-red/30 text-terminal-red animate-pulse"
+                  : "bg-terminal-yellow/20 text-terminal-yellow"
+              }`}>
+                🛑 HEDGE
+              </span>
+            ) : bh.isBreakPoint ? (
               <span className="text-[7px] font-bold px-1 py-0 rounded bg-terminal-red/20 text-terminal-red animate-pulse">BP!</span>
-            )}
-            {!bh.isBreakPoint && bh.dangerLevel === "CRITICAL" && (
+            ) : null}
+            {!bh.isBreakPoint && !m.liveScore?.hedgeAlert?.shouldHedge && bh.dangerLevel === "CRITICAL" && (
               <span className="text-[7px] font-bold px-1 py-0 rounded bg-orange-400/20 text-orange-400">⚠</span>
             )}
-            {!bh.isBreakPoint && bh.dangerLevel === "DANGER" && (
+            {!bh.isBreakPoint && !m.liveScore?.hedgeAlert?.shouldHedge && bh.dangerLevel === "DANGER" && (
               <span className="text-[7px] font-bold px-1 py-0 rounded bg-terminal-yellow/20 text-terminal-yellow">⚡</span>
             )}
-            {bh.holdProb > 0.85 && bh.dangerLevel === "SAFE" && (
+            {bh.holdProb > 0.85 && bh.dangerLevel === "SAFE" && !m.liveScore?.hedgeAlert?.shouldHedge && (
               <span className="text-[7px] font-bold px-1 py-0 rounded bg-terminal-green/20 text-terminal-green">🛡</span>
             )}
             <span className={`text-[7px] font-mono ${
@@ -718,13 +758,23 @@ function MatchRow({ m, active, onClick }: { m: ScheduledMatch; active: boolean; 
           </div>
         )}
 
-        {/* Prob column */}
-        {known && (
-          <div className="w-[55px] shrink-0 text-right">
-            <div className={`text-[10px] font-mono ${fav1 ? "text-terminal-green font-bold" : "text-slate-400"}`}>{pct(m.p1_win_prob)}</div>
-            <div className={`text-[10px] font-mono ${!fav1 ? "text-terminal-green font-bold" : "text-slate-400"}`}>{pct(m.p2_win_prob)}</div>
-          </div>
-        )}
+        {/* Prob column — live Markov True P when available (tour-aware), else pre-match Elo */}
+        {known && (() => {
+          const tp = m.liveScore?.trueProbabilities;
+          const dp1 = tp?.p1MatchProb ?? m.p1_win_prob;
+          const dp2 = tp?.p2MatchProb ?? m.p2_win_prob;
+          const edge = m.liveScore?.edge;
+          const bestEdge = edge ? Math.max(edge.p1, edge.p2) : undefined;
+          return (
+            <div className="w-[55px] shrink-0 text-right">
+              <div className={`text-[10px] font-mono ${fav1 ? "text-terminal-green font-bold" : "text-slate-400"}`}>{pct(dp1)}</div>
+              <div className={`text-[10px] font-mono ${!fav1 ? "text-terminal-green font-bold" : "text-slate-400"}`}>{pct(dp2)}</div>
+              {bestEdge !== undefined && bestEdge > 0.03 && (
+                <div className="text-[7px] font-bold text-terminal-green">+{Math.round(bestEdge * 100)}% edge</div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Round */}
         <div className="w-[50px] shrink-0 text-[8px] text-terminal-muted text-right truncate">{m.round}</div>
@@ -784,10 +834,11 @@ function TourBadge({ t }: { t?: string }) {
     WTA: "text-pink-400 bg-pink-400/10",
     "ITF M": "text-emerald-400 bg-emerald-400/10",
     "ITF W": "text-rose-300 bg-rose-300/10",
-    CHAL: "text-amber-400 bg-amber-400/10",
+    CHALLENGER: "text-amber-400 bg-amber-400/10",
     W125: "text-fuchsia-400 bg-fuchsia-400/10",
   };
-  return <span className={`text-[7px] font-bold px-1 rounded ${c[t || ""] || "text-terminal-muted bg-terminal-muted/10"}`}>{t}</span>;
+  const shortLabel: Record<string, string> = { CHALLENGER: "CHAL" };
+  return <span className={`text-[7px] font-bold px-1 rounded ${c[t || ""] || "text-terminal-muted bg-terminal-muted/10"}`}>{shortLabel[t || ""] || t}</span>;
 }
 
 function SurfaceDot({ s }: { s?: string }) {

@@ -4,7 +4,10 @@
  * Filters by actual match date, computes Elo-based probabilities.
  */
 
-import { computeBreakHoldSignals, type BreakHoldSignals } from "./breakHoldEngine";
+import {
+  computeBreakHoldSignals, computeTrueProbabilities, evaluateHedgeSignal,
+  type BreakHoldSignals, type TrueProbabilities, type HedgeAlert,
+} from "./breakHoldEngine";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -47,10 +50,16 @@ export interface ScheduledMatch {
     bookmakerOdds?: { p1: number; p2: number; source?: string };
     /** Break/Hold signal engine output */
     breakHoldSignals?: BreakHoldSignals;
+    /** Markov True P at game/set/match level, tour-aware */
+    trueProbabilities?: TrueProbabilities;
+    /** De-vigged edge: trueProb - marketImpliedProb, for each player (+ve = value) */
+    edge?: { p1: number; p2: number };
+    /** Hedge-timing alert evaluated against the live score + bookmaker odds */
+    hedgeAlert?: HedgeAlert;
   };
 }
 
-export type { BreakHoldSignals };
+export type { BreakHoldSignals, TrueProbabilities, HedgeAlert };
 
 /** Real-time match statistics from SofaScore */
 export interface LiveMatchStats {
@@ -370,7 +379,7 @@ function sofaCatToTour(slug: string): string {
   if (slug === "wta") return "WTA";
   if (slug === "itf-men") return "ITF M";
   if (slug === "itf-women") return "ITF W";
-  if (slug === "challenger") return "CHAL";
+  if (slug === "challenger") return "CHALLENGER";
   if (slug === "wta-125") return "W125";
   return slug.toUpperCase();
 }
@@ -1078,8 +1087,52 @@ function attachBreakHoldSignals(match: ScheduledMatch): void {
       ls.tiebreakScore,
       match.best_of || 3,
       match.p1_win_prob,
+      match.tour,
     );
+
+    // ── True P (Markov, set/match level, tour-aware) ──
+    ls.trueProbabilities = computeTrueProbabilities(
+      ls.server,
+      ls.currentSetGames || { p1: 0, p2: 0 },
+      ls.completedSets || [],
+      ls.stats || null,
+      match.best_of || 3,
+      match.p1_win_prob,
+      match.tour,
+    );
+
+    // ── Edge vs bookmaker (de-vigged implied probability) ──
+    if (ls.bookmakerOdds && ls.bookmakerOdds.p1 > 1 && ls.bookmakerOdds.p2 > 1) {
+      const rawP1 = 1 / ls.bookmakerOdds.p1;
+      const rawP2 = 1 / ls.bookmakerOdds.p2;
+      const overround = rawP1 + rawP2;
+      const marketP1 = rawP1 / overround;
+      const marketP2 = rawP2 / overround;
+      ls.edge = {
+        p1: roundTo3(ls.trueProbabilities.p1MatchProb - marketP1),
+        p2: roundTo3(ls.trueProbabilities.p2MatchProb - marketP2),
+      };
+    }
+
+    // ── Hedge timing ──
+    // Use the bookmaker odds on whichever side currently does NOT hold the
+    // edge as the "against favourite" reference — a trend break or adverse
+    // move there is what should trigger a hedge on a position backing the edge side.
+    if (ls.pointScore && ls.bookmakerOdds) {
+      const favourite: 1 | 2 = (ls.edge?.p1 ?? 0) >= (ls.edge?.p2 ?? 0) ? 1 : 2;
+      const againstOdds = favourite === 1 ? ls.bookmakerOdds.p2 : ls.bookmakerOdds.p1;
+      const isTiebreak = !!(ls.tiebreakScore && ls.currentSetGames?.p1 === 6 && ls.currentSetGames?.p2 === 6);
+      const srvPts = ls.server === 1 ? (PT[ls.pointScore.p1] ?? 0) : (PT[ls.pointScore.p2] ?? 0);
+      const retPts = ls.server === 1 ? (PT[ls.pointScore.p2] ?? 0) : (PT[ls.pointScore.p1] ?? 0);
+      ls.hedgeAlert = evaluateHedgeSignal(match.id, srvPts, retPts, isTiebreak, againstOdds);
+    }
   } catch (e) {
     console.warn("[breakHoldEngine] computation failed:", e);
   }
+}
+
+const PT: Record<string, number> = { "0": 0, "15": 1, "30": 2, "40": 3, "A": 4, "AD": 4 };
+
+function roundTo3(v: number): number {
+  return Math.round(v * 1000) / 1000;
 }
