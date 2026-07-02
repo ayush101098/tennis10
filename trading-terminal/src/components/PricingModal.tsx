@@ -84,7 +84,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
             />
 
             {/* Plans */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* FREE */}
               <div className="border border-terminal-border rounded-lg p-4 flex flex-col">
                 <div className="text-slate-200 font-bold text-sm mb-1">FREE</div>

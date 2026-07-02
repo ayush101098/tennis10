@@ -69,9 +69,11 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-terminal-bg text-slate-200">
       {/* ── Nav ── */}
-      <nav className="sticky top-0 z-40 flex items-center justify-between px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
-        <span className="text-terminal-green font-bold text-sm">◉ TENNIS INTELLIGENCE TERMINAL</span>
-        <div className="flex items-center gap-3 text-[11px]">
+      <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
+        <span className="text-terminal-green font-bold text-xs sm:text-sm truncate">
+          ◉ <span className="hidden sm:inline">TENNIS INTELLIGENCE TERMINAL</span><span className="sm:hidden">TENNIS T.</span>
+        </span>
+        <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           {session ? (
             <>
               <span className={`font-bold px-1.5 py-0.5 rounded ${session.isAdmin ? "bg-terminal-red/20 text-terminal-red" : isPro ? "bg-terminal-green/20 text-terminal-green" : "bg-terminal-border text-slate-300"}`}>
@@ -93,8 +95,8 @@ export default function LandingPage() {
       </nav>
 
       {/* ── Hero ── */}
-      <section className="px-6 pt-14 pb-10 text-center max-w-[860px] mx-auto">
-        <h1 className="text-3xl md:text-4xl font-bold text-slate-100 leading-tight">
+      <section className="px-4 sm:px-6 pt-10 sm:pt-14 pb-10 text-center max-w-[860px] mx-auto">
+        <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-slate-100 leading-tight">
           True probabilities for <span className="text-terminal-green">every professional tennis match.</span>
         </h1>
         <p className="mt-4 text-[13px] text-slate-400 leading-relaxed max-w-[640px] mx-auto">
@@ -123,7 +125,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── Live board + analysis ── */}
-      <section id="matches" className="px-6 pb-14 max-w-[1180px] mx-auto">
+      <section id="matches" className="px-4 sm:px-6 pb-14 max-w-[1180px] mx-auto">
         <div className="border border-terminal-border rounded-lg overflow-hidden bg-terminal-panel/30">
           <div className="flex items-center justify-between px-4 py-2 border-b border-terminal-border bg-terminal-panel/60">
             <span className="text-[11px] font-bold text-terminal-yellow tracking-wider">📅 TODAY — LIVE &amp; UPCOMING</span>
@@ -131,9 +133,12 @@ export default function LandingPage() {
               {session ? "click any match to analyse" : "analyse 1 match free — no account needed"}
             </span>
           </div>
-          <div className="grid md:grid-cols-[1fr_420px]" style={{ minHeight: 420, maxHeight: 560 }}>
+          {/* On mobile: list caps at ~55vh (scrolls), analysis flows in the
+              page below it — no nested scroll trap. On md+: fixed 560px with
+              both panes side-by-side, each scrolling internally. */}
+          <div className="grid md:grid-cols-[1fr_420px] md:h-[560px]">
             {/* Match list */}
-            <div className="overflow-y-auto border-r border-terminal-border" style={{ maxHeight: 560 }}>
+            <div className="overflow-y-auto border-b md:border-b-0 md:border-r border-terminal-border max-h-[55vh] md:max-h-none">
               {!data && <div className="p-8 text-center text-terminal-muted text-xs animate-pulse">Loading live schedule…</div>}
               {matches.slice(0, 120).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
@@ -146,7 +151,7 @@ export default function LandingPage() {
               )}
             </div>
             {/* Analysis pane */}
-            <div className="overflow-y-auto bg-terminal-bg" style={{ maxHeight: 560 }}>
+            <div className="md:overflow-y-auto bg-terminal-bg min-h-[360px]">
               {selected ? (
                 <EdgePanel
                   match={selected}
@@ -169,9 +174,9 @@ export default function LandingPage() {
       </section>
 
       {/* ── How it works ── */}
-      <section className="px-6 pb-14 max-w-[1000px] mx-auto">
+      <section className="px-4 sm:px-6 pb-14 max-w-[1000px] mx-auto">
         <h2 className="text-center text-lg font-bold text-slate-100 mb-6">The full process, end to end</h2>
-        <div className="grid md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           <Feature n="01" title="TRUE P" body="A Platt-calibrated neural network (41,750 tour matches) sets the pre-match prior; a tour-aware Markov engine re-prices the match on every game of the live score." />
           <Feature n="02" title="EDGE" body="True P is compared against de-vigged bookmaker odds — live prices for live matches, never stale ones. Edges over 20% are quarantined as data errors, not bets." />
           <Feature n="03" title="STAKE" body="¼-Kelly staking capped at 5% of bankroll, with a hard 2% edge floor. The discipline is the product: no edge, no bet." />
@@ -180,16 +185,16 @@ export default function LandingPage() {
       </section>
 
       {/* ── Pricing ── */}
-      <section className="px-6 pb-16 max-w-[720px] mx-auto text-center">
+      <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
         <h2 className="text-lg font-bold text-slate-100 mb-2">Simple pricing</h2>
         <p className="text-[11px] text-terminal-muted mb-6">Free gets you the model&apos;s pre-match probabilities on every match. Pro gets you the terminal.</p>
-        <div className="flex items-center justify-center gap-4">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
           <button onClick={() => setPricingOpen(true)}
-            className="px-6 py-3 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
+            className="w-full sm:w-auto px-6 py-3 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
             START FREE
           </button>
           <button onClick={() => setPricingOpen(true)}
-            className="px-6 py-3 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
+            className="w-full sm:w-auto px-6 py-3 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
             GO PRO — $99 ONE-TIME
           </button>
         </div>

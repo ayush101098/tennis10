@@ -15,8 +15,12 @@ body {
   background: #0a0e17;
   color: #e2e8f0;
   font-family: "JetBrains Mono", "Fira Code", monospace;
-  overflow: hidden;
-  height: 100%;
+  /* Allow the page to scroll (landing page grows past the viewport); block
+     only horizontal overflow so nothing spills sideways on mobile. The
+     terminal route self-constrains with h-screen + overflow-hidden, so it
+     never produces page scroll. */
+  overflow-x: hidden;
+  min-height: 100%;
 }
 
 /* ── scrollbar ── */
