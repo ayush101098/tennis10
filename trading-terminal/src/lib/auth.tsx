@@ -9,7 +9,7 @@
  *   pro    — $99:          full trading terminal (live True P, edge, Kelly,
  *                          hedge signals, Value Board, bet tracker)
  *
- * ADMIN_EMAIL is always pro, forever, at no charge.
+ * ADMIN_EMAILS are always pro, forever, at no charge.
  *
  * Pro access is granted after an on-chain payment to PAYMENT_ADDRESS is
  * verified: the user pastes their transaction hash and we check it against
@@ -22,7 +22,11 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-export const ADMIN_EMAIL = "ayushmishra101098@gmail.com";
+export const ADMIN_EMAILS = new Set([
+  "ayushmishra101098@gmail.com",
+  "mishrapriyanka9515@gmail.com",
+  "sahil7goyal18@gmail.com",
+]);
 export const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
 export const PRO_PRICE_USD = 99;
 
@@ -49,7 +53,7 @@ export function loadSession(): Session | null {
     if (!raw) return null;
     const s: Session = JSON.parse(raw);
     // Admin is always pro regardless of what was stored
-    if (s.isAdmin || normEmail(s.email) === ADMIN_EMAIL) {
+    if (s.isAdmin || ADMIN_EMAILS.has(normEmail(s.email))) {
       s.isAdmin = true;
       s.tier = "pro";
     }
@@ -66,7 +70,7 @@ function saveSession(s: Session | null): void {
 
 export function signIn(email: string): Session {
   const e = normEmail(email);
-  const isAdmin = e === ADMIN_EMAIL;
+  const isAdmin = ADMIN_EMAILS.has(e);
   const prev = loadSession();
   const s: Session = {
     email: e,
