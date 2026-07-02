@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { fetchScheduleClient, probToOdds, kellyFraction } from "@/lib/scheduleService";
+import { fetchScheduleClient, refreshLiveMatches, probToOdds, kellyFraction } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
 import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
@@ -28,6 +28,8 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
   const [rightTab, setRightTab] = useState<"edge" | "tracker">("edge");
   const [view, setView] = useState<"matches" | "value">("matches");
   const refreshingRef = useRef(false);
+  const dataRef = useRef<ScheduleData | null>(null);
+  dataRef.current = data;
 
   const refresh = useCallback(async () => {
     // Guard: skip if a refresh is already in progress
@@ -48,9 +50,25 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
 
   useEffect(() => {
     refresh();
-    const iv = setInterval(refresh, 30_000); // 30s — avoids flooding proxy
+    // Full schedule rebuild is expensive (450+ matches, ESPN + SofaScore +
+    // per-live-match odds) — 45s is enough since the match LIST rarely
+    // changes mid-cycle; live scores are kept fresh separately below.
+    const iv = setInterval(refresh, 45_000);
     return () => clearInterval(iv);
   }, [refresh]);
+
+  // Lightweight live-score refresh — ONE bulk request updates every live
+  // match's score/point and recomputes True P, so results track points as
+  // they happen instead of waiting on the next full 45s rebuild.
+  useEffect(() => {
+    const iv = setInterval(async () => {
+      const prev = dataRef.current;
+      if (!prev) return;
+      const changed = await refreshLiveMatches([...prev.today, ...prev.tomorrow]);
+      if (changed) setData({ ...prev, today: [...prev.today], tomorrow: [...prev.tomorrow] });
+    }, 5_000);
+    return () => clearInterval(iv);
+  }, []);
 
   const raw = data ? (day === "today" ? data.today : data.tomorrow) : [];
   const tours = Array.from(new Set(raw.map(m => m.tour))).sort();

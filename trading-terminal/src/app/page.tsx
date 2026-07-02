@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { fetchScheduleClient } from "@/lib/scheduleService";
+import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import PricingModal from "@/components/PricingModal";
@@ -21,11 +21,29 @@ export default function LandingPage() {
   const [selected, setSelected] = useState<ScheduledMatch | null>(null);
   const [pricingOpen, setPricingOpen] = useState(false);
   const isPro = tier === "pro";
+  const dataRef = useRef<ScheduleData | null>(null);
+  dataRef.current = data;
 
   useEffect(() => {
+    // Full schedule rebuild (ESPN + SofaScore + rankings + odds for ~450
+    // matches) is expensive — 45s is often enough since the match LIST
+    // rarely changes mid-cycle; live scores are kept fresh separately below.
     const load = () => fetchScheduleClient().then(setData).catch(() => {});
     load();
-    const iv = setInterval(load, 30_000);
+    const iv = setInterval(load, 45_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Lightweight live-score refresh — ONE bulk request updates every live
+  // match's score/point and recomputes True P, so the board tracks points
+  // as they happen instead of waiting on the next full 45s rebuild.
+  useEffect(() => {
+    const iv = setInterval(async () => {
+      const prev = dataRef.current;
+      if (!prev) return;
+      const changed = await refreshLiveMatches([...prev.today, ...prev.tomorrow]);
+      if (changed) setData({ ...prev, today: [...prev.today], tomorrow: [...prev.tomorrow] });
+    }, 5_000);
     return () => clearInterval(iv);
   }, []);
 

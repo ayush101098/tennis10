@@ -656,7 +656,10 @@ async function fetchSofaDailyOdds(targetDate: string): Promise<Map<number, OddsP
 /** Cache SofaScore scheduled data per date — 12s TTL for schedule, 2s for live polling */
 const _sofaSchedCache: Record<string, { data: ScheduledMatch[]; ts: number }> = {};
 const SOFA_SCHED_TTL = 12_000;
-const SOFA_SCHED_LIVE_TTL = 2_000;
+// PointTracker polls fetchLiveScore every 3s for the selected match; this TTL
+// just needs to sit above that cadence so consecutive polls hit cache instead
+// of re-fetching (and re-parsing) the full day's schedule every single tick.
+const SOFA_SCHED_LIVE_TTL = 4_000;
 
 /** Fetch a single SofaScore scheduled endpoint, return raw events array */
 async function fetchSofaEndpoint(url: string): Promise<unknown[]> {
@@ -776,36 +779,40 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
   // Deduplicate: ESPN matches take priority (better metadata), SofaScore fills
   // gaps — but SofaScore extras (bookmaker odds, event id) are merged onto the
   // ESPN entry so every match keeps its market data.
-  const dedup = (espn: ScheduledMatch[], sofa: ScheduledMatch[]): ScheduledMatch[] => {
-    const nameKey = (m: ScheduledMatch) => [normName(m.player1), normName(m.player2)].sort().join("|");
-    const sofaByKey = new Map<string, ScheduledMatch>();
-    for (const m of sofa) sofaByKey.set(nameKey(m), m);
+  //
+  // Matching uses matchNames() (last-name / accent-tolerant fuzzy match), not
+  // an exact normalized-name key: ESPN and SofaScore don't always format the
+  // same player's name identically (abbreviations, accent variants, name
+  // order), so an exact-key Set silently let the same real match through
+  // twice under two different keys. samePair() also checks against every
+  // match already placed in `out` (not just the original espn/sofa arrays),
+  // so it catches near-duplicates inside a single source too.
+  const samePair = (a: ScheduledMatch, b: ScheduledMatch): boolean =>
+    (matchNames(a.player1, b.player1) && matchNames(a.player2, b.player2)) ||
+    (matchNames(a.player1, b.player2) && matchNames(a.player2, b.player1));
 
-    const seen = new Set<string>();
+  const dedup = (espn: ScheduledMatch[], sofa: ScheduledMatch[]): ScheduledMatch[] => {
     const out: ScheduledMatch[] = [];
     for (const m of espn) {
-      const key = nameKey(m);
-      seen.add(key);
-      const twin = sofaByKey.get(key);
-      if (twin) {
-        // Odds sides follow player order — swap if the twin lists them reversed
-        const sameOrder = matchNames(m.player1, twin.player1);
-        if (twin.prematchOdds) {
-          m.prematchOdds = sameOrder ? twin.prematchOdds
-            : { p1: twin.prematchOdds.p2, p2: twin.prematchOdds.p1, source: twin.prematchOdds.source, isLive: false };
-        }
-        if (m.liveScore && twin.liveScore?.sofaId) {
-          m.liveScore.sofaId = twin.liveScore.sofaId;
-          m.liveScore.sofaHomeIsP1 = sameOrder;
-        }
-      }
+      if (out.some(e => samePair(e, m))) continue; // guard against dupes within ESPN itself
       out.push(m);
     }
     for (const m of sofa) {
-      const key = nameKey(m);
-      if (!seen.has(key)) {
-        seen.add(key);
+      const twinIdx = out.findIndex(e => samePair(e, m));
+      if (twinIdx === -1) {
         out.push(m);
+        continue;
+      }
+      const twin = out[twinIdx];
+      // Odds sides follow player order — swap if the twin lists them reversed
+      const sameOrder = matchNames(twin.player1, m.player1);
+      if (m.prematchOdds) {
+        twin.prematchOdds = sameOrder ? m.prematchOdds
+          : { p1: m.prematchOdds.p2, p2: m.prematchOdds.p1, source: m.prematchOdds.source, isLive: false };
+      }
+      if (twin.liveScore && m.liveScore?.sofaId) {
+        twin.liveScore.sofaId = m.liveScore.sofaId;
+        twin.liveScore.sofaHomeIsP1 = sameOrder;
       }
     }
     return out;
@@ -845,65 +852,7 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
       const sofaMatch = sofaEvents.find(se => se.id === match.liveScore!.sofaId);
       if (sofaMatch) {
         const p1IsHome = matchNames(match.player1, sofaMatch.homeTeam.name);
-        const homeScore = sofaMatch.homeScore;
-        const awayScore = sofaMatch.awayScore;
-
-        // ── Server: live feed firstToServe is most current ──
-        if (sofaMatch.firstToServe) {
-          const serverIsHome = sofaMatch.firstToServe === 1;
-          match.liveScore.server = (serverIsHome && p1IsHome) || (!serverIsHome && !p1IsHome) ? 1 : 2;
-        }
-
-        // ── Point score ──
-        if (homeScore.point !== undefined && awayScore.point !== undefined) {
-          match.liveScore.pointScore = {
-            p1: String(p1IsHome ? homeScore.point : awayScore.point),
-            p2: String(p1IsHome ? awayScore.point : homeScore.point),
-          };
-        }
-
-        // ── Set/game scores from live feed (more current than schedule) ──
-        const p1Sets: number[] = [];
-        const p2Sets: number[] = [];
-        for (let si = 1; si <= 5; si++) {
-          const pk = `period${si}` as keyof typeof homeScore;
-          if (homeScore[pk] !== undefined) {
-            const h = homeScore[pk] as number;
-            const a = (awayScore[pk] as number) || 0;
-            p1Sets.push(p1IsHome ? h : a);
-            p2Sets.push(p1IsHome ? a : h);
-          }
-        }
-        if (p1Sets.length) {
-          const completedSets: { p1: number; p2: number }[] = [];
-          let currentSetGames = { p1: 0, p2: 0 };
-          for (let si = 0; si < p1Sets.length; si++) {
-            const g1 = p1Sets[si];
-            const g2 = p2Sets[si];
-            if (si === p1Sets.length - 1 && !(g1 >= 6 && g1 - g2 >= 2) && !(g2 >= 6 && g2 - g1 >= 2) && !(g1 === 7 || g2 === 7)) {
-              currentSetGames = { p1: g1, p2: g2 };
-            } else {
-              completedSets.push({ p1: g1, p2: g2 });
-            }
-          }
-          match.liveScore.completedSets = completedSets;
-          match.liveScore.currentSetGames = currentSetGames;
-          match.score = { p1_sets: p1Sets, p2_sets: p2Sets };
-        }
-
-        // ── Tiebreak ──
-        const numSets = (match.liveScore.completedSets?.length || 0) + 1;
-        const tbKey = `period${numSets}TieBreak` as keyof typeof homeScore;
-        if (homeScore[tbKey] !== undefined) {
-          const hTB = homeScore[tbKey] as number;
-          const aTB = (awayScore[tbKey] as number) || 0;
-          match.liveScore.tiebreakScore = {
-            p1: p1IsHome ? hTB : aTB,
-            p2: p1IsHome ? aTB : hTB,
-          };
-        } else {
-          match.liveScore.tiebreakScore = undefined;
-        }
+        applySofaLiveScore(match, sofaMatch);
 
         // ── Stats: map home/away → P1/P2 ──
         if (stats) {
@@ -998,6 +947,95 @@ function matchNames(espnName: string, sofaName: string): boolean {
   // Try first 3 chars of last name for accented variants
   if (aLast.length > 3 && bLast.length > 3 && aLast.slice(0, 4) === bLast.slice(0, 4)) return true;
   return false;
+}
+
+/**
+ * Map a SofaScore live-feed event's score onto a match's liveScore in place
+ * (point score, server, set/game score, tiebreak). Shared by fetchLiveScore
+ * and refreshLiveMatches so both stay in sync with the same mapping logic.
+ */
+function applySofaLiveScore(match: ScheduledMatch, sofaMatch: SofaLiveEvent): void {
+  const ls = match.liveScore;
+  if (!ls) return;
+  const p1IsHome = matchNames(match.player1, sofaMatch.homeTeam.name);
+  const homeScore = sofaMatch.homeScore;
+  const awayScore = sofaMatch.awayScore;
+
+  if (sofaMatch.firstToServe) {
+    const serverIsHome = sofaMatch.firstToServe === 1;
+    ls.server = (serverIsHome && p1IsHome) || (!serverIsHome && !p1IsHome) ? 1 : 2;
+  }
+
+  if (homeScore.point !== undefined && awayScore.point !== undefined) {
+    ls.pointScore = {
+      p1: String(p1IsHome ? homeScore.point : awayScore.point),
+      p2: String(p1IsHome ? awayScore.point : homeScore.point),
+    };
+  }
+
+  const p1Sets: number[] = [];
+  const p2Sets: number[] = [];
+  for (let si = 1; si <= 5; si++) {
+    const pk = `period${si}` as keyof typeof homeScore;
+    if (homeScore[pk] !== undefined) {
+      const h = homeScore[pk] as number;
+      const a = (awayScore[pk] as number) || 0;
+      p1Sets.push(p1IsHome ? h : a);
+      p2Sets.push(p1IsHome ? a : h);
+    }
+  }
+  if (p1Sets.length) {
+    const completedSets: { p1: number; p2: number }[] = [];
+    let currentSetGames = { p1: 0, p2: 0 };
+    for (let si = 0; si < p1Sets.length; si++) {
+      const g1 = p1Sets[si];
+      const g2 = p2Sets[si];
+      if (si === p1Sets.length - 1 && !(g1 >= 6 && g1 - g2 >= 2) && !(g2 >= 6 && g2 - g1 >= 2) && !(g1 === 7 || g2 === 7)) {
+        currentSetGames = { p1: g1, p2: g2 };
+      } else {
+        completedSets.push({ p1: g1, p2: g2 });
+      }
+    }
+    ls.completedSets = completedSets;
+    ls.currentSetGames = currentSetGames;
+    match.score = { p1_sets: p1Sets, p2_sets: p2Sets };
+  }
+
+  const numSets = (ls.completedSets?.length || 0) + 1;
+  const tbKey = `period${numSets}TieBreak` as keyof typeof homeScore;
+  if (homeScore[tbKey] !== undefined) {
+    const hTB = homeScore[tbKey] as number;
+    const aTB = (awayScore[tbKey] as number) || 0;
+    ls.tiebreakScore = { p1: p1IsHome ? hTB : aTB, p2: p1IsHome ? aTB : hTB };
+  } else {
+    ls.tiebreakScore = undefined;
+  }
+}
+
+/**
+ * Lightweight live refresh — updates score/point/server (and recomputes True
+ * P, edge, Kelly, break/hold and hedge signals) for every currently-live
+ * match from a SINGLE bulk live-events request, without rebuilding the
+ * schedule or re-fetching odds/stats per match. Cheap enough to poll every
+ * few seconds so True P tracks the score point-by-point for the whole list,
+ * not just whichever match is selected.
+ */
+export async function refreshLiveMatches(matches: ScheduledMatch[]): Promise<boolean> {
+  const live = matches.filter(m => m.status === "live" && m.liveScore?.sofaId);
+  if (!live.length) return false;
+
+  const sofaEvents = await fetchSofaLive();
+  if (!sofaEvents.length) return false;
+
+  let changed = false;
+  for (const m of live) {
+    const sofaMatch = sofaEvents.find(se => se.id === m.liveScore!.sofaId);
+    if (!sofaMatch) continue;
+    applySofaLiveScore(m, sofaMatch);
+    attachIntelligence(m);
+    changed = true;
+  }
+  return changed;
 }
 
 /** Cache SofaScore data — ultra-fast for local use */

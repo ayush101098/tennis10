@@ -70,3 +70,6 @@ nohup.out
 trading-terminal/out/
 trading-terminal/next-env.d.ts
 trading-terminal/tsconfig.tsbuildinfo
+
+# Local Netlify folder
+.netlify
