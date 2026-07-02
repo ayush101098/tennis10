@@ -188,17 +188,20 @@ class HierarchicalTennisModel:
 
     def _match_prob_remaining(self, p_set: float,
                                need1: int, need2: int) -> float:
-        """P(player1 wins) needing need1 sets, opponent needing need2 sets."""
+        """P(player1 wins) needing need1 sets, opponent needing need2 sets.
+
+        Negative binomial race: P1 must take need1 sets before P2 takes need2.
+            P = sum_{j=0}^{need2-1} C(need1+j-1, j) * p^need1 * (1-p)^j
+        """
         from math import comb
-        total = need1 + need2
+        if need1 <= 0:
+            return 1.0
+        if need2 <= 0:
+            return 0.0
         p = 0.0
-        for w in range(need1, total):
-            # win w out of w+(need2) games, winning the last
-            n   = w + need2 - 1
-            k   = w - 1
-            if k >= 0:
-                p += comb(n, k) * (p_set ** w) * ((1 - p_set) ** need2)
-        return p
+        for j in range(need2):
+            p += comb(need1 + j - 1, j) * (p_set ** need1) * ((1 - p_set) ** j)
+        return min(1.0, max(0.0, p))
 
     # ── Convenience full-match entry point ────────────────────────────────────
 

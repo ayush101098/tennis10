@@ -1,7 +1,11 @@
 [build]
   base = "trading-terminal"
   publish = "out"
-  command = "npm run build"
+  # Next's `output: export` cannot include the app-router API route (it has no
+  # generateStaticParams and proxies live data) — Netlify serves that same
+  # path via the sofa-proxy function + redirect below instead, so the route
+  # is only needed for local `next dev`. Strip it before the static build.
+  command = "rm -rf src/app/api && npm run build"
 
 [build.environment]
   NODE_VERSION = "20"

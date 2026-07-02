@@ -36,8 +36,25 @@ import tls_client
 SOFA_BASE = "https://www.sofascore.com/api/v1"
 
 # ─── Session pool (round-robin) ──────────────────────────────────────────────
+# NOTE: browser headers + random_tls_extension_order are required — without
+# them SofaScore's CDN returns 403 for every request.
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.sofascore.com/",
+    "Origin": "https://www.sofascore.com",
+}
+
+
+def _new_session() -> "tls_client.Session":
+    s = tls_client.Session(client_identifier="chrome_120", random_tls_extension_order=True)
+    s.headers.update(_BROWSER_HEADERS)
+    return s
+
+
 POOL_SIZE = 4
-_sessions = [tls_client.Session(client_identifier="chrome_120") for _ in range(POOL_SIZE)]
+_sessions = [_new_session() for _ in range(POOL_SIZE)]
 _session_locks = [threading.Lock() for _ in range(POOL_SIZE)]
 _pool_idx = 0
 _pool_idx_lock = threading.Lock()
@@ -186,6 +203,8 @@ def _warm_cache():
         f"category/213/scheduled-events/{today}",   # ITF women
         f"category/785/scheduled-events/{tomorrow}",
         f"category/213/scheduled-events/{tomorrow}",
+        f"sport/tennis/odds/1/{today}",      # daily bulk odds — feeds the Value Board
+        f"sport/tennis/odds/1/{tomorrow}",
         "sport/tennis/events/live",
     ]
     def fetch_one(p):

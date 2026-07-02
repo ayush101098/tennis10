@@ -63,6 +63,7 @@ trading-terminal/index_old.html
 !tsconfig.json
 !vercel.json
 !trading-terminal/public/rankings.json
+!trading-terminal/public/nn_model.json
 nohup.out
 
 # Next.js build output

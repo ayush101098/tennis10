@@ -8,6 +8,7 @@ import {
   computeBreakHoldSignals, computeTrueProbabilities, evaluateHedgeSignal,
   type BreakHoldSignals, type TrueProbabilities, type HedgeAlert,
 } from "./breakHoldEngine";
+import { loadNNModel, nnMatchProb } from "./nnModel";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -46,8 +47,10 @@ export interface ScheduledMatch {
     /** Live match statistics from SofaScore */
     stats?: LiveMatchStats;
     sofaId?: number;                 // SofaScore event ID for stats lookup
-    /** Real bookmaker odds from SofaScore */
-    bookmakerOdds?: { p1: number; p2: number; source?: string };
+    /** Real bookmaker odds from SofaScore — isLive tells whether the price is in-play */
+    bookmakerOdds?: { p1: number; p2: number; source?: string; isLive?: boolean };
+    /** Orientation of the SofaScore event vs our P1/P2 (true = sofa home is our P1) */
+    sofaHomeIsP1?: boolean;
     /** Break/Hold signal engine output */
     breakHoldSignals?: BreakHoldSignals;
     /** Markov True P at game/set/match level, tour-aware */
@@ -56,6 +59,21 @@ export interface ScheduledMatch {
     edge?: { p1: number; p2: number };
     /** Hedge-timing alert evaluated against the live score + bookmaker odds */
     hedgeAlert?: HedgeAlert;
+  };
+  /** Pre-match bookmaker odds (from the SofaScore daily odds feed) */
+  prematchOdds?: { p1: number; p2: number; source?: string; isLive?: boolean };
+  /** Best-side value assessment: model True P vs de-vigged market */
+  value?: {
+    side: 1 | 2;
+    player: string;
+    trueP: number;      // model probability for that side
+    odds: number;       // bookmaker decimal odds for that side
+    marketP: number;    // de-vigged implied probability
+    edge: number;       // trueP - marketP
+    kelly: number;      // full-Kelly fraction (cap/quarter applied in UI)
+    live: boolean;      // computed from live score-conditioned True P
+    /** Edge too large to be real — almost always a data problem, not free money */
+    suspect: boolean;
   };
 }
 
@@ -100,21 +118,23 @@ function normName(n: string): string {
     .trim();
 }
 
-let _rankingsPromise: Promise<Map<string, number>> | null = null;
+type RankMap = Map<string, RankEntry>;
 
-function loadRankings(): Promise<Map<string, number>> {
+let _rankingsPromise: Promise<RankMap> | null = null;
+
+function loadRankings(): Promise<RankMap> {
   if (_rankingsPromise) return _rankingsPromise;
   _rankingsPromise = (async () => {
-    const map = new Map<string, number>();
+    const map: RankMap = new Map();
     try {
       const res = await fetch("/rankings.json");
       if (!res.ok) return map;
       const data: RankingsFile = await res.json();
       for (const [name, entry] of Object.entries(data.atp)) {
-        map.set(normName(name), entry.rank);
+        map.set(normName(name), entry);
       }
       for (const [name, entry] of Object.entries(data.wta)) {
-        map.set(normName(name), entry.rank);
+        map.set(normName(name), entry);
       }
       console.log(`[rankings] loaded ${map.size} players (ATP ${data.atp_date}, WTA ${data.wta_date})`);
     } catch (e) {
@@ -125,20 +145,22 @@ function loadRankings(): Promise<Map<string, number>> {
   return _rankingsPromise;
 }
 
-function lookupRank(nameMap: Map<string, number>, displayName: string): number {
+function lookupEntry(nameMap: RankMap, displayName: string): RankEntry | null {
   const key = normName(displayName);
   const r = nameMap.get(key);
   if (r) return r;
   // Try last-name first-name swap (Sackmann uses "First Last", ESPN uses "First Last" too usually)
-  // Also try just last name for common cases
   const parts = key.split(" ");
   if (parts.length >= 2) {
-    // Try "last first" order
     const swapped = parts.slice(1).join(" ") + " " + parts[0];
     const r2 = nameMap.get(swapped);
     if (r2) return r2;
   }
-  return 0;
+  return null;
+}
+
+function lookupRank(nameMap: RankMap, displayName: string): number {
+  return lookupEntry(nameMap, displayName)?.rank ?? 0;
 }
 
 // ─── ESPN ────────────────────────────────────────────────────────────────────
@@ -174,7 +196,7 @@ function localDateStr(d: Date): string {
 async function fetchESPN(
   tour: "atp" | "wta",
   targetDate: string, // YYYY-MM-DD — only return matches on this local date
-  rankMap: Map<string, number>,
+  rankMap: RankMap,
 ): Promise<ScheduledMatch[]> {
   const espnDate = targetDate.replace(/-/g, "");
   const out: ScheduledMatch[] = [];
@@ -298,7 +320,11 @@ async function fetchESPN(
         }
 
         const venue = comp.venue?.fullName || "";
-        const { p1_prob, p2_prob, method } = computeProb(p1Rank, p2Rank, p1Seed, p2Seed, surface, bestOf);
+        const { p1_prob, p2_prob, method } = computeProb(p1Rank, p2Rank, p1Seed, p2Seed, surface, bestOf, {
+          pts1: lookupEntry(rankMap, p1Name)?.points ?? 0,
+          pts2: lookupEntry(rankMap, p2Name)?.points ?? 0,
+          bigEvent: isBigEvent(tName, bestOf),
+        });
 
         out.push({
           id: `espn_${tour}_${event.id}_${comp.id}`,
@@ -320,21 +346,36 @@ async function fetchESPN(
   return out;
 }
 
-// ─── Elo probability ─────────────────────────────────────────────────────────
+// ─── Pre-match probability: NN + Elo ensemble ────────────────────────────────
+
+/** Set by fetchScheduleClient before match parsing; null until nn_model.json loads. */
+let _nnModel: Awaited<ReturnType<typeof loadNNModel>> = null;
+
+function isBigEvent(tournamentName: string, bestOf: number): boolean {
+  if (bestOf === 5) return true;
+  return /masters|1000|indian wells|miami|monte.carlo|madrid|rome|canadian|montreal|toronto|cincinnati|shanghai|paris/i
+    .test(tournamentName);
+}
 
 function elo(rank: number): number {
   if (rank <= 0) return 1700;
   if (rank === 1) return 2400;
-  return Math.max(1300, 2400 - 180 * Math.log(rank));
+  // Floor at 1000, not 1300 — a 1300 floor made every rank beyond ~450
+  // identical, so rank-460 vs unranked read as a coin flip.
+  return Math.max(1000, 2400 - 180 * Math.log(rank));
 }
 
 function eloP(e1: number, e2: number): number {
   return 1 / (1 + Math.pow(10, (e2 - e1) / 400));
 }
 
+/** Weight of the neural network vs the Elo formula when both ranks are known. */
+const NN_WEIGHT = 0.6;
+
 function computeProb(
   r1: number, r2: number, s1: number, s2: number,
   surface: string, bestOf: number,
+  extra?: { pts1?: number; pts2?: number; bigEvent?: boolean },
 ): { p1_prob: number; p2_prob: number; method: string } {
   let method = "ranking";
   let p: number;
@@ -344,7 +385,10 @@ function computeProb(
   } else if (s1 > 0 && s2 > 0) {
     method = "seed"; p = eloP(elo(s1), elo(s2));
   } else if (r1 > 0 || r2 > 0) {
-    p = eloP(elo(r1 || 150), elo(r2 || 150));
+    // Unranked opponent: assume outside the top 500 (rank 750), never better
+    // than the ranked player — the old default of 150 rated unknown ITF
+    // players above a rank-472 opponent and produced fake edges.
+    p = eloP(elo(r1 || 750), elo(r2 || 750));
   } else if (s1 > 0 || s2 > 0) {
     method = "seed"; p = eloP(elo(s1 || 16), elo(s2 || 16));
   } else {
@@ -359,6 +403,18 @@ function computeProb(
   if (bestOf === 5) {
     const q = 1 - p;
     p = Math.pow(p, 1.22) / (Math.pow(p, 1.22) + Math.pow(q, 1.22));
+  }
+
+  // Neural network blend — the NN is Platt-calibrated and beats the Elo
+  // formula out-of-sample on log loss / Brier, so it carries more weight.
+  if (_nnModel && r1 > 0 && r2 > 0 && method === "ranking") {
+    const pNN = nnMatchProb(_nnModel, {
+      rankA: r1, rankB: r2,
+      pointsA: extra?.pts1 ?? 0, pointsB: extra?.pts2 ?? 0,
+      surface, bestOf, bigEvent: extra?.bigEvent ?? false,
+    });
+    p = NN_WEIGHT * pNN + (1 - NN_WEIGHT) * p;
+    method = "nn+elo";
   }
 
   p = Math.max(0.03, Math.min(0.97, p));
@@ -401,7 +457,7 @@ function sofaGroundToSurface(gt?: string): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatch | null {
+function sofaEventToMatch(evt: any, rankMap: RankMap): ScheduledMatch | null {
   // Singles only — skip doubles (type===2 or "/" in name)
   const p1Name: string = evt.homeTeam?.name || "";
   const p2Name: string = evt.awayTeam?.name || "";
@@ -428,9 +484,15 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
   const startTs = evt.startTimestamp || 0;
   const startTime = startTs ? new Date(startTs * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
 
-  const p1Rank = lookupRank(rankMap, p1Name);
-  const p2Rank = lookupRank(rankMap, p2Name);
-  const { p1_prob, p2_prob, method } = computeProb(p1Rank, p2Rank, 0, 0, surface, bestOf);
+  const p1Entry = lookupEntry(rankMap, p1Name);
+  const p2Entry = lookupEntry(rankMap, p2Name);
+  const p1Rank = p1Entry?.rank ?? 0;
+  const p2Rank = p2Entry?.rank ?? 0;
+  const { p1_prob, p2_prob, method } = computeProb(p1Rank, p2Rank, 0, 0, surface, bestOf, {
+    pts1: p1Entry?.points ?? 0,
+    pts2: p2Entry?.points ?? 0,
+    bigEvent: isBigEvent(utName, bestOf),
+  });
 
   const roundName = evt.roundInfo?.name || "";
   const sofaId = evt.id as number;
@@ -509,6 +571,7 @@ function sofaEventToMatch(evt: any, rankMap: Map<string, number>): ScheduledMatc
         pointScore,
         tiebreakScore,
         sofaId,
+        sofaHomeIsP1: true,
       };
     }
   }
@@ -547,6 +610,49 @@ const SOFA_CAT_URLS: Record<string, string> = {
   "itf-women": "/api/sofa/category/213/scheduled-events",
 };
 
+/* ── Daily bulk odds: one request returns match-winner odds for EVERY event on a date ── */
+
+type OddsPair = { p1: number; p2: number; source?: string; isLive?: boolean };
+
+const _sofaDailyOddsCache: Record<string, { data: Map<number, OddsPair>; ts: number }> = {};
+const SOFA_DAILY_ODDS_TTL = 60_000;
+
+async function fetchSofaDailyOdds(targetDate: string): Promise<Map<number, OddsPair>> {
+  const cached = _sofaDailyOddsCache[targetDate];
+  if (cached && Date.now() - cached.ts < SOFA_DAILY_ODDS_TTL) return cached.data;
+
+  const map = new Map<number, OddsPair>();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45_000);
+    const res = await fetch(`/api/sofa/sport/tennis/odds/1/${targetDate}`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return cached?.data ?? map;
+    const json = await res.json();
+    // Shape: { odds: { "<eventId>": { choices: [{name:"1",fractionalValue},{name:"2",...}] } } }
+    const odds = json.odds || {};
+    for (const [idStr, market] of Object.entries(odds)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mkt = market as any;
+      const choices: { name: string; fractionalValue: string }[] = mkt?.choices || [];
+      const home = choices.find(c => c.name === "1");
+      const away = choices.find(c => c.name === "2");
+      if (!home || !away) continue;
+      const p1 = fractionalToDecimal(home.fractionalValue);
+      const p2 = fractionalToDecimal(away.fractionalValue);
+      if (p1 > 1 && p2 > 1) {
+        map.set(parseInt(idStr), { p1, p2, source: mkt.marketName || "SofaScore" });
+      }
+    }
+    _sofaDailyOddsCache[targetDate] = { data: map, ts: Date.now() };
+    console.log(`[sofascore] daily odds ${targetDate}: ${map.size} events priced`);
+  } catch (e) {
+    console.warn("[sofascore] daily odds fetch failed", e);
+    return cached?.data ?? map;
+  }
+  return map;
+}
+
 /** Cache SofaScore scheduled data per date — 12s TTL for schedule, 2s for live polling */
 const _sofaSchedCache: Record<string, { data: ScheduledMatch[]; ts: number }> = {};
 const SOFA_SCHED_TTL = 12_000;
@@ -569,7 +675,7 @@ async function fetchSofaEndpoint(url: string): Promise<unknown[]> {
 
 async function fetchSofaScheduled(
   targetDate: string,
-  rankMap: Map<string, number>,
+  rankMap: RankMap,
   forceFresh = false,
 ): Promise<ScheduledMatch[]> {
   const cached = _sofaSchedCache[targetDate];
@@ -577,11 +683,12 @@ async function fetchSofaScheduled(
   if (cached && Date.now() - cached.ts < ttl) return cached.data;
 
   try {
-    // Fetch generic endpoint + category-specific ITF endpoints in parallel
-    const [genericEvents, itfMenEvents, itfWomenEvents] = await Promise.all([
+    // Fetch generic endpoint + category-specific ITF endpoints + daily odds in parallel
+    const [genericEvents, itfMenEvents, itfWomenEvents, dailyOdds] = await Promise.all([
       fetchSofaEndpoint(`${SOFA_SCHEDULED}/${targetDate}`),
       fetchSofaEndpoint(`${SOFA_CAT_URLS["itf-men"]}/${targetDate}`),
       fetchSofaEndpoint(`${SOFA_CAT_URLS["itf-women"]}/${targetDate}`),
+      fetchSofaDailyOdds(targetDate),
     ]);
 
     // Merge all events, deduplicate by SofaScore event ID
@@ -599,7 +706,15 @@ async function fetchSofaScheduled(
     const matches: ScheduledMatch[] = [];
     for (const evt of allEvents) {
       const m = sofaEventToMatch(evt, rankMap);
-      if (m) matches.push(m);
+      if (!m) continue;
+      // Attach PRE-MATCH bookmaker odds from the daily bulk feed (P1 = home for
+      // sofa matches). Live matches get in-play odds separately — comparing a
+      // score-conditioned True P against pre-match prices fabricates edges.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const evtId = (evt as any).id as number;
+      const odds = dailyOdds.get(evtId);
+      if (odds) m.prematchOdds = { ...odds, isLive: false };
+      matches.push(m);
     }
     _sofaSchedCache[targetDate] = { data: matches, ts: Date.now() };
     console.log(`[sofascore] ${targetDate}: ${matches.length} singles (generic=${genericEvents.length}, itfM=${itfMenEvents.length}, itfW=${itfWomenEvents.length}, deduped from ${allEvents.length})`);
@@ -640,7 +755,8 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
   const todayStr = localDateStr(now);
   const tomorrowStr = localDateStr(tom);
 
-  const rankMap = await loadRankings();
+  const [rankMap, nnModel] = await Promise.all([loadRankings(), loadNNModel()]);
+  _nnModel = nnModel;
 
   const [at, wt, ato, wto, sofaToday, sofaTomorrow] = await Promise.all([
     fetchESPN("atp", todayStr, rankMap),
@@ -657,19 +773,36 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
     return d !== 0 ? d : (a.start_timestamp || 9e9) - (b.start_timestamp || 9e9);
   };
 
-  // Deduplicate: ESPN matches take priority, then SofaScore fills gaps
+  // Deduplicate: ESPN matches take priority (better metadata), SofaScore fills
+  // gaps — but SofaScore extras (bookmaker odds, event id) are merged onto the
+  // ESPN entry so every match keeps its market data.
   const dedup = (espn: ScheduledMatch[], sofa: ScheduledMatch[]): ScheduledMatch[] => {
+    const nameKey = (m: ScheduledMatch) => [normName(m.player1), normName(m.player2)].sort().join("|");
+    const sofaByKey = new Map<string, ScheduledMatch>();
+    for (const m of sofa) sofaByKey.set(nameKey(m), m);
+
     const seen = new Set<string>();
     const out: ScheduledMatch[] = [];
-    // Add ESPN matches first (better metadata: seeds, rankings, venue)
     for (const m of espn) {
-      const key = [normName(m.player1), normName(m.player2)].sort().join("|");
+      const key = nameKey(m);
       seen.add(key);
+      const twin = sofaByKey.get(key);
+      if (twin) {
+        // Odds sides follow player order — swap if the twin lists them reversed
+        const sameOrder = matchNames(m.player1, twin.player1);
+        if (twin.prematchOdds) {
+          m.prematchOdds = sameOrder ? twin.prematchOdds
+            : { p1: twin.prematchOdds.p2, p2: twin.prematchOdds.p1, source: twin.prematchOdds.source, isLive: false };
+        }
+        if (m.liveScore && twin.liveScore?.sofaId) {
+          m.liveScore.sofaId = twin.liveScore.sofaId;
+          m.liveScore.sofaHomeIsP1 = sameOrder;
+        }
+      }
       out.push(m);
     }
-    // Add SofaScore matches that ESPN doesn't have
     for (const m of sofa) {
-      const key = [normName(m.player1), normName(m.player2)].sort().join("|");
+      const key = nameKey(m);
       if (!seen.has(key)) {
         seen.add(key);
         out.push(m);
@@ -680,6 +813,12 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
 
   const today = dedup([...at, ...wt], sofaToday).sort(sort);
   const tomorrow = dedup([...ato, ...wto], sofaTomorrow).sort(sort);
+
+  // ── In-play odds for live matches (throttled; per-event cache absorbs polls) ──
+  await attachLiveOdds(today.filter(m => m.status === "live" && m.liveScore?.sofaId));
+
+  // ── Betting intelligence pass: live True P + edge + Kelly for EVERY match ──
+  for (const m of [...today, ...tomorrow]) attachIntelligence(m);
 
   const result: ScheduleData = { today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr, fetched_at: Date.now() };
   _scheduleCache = { data: result, ts: Date.now() };
@@ -795,9 +934,9 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
         if (odds) match.liveScore.bookmakerOdds = odds;
       }
 
-      // ── Compute Break/Hold Signals ──
+      // ── Compute Break/Hold Signals + edge/Kelly ──
       if (match.liveScore) {
-        attachBreakHoldSignals(match);
+        attachIntelligence(match);
       }
     }
     return match;
@@ -813,8 +952,8 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
   if (match && match.status === "live" && match.liveScore) {
     // Enrich with SofaScore point-level data
     await enrichWithSofaScore(match);
-    // ── Compute Break/Hold Signals ──
-    attachBreakHoldSignals(match);
+    // ── Compute Break/Hold Signals + edge/Kelly ──
+    attachIntelligence(match);
   }
   return match;
 }
@@ -952,22 +1091,35 @@ function fractionalToDecimal(frac: string): number {
   return num / den + 1; // fractional→decimal = numerator/denominator + 1
 }
 
-/** Fetch real bookmaker odds from SofaScore for a given event */
-async function fetchSofaOdds(sofaId: number): Promise<{ p1: number; p2: number; source?: string } | null> {
+/** Per-event odds cache — live prices move fast, keep TTL short */
+const _sofaEventOddsCache = new Map<number, { data: OddsPair | null; ts: number }>();
+const SOFA_EVENT_ODDS_TTL = 15_000;
+
+/**
+ * Fetch real bookmaker odds from SofaScore for a given event.
+ * Prefers the in-play "Full time" market when the match is live (isLive: true);
+ * falls back to the pre-match price otherwise.
+ */
+async function fetchSofaOdds(sofaId: number): Promise<OddsPair | null> {
+  const cached = _sofaEventOddsCache.get(sofaId);
+  if (cached && Date.now() - cached.ts < SOFA_EVENT_ODDS_TTL) return cached.data;
   try {
     const res = await fetch(`/api/sofa/event/${sofaId}/odds/1/all`);
     if (!res.ok) return null;
     const json = await res.json();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const markets: any[] = json.markets || [];
-    if (!markets.length) return null;
 
-    // Use first market (typically most prominent bookmaker)
-    const market = markets[0];
+    // "Full time" = match winner. Live market first, then pre-match.
+    const ft = markets.filter(m => m.marketName === "Full time");
+    const market =
+      ft.find(m => m.isLive && !m.suspended) ??
+      ft.find(m => !m.isLive) ??
+      ft[0] ?? markets[0];
+    if (!market) return null;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const choices: any[] = market.choices || [];
-    if (choices.length < 2) return null;
-
     // choices: name "1" = home, name "2" = away
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const homeChoice = choices.find((c: any) => c.name === "1");
@@ -979,9 +1131,14 @@ async function fetchSofaOdds(sofaId: number): Promise<{ p1: number; p2: number; 
     const awayOdds = fractionalToDecimal(awayChoice.fractionalValue);
     if (homeOdds <= 1 || awayOdds <= 1) return null;
 
-    const source = market.marketName || market.sourceName || "SofaScore";
     // For sofa-sourced matches, P1 = home. Caller maps if needed.
-    return { p1: homeOdds, p2: awayOdds, source };
+    const data: OddsPair = {
+      p1: homeOdds, p2: awayOdds,
+      source: market.marketName || market.sourceName || "SofaScore",
+      isLive: !!market.isLive,
+    };
+    _sofaEventOddsCache.set(sofaId, { data, ts: Date.now() });
+    return data;
   } catch (e) {
     console.warn("[sofascore] odds fetch failed", e);
     return null;
@@ -1135,4 +1292,117 @@ const PT: Record<string, number> = { "0": 0, "15": 1, "30": 2, "40": 3, "A": 4, 
 
 function roundTo3(v: number): number {
   return Math.round(v * 1000) / 1000;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Betting intelligence — True P, edge and Kelly for every match in the list
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Fetch in-play odds for the given live matches, concurrency-limited.
+ * Only live (isLive) prices are attached — a live True P must never be
+ * compared against a pre-match price.
+ */
+async function attachLiveOdds(liveMatches: ScheduledMatch[], concurrency = 6): Promise<void> {
+  const queue = [...liveMatches];
+  const worker = async () => {
+    for (;;) {
+      const m = queue.shift();
+      if (!m) return;
+      try {
+        const odds = await fetchSofaOdds(m.liveScore!.sofaId!);
+        if (odds?.isLive) {
+          const homeIsP1 = m.liveScore!.sofaHomeIsP1 !== false;
+          m.liveScore!.bookmakerOdds = homeIsP1
+            ? odds
+            : { p1: odds.p2, p2: odds.p1, source: odds.source, isLive: odds.isLive };
+        }
+      } catch { /* odds are optional */ }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+}
+
+/**
+ * Attach the full intelligence stack to one match:
+ *  - live matches: score-conditioned Markov True P (+ break/hold + hedge signals)
+ *  - all matches with bookmaker odds: best-side edge vs de-vigged market + Kelly
+ *
+ * Integrity rules (a value claim must survive these or it is not shown):
+ *  1. Live True P is only compared against LIVE odds, never pre-match prices.
+ *  2. A live value claim needs a real model opinion — a known pre-match prior
+ *     or live serve stats. Score-only Markov on two unknown players is not an
+ *     opinion strong enough to bet against an in-play market.
+ *  3. Pre-match value needs a ranked prior (never bet a coin flip vs the vig).
+ */
+export function attachIntelligence(m: ScheduledMatch): void {
+  if (m.status === "live" && m.liveScore) {
+    attachBreakHoldSignals(m);
+  }
+
+  if (m.status === "finished" || m.status === "cancelled") {
+    m.value = undefined;
+    return;
+  }
+
+  let odds: { p1: number; p2: number; isLive?: boolean } | undefined;
+  let live = false;
+
+  // A real model opinion needs BOTH players ranked (or seeded). One-sided or
+  // missing ranks degrade the prior to a coin flip — and a coin flip vs a
+  // market that knows the players is not an edge, it is ignorance.
+  const hasRealPrior =
+    m.prob_method !== "unknown" &&
+    ((m.p1_rank > 0 && m.p2_rank > 0) || (m.p1_seed > 0 && m.p2_seed > 0));
+
+  if (m.status === "live") {
+    const lo = m.liveScore?.bookmakerOdds;
+    const hasModelBasis = hasRealPrior || !!m.liveScore?.stats;
+    if (!lo?.isLive || !hasModelBasis || !m.liveScore?.trueProbabilities) {
+      m.value = undefined;
+      return;
+    }
+    odds = lo;
+    live = true;
+  } else {
+    if (!hasRealPrior) {
+      m.value = undefined;
+      return;
+    }
+    odds = m.prematchOdds;
+  }
+
+  if (!odds || odds.p1 <= 1 || odds.p2 <= 1) {
+    m.value = undefined;
+    return;
+  }
+
+  const p1True = live ? m.liveScore!.trueProbabilities!.p1MatchProb : m.p1_win_prob;
+
+  const raw1 = 1 / odds.p1;
+  const raw2 = 1 / odds.p2;
+  const overround = raw1 + raw2;
+  const market1 = raw1 / overround;
+  const market2 = raw2 / overround;
+
+  const edge1 = p1True - market1;
+  const edge2 = (1 - p1True) - market2;
+  const side: 1 | 2 = edge1 >= edge2 ? 1 : 2;
+  const trueP = side === 1 ? p1True : 1 - p1True;
+  const sideOdds = side === 1 ? odds.p1 : odds.p2;
+  const edge = side === 1 ? edge1 : edge2;
+
+  m.value = {
+    side,
+    player: side === 1 ? m.player1 : m.player2,
+    trueP: roundTo3(trueP),
+    odds: sideOdds,
+    marketP: roundTo3(side === 1 ? market1 : market2),
+    edge: roundTo3(edge),
+    kelly: roundTo3(kellyFraction(trueP, sideOdds)),
+    live,
+    // Bookmakers do not hand out 20%+ edges; a gap that size means the model
+    // or the data feed is wrong about this match. Flag, never recommend.
+    suspect: edge > 0.20,
+  };
 }

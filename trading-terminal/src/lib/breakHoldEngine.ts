@@ -996,21 +996,43 @@ function matchWinProbFromSetProb(pSet: number, bestOf: number): number {
   return pSet ** 2 * (3 - 2 * pSet);
 }
 
-/** P(player1 wins) needing need1 more sets, opponent needing need2 more. Mirrors _match_prob_remaining. */
+/**
+ * P(player1 wins the match) needing need1 more sets, opponent needing need2,
+ * with per-set win probability pSet. Negative binomial race:
+ *   P = Σ_{j=0}^{need2-1} C(need1+j-1, j) · pSet^need1 · (1-pSet)^j
+ * (The previous implementation of this formula was wrong — it multiplied every
+ * term by (1-pSet)^need2, inverting/deflating probabilities badly enough that a
+ * player leading 6-0, 1-0 was priced at 16% to win.)
+ */
 function matchProbRemaining(pSet: number, need1: number, need2: number): number {
-  const total = need1 + need2;
+  if (need1 <= 0) return 1;
+  if (need2 <= 0) return 0;
   let p = 0;
-  for (let w = need1; w < total; w++) {
-    const n = w + need2 - 1;
-    const k = w - 1;
-    if (k >= 0) p += comb(n, k) * pSet ** w * (1 - pSet) ** need2;
+  for (let j = 0; j < need2; j++) {
+    p += comb(need1 + j - 1, j) * pSet ** need1 * (1 - pSet) ** j;
   }
-  return p;
+  return clamp(p, 0, 1);
+}
+
+/**
+ * P(player1 wins the CURRENT set) from the game score — exact recursion over
+ * the games race (first to 6 win-by-2, tiebreak at 6-6), with pGame = P1's
+ * average game-win probability. Depth is bounded (≤ 13 games), no memo needed.
+ */
+function setWinFromGames(g1: number, g2: number, pGame: number, pTb: number): number {
+  if (g1 >= 6 && g1 - g2 >= 2) return 1;
+  if (g2 >= 6 && g2 - g1 >= 2) return 0;
+  if (g1 >= 7) return 1;
+  if (g2 >= 7) return 0;
+  if (g1 === 6 && g2 === 6) return pTb;
+  return pGame * setWinFromGames(g1 + 1, g2, pGame, pTb)
+       + (1 - pGame) * setWinFromGames(g1, g2 + 1, pGame, pTb);
 }
 
 /**
  * Score-conditioned match win probability — the key live-trading number.
- * Mirrors hierarchical_model.win_prob_from_score exactly.
+ * Conditions on the sets already banked AND the game score of the set in
+ * progress: P(match) = P(win this set)·P(race | set won) + P(lose it)·P(race | set lost).
  */
 function matchWinProbFromScore(
   setsP1: number, setsP2: number,
@@ -1031,12 +1053,18 @@ function matchWinProbFromScore(
 
   const p1SetAsServer = setWinProbability(p1Hold, p2Hold);
   const p1SetAsReturner = setWinProbability(1 - p2Hold, 1 - p1Hold);
-  let p1Set = (p1SetAsServer + p1SetAsReturner) / 2;
+  const p1Set = clamp((p1SetAsServer + p1SetAsReturner) / 2, 0.05, 0.95);
 
-  const gameLead = gamesP1 - gamesP2;
-  p1Set = clamp(p1Set + gameLead * 0.02, 0.05, 0.95);
+  // Current set: exact games-race recursion instead of a ±2pp/game nudge
+  const pGame = clamp((p1Hold + (1 - p2Hold)) / 2, 0.05, 0.95);
+  const pTb = clamp(0.5 + 0.8 * (pGame - 0.5), 0.05, 0.95);
+  const pThisSet = setWinFromGames(gamesP1, gamesP2, pGame, pTb);
 
-  return clamp(matchProbRemaining(p1Set, p1Need, p2Need), 0, 1);
+  const pMatch =
+    pThisSet * matchProbRemaining(p1Set, p1Need - 1, p2Need) +
+    (1 - pThisSet) * matchProbRemaining(p1Set, p1Need, p2Need - 1);
+
+  return clamp(pMatch, 0, 1);
 }
 
 export interface TrueProbabilities {

@@ -5,12 +5,20 @@ import { fetchScheduleClient, probToOdds, kellyFraction } from "@/lib/scheduleSe
 import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
 import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
+import ValueBoard from "@/components/ValueBoard";
+
+export type PanelTier = "public" | "free" | "pro";
 
 interface Props {
   onSelectMatch?: (match: ScheduledMatch) => void;
+  /** Feature tier — "pro" unlocks everything; "free" = pre-match probabilities only */
+  tier?: PanelTier;
+  /** Called when a locked feature is clicked — open the pricing modal */
+  onUpgrade?: () => void;
 }
 
-export default function SchedulePanel({ onSelectMatch }: Props) {
+export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }: Props) {
+  const isPro = tier === "pro";
   const [data, setData] = useState<ScheduleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [day, setDay] = useState<"today" | "tomorrow">("today");
@@ -18,6 +26,7 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<"edge" | "tracker">("edge");
+  const [view, setView] = useState<"matches" | "value">("matches");
   const refreshingRef = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -64,7 +73,20 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-terminal-border shrink-0">
-        <span className="text-xs font-bold text-terminal-yellow tracking-wider">📅 MATCH CENTRE</span>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setView("matches")}
+            className={`text-xs font-bold tracking-wider px-2 py-0.5 rounded transition ${
+              view === "matches" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"
+            }`}>
+            📅 MATCH CENTRE
+          </button>
+          <button onClick={() => setView("value")}
+            className={`text-xs font-bold tracking-wider px-2 py-0.5 rounded transition ${
+              view === "value" ? "text-terminal-green bg-terminal-green/10" : "text-terminal-muted hover:text-slate-300"
+            }`}>
+            💎 VALUE BOARD
+          </button>
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-terminal-muted">{matches.length} matches</span>
           <button onClick={refresh} disabled={loading}
@@ -95,7 +117,20 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
         {counts.finished ? <Pill active={statusFilter === "finished"} onClick={() => setStatusFilter("finished")} color="muted">✓ DONE ({counts.finished})</Pill> : null}
       </div>
 
+      {/* Value board view — ranked edges + Kelly stakes across all matches */}
+      {view === "value" && (
+        isPro ? (
+          <ValueBoard
+            matches={matches}
+            onSelectMatch={m => { setSelectedId(m.id); setView("matches"); onSelectMatch?.(m); }}
+          />
+        ) : (
+          <ProLock onUpgrade={onUpgrade} feature="The Value Board ranks every match on the schedule by model edge vs the de-vigged bookmaker market, with ¼-Kelly stakes and hedge alerts." />
+        )
+      )}
+
       {/* Two-pane: match list + edge panel */}
+      {view === "matches" && (
       <div className="flex-1 flex min-h-0">
         {/* Left: scrollable match list */}
         <div className={`overflow-y-auto border-r border-terminal-border ${selected ? "w-1/2" : "w-full"} transition-all`}>
@@ -148,11 +183,18 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
             </div>
             {/* Tab content */}
             <div className="flex-1 overflow-y-auto">
-              {rightTab === "edge" ? <EdgePanel match={selected} /> : <PointTracker match={selected} />}
+              {rightTab === "edge" ? (
+                <EdgePanel match={selected} tier={tier} onUpgrade={onUpgrade} />
+              ) : isPro ? (
+                <PointTracker match={selected} />
+              ) : (
+                <ProLock onUpgrade={onUpgrade} feature="The point-by-point tracker with live momentum and trading signals is a Pro feature." />
+              )}
             </div>
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -161,8 +203,26 @@ export default function SchedulePanel({ onSelectMatch }: Props) {
    EDGE PANEL — Full bookmaker-style analysis for the selected match
    ═══════════════════════════════════════════════════════════════════════════ */
 
-function EdgePanel({ match: m }: { match: ScheduledMatch }) {
-  const bookOdds = m.liveScore?.bookmakerOdds;
+/** Full-height lock screen for gated features */
+function ProLock({ feature, onUpgrade }: { feature: string; onUpgrade?: () => void }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center h-full">
+      <div className="text-3xl">🔒</div>
+      <div className="text-terminal-green font-bold text-sm">PRO FEATURE</div>
+      <div className="text-[11px] text-slate-300 max-w-[360px] leading-relaxed">{feature}</div>
+      <button onClick={onUpgrade}
+        className="mt-2 px-4 py-2 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition">
+        UNLOCK FULL TERMINAL — $99
+      </button>
+    </div>
+  );
+}
+
+export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
+  match: ScheduledMatch; tier?: PanelTier; onUpgrade?: () => void;
+}) {
+  const pro = tier === "pro";
+  const bookOdds = m.liveScore?.bookmakerOdds || m.prematchOdds;
   const liveTrueP = m.liveScore?.trueProbabilities;
   // ── True P: prefer the live, score-conditioned, tour-aware Markov number;
   //    fall back to the static pre-match Elo prior for scheduled matches.
@@ -178,11 +238,11 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
 
   // Recalc when match changes — prefer real bookmaker odds
   useEffect(() => {
-    const bk = m.liveScore?.bookmakerOdds;
+    const bk = m.liveScore?.bookmakerOdds || m.prematchOdds;
     setOdds1(bk?.p1 || probToOdds(p1Prob));
     setOdds2(bk?.p2 || probToOdds(p2Prob));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [m.id, p1Prob, p2Prob, m.liveScore?.bookmakerOdds]);
+  }, [m.id, p1Prob, p2Prob, m.liveScore?.bookmakerOdds, m.prematchOdds]);
 
   const imp1 = odds1 > 0 ? 1 / odds1 : 0;
   const imp2 = odds2 > 0 ? 1 / odds2 : 0;
@@ -207,7 +267,7 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
       </div>
 
       {/* ═══ HEDGE ALERT ═══ */}
-      {hedge?.shouldHedge && (
+      {pro && hedge?.shouldHedge && (
         <div className={`p-2 rounded border ${
           hedge.urgency === "IMMEDIATE" ? "border-terminal-red bg-terminal-red/15 animate-pulse"
             : "border-terminal-yellow bg-terminal-yellow/10"
@@ -255,7 +315,21 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
         </div>
       </Section>
 
+      {/* ═══ PRO-ONLY: edge, Kelly, live signals ═══ */}
+      {!pro && (
+        <div className="border border-terminal-green/30 bg-terminal-green/5 rounded p-3 text-center space-y-1.5">
+          <div className="text-sm">🔒</div>
+          <div className="text-[10px] font-bold text-terminal-green">EDGE vs BOOKMAKER · KELLY STAKES · LIVE SIGNALS · HEDGE TIMING</div>
+          <div className="text-[9px] text-terminal-muted">Live score-conditioned True P, de-vigged market edge, ¼-Kelly staking, break/hold engine and hedge alerts are Pro features.</div>
+          <button onClick={onUpgrade}
+            className="mt-1 px-3 py-1.5 rounded bg-terminal-green text-black text-[10px] font-bold hover:opacity-90 transition">
+            UNLOCK — $99
+          </button>
+        </div>
+      )}
+
       {/* Odds input + edge calculator */}
+      {pro && (
       <Section title="BOOKMAKER ODDS & EDGE">
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div>
@@ -281,14 +355,18 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
           <KV label="Margin" value={`${(vig * 100).toFixed(1)}%`} />
         </div>
       </Section>
+      )}
 
       {/* Value bet signals */}
+      {pro && (
       <Section title="VALUE BET SIGNALS">
         <ValueSignal label={`${m.player1} ML`} edge={edge1} odds={odds1} prob={p1Prob} />
         <ValueSignal label={`${m.player2} ML`} edge={edge2} odds={odds2} prob={p2Prob} />
       </Section>
+      )}
 
       {/* Kelly staking */}
+      {pro && (
       <Section title="KELLY STAKING">
         <div className="mb-2">
           <label className="text-[9px] text-terminal-muted block mb-0.5">Bankroll ($)</label>
@@ -319,6 +397,7 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
           </div>
         )}
       </Section>
+      )}
 
       {/* Match context */}
       <Section title="MATCH CONTEXT">
@@ -367,7 +446,7 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
       )}
 
       {/* Live match statistics */}
-      {m.status === "live" && m.liveScore?.stats && (
+      {pro && m.status === "live" && m.liveScore?.stats && (
         <Section title="📊 LIVE STATS">
           <div className="grid grid-cols-3 gap-y-1 text-[10px] text-center">
             <span className="text-terminal-muted text-left">Stat</span>
@@ -435,7 +514,7 @@ function EdgePanel({ match: m }: { match: ScheduledMatch }) {
       )}
 
       {/* ═══ BREAK/HOLD SIGNAL ENGINE ═══ */}
-      {m.status === "live" && m.liveScore?.breakHoldSignals && (
+      {pro && m.status === "live" && m.liveScore?.breakHoldSignals && (
         <BreakHoldPanel signals={m.liveScore.breakHoldSignals} m={m} />
       )}
     </div>
@@ -763,14 +842,13 @@ function MatchRow({ m, active, onClick }: { m: ScheduledMatch; active: boolean; 
           const tp = m.liveScore?.trueProbabilities;
           const dp1 = tp?.p1MatchProb ?? m.p1_win_prob;
           const dp2 = tp?.p2MatchProb ?? m.p2_win_prob;
-          const edge = m.liveScore?.edge;
-          const bestEdge = edge ? Math.max(edge.p1, edge.p2) : undefined;
+          const bestEdge = m.value?.edge;
           return (
             <div className="w-[55px] shrink-0 text-right">
               <div className={`text-[10px] font-mono ${fav1 ? "text-terminal-green font-bold" : "text-slate-400"}`}>{pct(dp1)}</div>
               <div className={`text-[10px] font-mono ${!fav1 ? "text-terminal-green font-bold" : "text-slate-400"}`}>{pct(dp2)}</div>
-              {bestEdge !== undefined && bestEdge > 0.03 && (
-                <div className="text-[7px] font-bold text-terminal-green">+{Math.round(bestEdge * 100)}% edge</div>
+              {bestEdge !== undefined && bestEdge >= 0.02 && (
+                <div className="text-[7px] font-bold text-terminal-green">+{(bestEdge * 100).toFixed(1)}% edge</div>
               )}
             </div>
           );
