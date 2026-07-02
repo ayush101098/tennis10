@@ -26,6 +26,7 @@ export const ADMIN_EMAILS = new Set([
   "ayushmishra101098@gmail.com",
   "mishrapriyanka9515@gmail.com",
   "sahil7goyal18@gmail.com",
+  "yuvamsharma98@gmail.com",
 ]);
 export const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
 export const PRO_PRICE_USD = 99;
