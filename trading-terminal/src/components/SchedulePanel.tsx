@@ -6,6 +6,9 @@ import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/sched
 import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
 import ValueBoard from "@/components/ValueBoard";
+import TradeTicket, { type TicketTarget } from "@/components/TradeTicket";
+import { usePolymarket } from "@/hooks/usePolymarket";
+import { fixtureKey } from "@/lib/polymarket";
 
 export type PanelTier = "public" | "free" | "pro";
 
@@ -253,6 +256,9 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
   const [odds1, setOdds1] = useState(() => bookOdds?.p1 || probToOdds(p1Prob));
   const [odds2, setOdds2] = useState(() => bookOdds?.p2 || probToOdds(p2Prob));
   const [bankroll, setBankroll] = useState(1000);
+  const [ticket, setTicket] = useState<TicketTarget | null>(null);
+  const pmIndex = usePolymarket();
+  const pmFixture = pmIndex.get(fixtureKey(m.player1, m.player2));
 
   // Recalc when match changes — prefer real bookmaker odds
   useEffect(() => {
@@ -282,6 +288,13 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
         <div className="text-xs font-bold text-terminal-yellow mb-1">⚡ EDGE ANALYSIS</div>
         <div className="text-slate-200 font-medium">{m.player1} vs {m.player2}</div>
         <div className="text-[10px] text-terminal-muted">{m.tournament} · {m.round} · {m.surface} · Bo{m.best_of} · <TourBadge t={m.tour} /></div>
+        {pro && (
+          <button
+            onClick={() => setTicket({ match: m, fixture: pmFixture, initialMarket: "match", initialPick: isFav1 ? m.player1 : m.player2 })}
+            className="mt-1.5 px-4 py-1.5 rounded bg-terminal-green text-black text-[10px] font-bold hover:opacity-90">
+            ⚡ TAKE TRADE — POLYMARKET{pmFixture ? "" : " (PAPER)"}{pmFixture?.sets.length ? ` · MATCH + ${pmFixture.sets.length} SET MKT${pmFixture.sets.length > 1 ? "S" : ""}` : ""}
+          </button>
+        )}
       </div>
 
       {/* ═══ HEDGE ALERT ═══ */}
@@ -412,6 +425,11 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
                 ((kelly1 > kelly2 ? edge1 : edge2) * (kelly1 > kelly2 ? stake1 : stake2) * (kelly1 > kelly2 ? odds1 : odds2)).toFixed(0)
               }
             </div>
+            <button
+              onClick={() => setTicket({ match: m, fixture: pmFixture, initialMarket: "match", initialPick: kelly1 > kelly2 ? m.player1 : m.player2 })}
+              className="mt-1.5 w-full py-1.5 rounded bg-terminal-green text-black text-[10px] font-bold hover:opacity-90">
+              ⚡ TAKE THIS TRADE
+            </button>
           </div>
         )}
       </Section>
@@ -535,6 +553,8 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
       {pro && m.status === "live" && m.liveScore?.breakHoldSignals && (
         <BreakHoldPanel signals={m.liveScore.breakHoldSignals} m={m} />
       )}
+
+      {ticket && <TradeTicket target={ticket} bankroll={bankroll} onClose={() => setTicket(null)} />}
     </div>
   );
 }

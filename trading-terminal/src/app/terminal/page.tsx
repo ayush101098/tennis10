@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import SchedulePanel from "@/components/SchedulePanel";
 import BetTracker from "@/components/BetTracker";
 import PricingModal from "@/components/PricingModal";
 import { useTier, signOut } from "@/lib/auth";
+import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
 /**
  * The terminal — gated by tier.
@@ -35,6 +36,7 @@ export default function TerminalPage() {
           </button>
         </div>
         <div className="flex items-center gap-3 text-[10px]">
+          {session && <PmStatus email={session.email} />}
           {session ? (
             <>
               <span className="text-terminal-muted">{session.email}</span>
@@ -88,5 +90,29 @@ export default function TerminalPage() {
 
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} onDone={refresh} />
     </div>
+  );
+}
+
+/** Polymarket wallet status — connect happens inside any trade ticket. */
+function PmStatus({ email }: { email: string }) {
+  const [conn, setConn] = useState<PmConnection | null>(null);
+  useEffect(() => {
+    const load = () => setConn(loadPmConnection(email));
+    load();
+    window.addEventListener(PM_CHANGED_EVENT, load);
+    return () => window.removeEventListener(PM_CHANGED_EVENT, load);
+  }, [email]);
+
+  return conn ? (
+    <button onClick={() => disconnectPolymarket(email)}
+      title={`Polymarket connected — orders sign with ${conn.address}. Click to disconnect.`}
+      className="font-bold px-1.5 py-0.5 rounded bg-terminal-green/15 text-terminal-green border border-terminal-green/40 hover:bg-terminal-red/15 hover:text-terminal-red hover:border-terminal-red/40 font-mono">
+      ⬢ PM {conn.address.slice(0, 6)}…{conn.address.slice(-4)}
+    </button>
+  ) : (
+    <span title="Not connected to Polymarket — trades log as paper. Connect from any ⚡ TRADE ticket."
+      className="font-bold px-1.5 py-0.5 rounded bg-terminal-border text-terminal-muted">
+      ⬢ PM PAPER MODE
+    </span>
   );
 }

@@ -18,6 +18,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS trade_log (
     trade_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     ts_utc       TEXT NOT NULL,
+    user_name    TEXT NOT NULL DEFAULT 'local', -- who took the trade
     venue        TEXT NOT NULL DEFAULT 'polymarket',
     match_name   TEXT NOT NULL,
     market_type  TEXT NOT NULL,           -- match | set1 | set2 | set3
@@ -40,15 +41,19 @@ CREATE TABLE IF NOT EXISTS trade_log (
 );
 """
 
-CSV_FIELDS = ["trade_id", "ts_utc", "venue", "match_name", "market_type",
-              "question", "outcome", "side", "true_p", "market_price", "edge",
-              "kelly_frac", "stake_usd", "shares", "order_id", "status",
-              "detail", "condition_id", "token_id"]
+CSV_FIELDS = ["trade_id", "ts_utc", "user_name", "venue", "match_name",
+              "market_type", "question", "outcome", "side", "true_p",
+              "market_price", "edge", "kelly_frac", "stake_usd", "shares",
+              "order_id", "status", "detail", "condition_id", "token_id"]
 
 
 def _conn():
     conn = sqlite3.connect(DB_PATH)
     conn.execute(SCHEMA)
+    # Migrate pre-user databases in place
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(trade_log)")}
+    if "user_name" not in cols:
+        conn.execute("ALTER TABLE trade_log ADD COLUMN user_name TEXT NOT NULL DEFAULT 'local'")
     return conn
 
 
@@ -56,6 +61,7 @@ def record_trade(row: dict) -> int:
     """Insert one trade row; returns trade_id. Also appends to the CSV mirror."""
     row = dict(row)
     row.setdefault("ts_utc", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    row.setdefault("user_name", os.getenv("TRADING_USER", "local"))
     row.setdefault("venue", "polymarket")
     cols = [c for c in row if c in {f for f in CSV_FIELDS} | {"settled_at", "pnl_usd"}]
     with _conn() as conn:
@@ -78,21 +84,29 @@ def _append_csv(row: dict) -> None:
         writer.writerow(row)
 
 
-def already_traded(token_id: str) -> bool:
+def already_traded(token_id: str, user_name: str | None = None) -> bool:
     """True if we already hold an open (non-failed, non-skipped) bet on this token."""
+    sql = ("SELECT 1 FROM trade_log WHERE token_id = ? "
+           "AND status IN ('dry_run', 'placed')")
+    params: list = [token_id]
+    if user_name is not None:
+        sql += " AND user_name = ?"
+        params.append(user_name)
     with _conn() as conn:
-        cur = conn.execute(
-            "SELECT 1 FROM trade_log WHERE token_id = ? "
-            "AND status IN ('dry_run', 'placed') LIMIT 1", (token_id,))
-        return cur.fetchone() is not None
+        return conn.execute(sql + " LIMIT 1", params).fetchone() is not None
 
 
-def recent_trades(limit: int = 25) -> list[dict]:
+def recent_trades(limit: int = 25, user_name: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM trade_log"
+    params: list = []
+    if user_name is not None:
+        sql += " WHERE user_name = ?"
+        params.append(user_name)
+    sql += " ORDER BY trade_id DESC LIMIT ?"
+    params.append(limit)
     with _conn() as conn:
         conn.row_factory = sqlite3.Row
-        cur = conn.execute(
-            "SELECT * FROM trade_log ORDER BY trade_id DESC LIMIT ?", (limit,))
-        return [dict(r) for r in cur.fetchall()]
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def settle_trade(trade_id: int, won: bool) -> None:
@@ -111,15 +125,17 @@ def settle_trade(trade_id: int, won: bool) -> None:
              datetime.now(timezone.utc).isoformat(timespec="seconds"), pnl, trade_id))
 
 
-def summary() -> dict:
+def summary(user_name: str | None = None) -> dict:
+    where = " WHERE user_name = ?" if user_name is not None else ""
+    params = [user_name] if user_name is not None else []
     with _conn() as conn:
-        cur = conn.execute("""
+        cur = conn.execute(f"""
             SELECT COUNT(*),
                    SUM(CASE WHEN status IN ('dry_run','placed') THEN stake_usd ELSE 0 END),
                    SUM(CASE WHEN status LIKE 'settled%' THEN pnl_usd ELSE 0 END),
                    SUM(CASE WHEN status = 'settled_win' THEN 1 ELSE 0 END),
                    SUM(CASE WHEN status = 'settled_loss' THEN 1 ELSE 0 END)
-            FROM trade_log""")
+            FROM trade_log{where}""", params)
         n, open_stake, pnl, wins, losses = cur.fetchone()
     return {"trades": n or 0, "open_stake_usd": open_stake or 0.0,
             "settled_pnl_usd": pnl or 0.0, "wins": wins or 0, "losses": losses or 0}

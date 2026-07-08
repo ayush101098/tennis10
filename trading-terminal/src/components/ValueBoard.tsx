@@ -2,9 +2,9 @@
 
 import { useMemo, useState } from "react";
 import type { ScheduledMatch } from "@/lib/scheduleService";
-import { trackBet } from "@/components/BetTracker";
 import { usePolymarket } from "@/hooks/usePolymarket";
-import { eventUrl, fixtureKey, outcomePrice, type PmFixture } from "@/lib/polymarket";
+import { fixtureKey, outcomePrice, type PmFixture } from "@/lib/polymarket";
+import TradeTicket, { type TicketTarget } from "@/components/TradeTicket";
 
 /**
  * VALUE BOARD — betting intelligence for every match on the schedule.
@@ -28,6 +28,7 @@ interface Props {
 export default function ValueBoard({ matches, onSelectMatch }: Props) {
   const [bankroll, setBankroll] = useState(1000);
   const [liveOnly, setLiveOnly] = useState(false);
+  const [ticket, setTicket] = useState<TicketTarget | null>(null);
   const pmIndex = usePolymarket();
 
   const { actionable, watchlist, suspects, priced, unpriced } = useMemo(() => {
@@ -98,7 +99,7 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
         {/* ── Actionable value bets ── */}
         <BoardSection title={`💎 VALUE BETS — edge ≥ ${MIN_EDGE * 100}% (${actionable.length})`} tone="green">
           <HeaderRow />
-          {actionable.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} />)}
+          {actionable.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} onTrade={setTicket} />)}
           {actionable.length === 0 && (
             <div className="text-terminal-muted text-[10px] text-center py-4">
               No edges above the {MIN_EDGE * 100}% floor right now — the discipline IS the system. Wait.
@@ -110,7 +111,7 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
         {watchlist.length > 0 && (
           <BoardSection title={`👁 WATCHLIST — positive but below floor (${watchlist.length})`} tone="muted">
             <HeaderRow />
-            {watchlist.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} dim />)}
+            {watchlist.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} onTrade={setTicket} dim />)}
           </BoardSection>
         )}
 
@@ -118,7 +119,7 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
         {suspects.length > 0 && (
           <BoardSection title={`⚠ SUSPECT DATA — edge >20% means bad inputs, DO NOT BET (${suspects.length})`} tone="red">
             <HeaderRow />
-            {suspects.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} dim />)}
+            {suspects.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} onTrade={setTicket} dim />)}
           </BoardSection>
         )}
 
@@ -129,6 +130,8 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
           Only bet edges ≥ {MIN_EDGE * 100}%. Unranked fields (deep ITF quallies) stay unpriced until live.
         </div>
       </div>
+
+      {ticket && <TradeTicket target={ticket} bankroll={bankroll} onClose={() => setTicket(null)} />}
     </div>
   );
 }
@@ -145,33 +148,23 @@ function HeaderRow() {
       <span className="text-right">¼ Kelly</span>
       <span className="text-right">Signal</span>
       <span className="text-right">Polymkt</span>
-      <span className="text-right">Track</span>
+      <span className="text-right">Trade</span>
     </div>
   );
 }
 
-function ValueRow({ m, pm, bankroll, onClick, dim }: {
-  m: ScheduledMatch; pm?: PmFixture; bankroll: number; onClick: () => void; dim?: boolean;
+function ValueRow({ m, pm, bankroll, onClick, onTrade, dim }: {
+  m: ScheduledMatch; pm?: PmFixture; bankroll: number; onClick: () => void;
+  onTrade: (t: TicketTarget) => void; dim?: boolean;
 }) {
   const v = m.value!;
   const stake = Math.round(bankroll * Math.min(v.kelly * KELLY_FRACTION, KELLY_CAP));
   const strong = v.edge >= STRONG_EDGE;
   const live = m.status === "live";
-  const [tracked, setTracked] = useState(false);
 
-  const onTrack = (e: React.MouseEvent) => {
+  const openTicket = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (tracked || stake <= 0) return;
-    trackBet({
-      match: `${m.player1} v ${m.player2}`,
-      tour: m.tour,
-      selection: v.player,
-      odds: v.odds,
-      stake,
-      edgeAtEntry: v.edge,
-      truePAtEntry: v.trueP,
-    });
-    setTracked(true);
+    onTrade({ match: m, fixture: pm, initialMarket: "match", initialPick: v.player });
   };
 
   return (
@@ -203,14 +196,16 @@ function ValueRow({ m, pm, bankroll, onClick, dim }: {
       <span className={`text-right text-[9px] font-bold ${strong ? "text-terminal-green" : v.edge >= MIN_EDGE ? "text-terminal-yellow" : "text-terminal-muted"}`}>
         {v.suspect ? "⚠ DATA?" : strong ? "🔥 STRONG" : v.edge >= MIN_EDGE ? "⚡ VALUE" : "— watch"}
       </span>
-      <PolymarketCell pm={pm} pick={v.player} trueP={v.trueP} />
+      <PolymarketCell pm={pm} pick={v.player} trueP={v.trueP} onOpen={openTicket} />
       <span className="text-right">
-        <span onClick={onTrack}
+        <span onClick={openTicket}
           className={`inline-block text-[8px] font-bold px-1.5 py-0.5 rounded border cursor-pointer ${
-            tracked ? "text-terminal-muted border-terminal-border"
+            strong || v.edge >= MIN_EDGE
+              ? "text-black bg-terminal-green border-terminal-green hover:opacity-90"
               : "text-terminal-cyan border-terminal-cyan/40 hover:bg-terminal-cyan/10"
-          }`}>
-          {tracked ? "✓ LOGGED" : "💰 TRACK"}
+          }`}
+          title={`Open trade ticket — buy on Polymarket or paper trade${stake > 0 ? ` (¼ Kelly ≈ $${stake})` : ""}`}>
+          ⚡ TRADE
         </span>
       </span>
     </button>
@@ -218,11 +213,13 @@ function ValueRow({ m, pm, bankroll, onClick, dim }: {
 }
 
 /**
- * Live Polymarket quote for the model's pick, next to the signal CTA.
- * Shows the PM price (¢) and edge vs True P; click opens the market to bet.
- * Set-winner markets, when listed, are shown in the tooltip.
+ * Live Polymarket quote for the model's pick, next to the TRADE CTA.
+ * Shows the PM price (¢) and edge vs True P; click opens the trade ticket
+ * (match + any listed set-winner markets).
  */
-function PolymarketCell({ pm, pick, trueP }: { pm?: PmFixture; pick: string; trueP: number }) {
+function PolymarketCell({ pm, pick, trueP, onOpen }: {
+  pm?: PmFixture; pick: string; trueP: number; onOpen: (e: React.MouseEvent) => void;
+}) {
   const market = pm?.match;
   const price = market ? outcomePrice(market, pick) : null;
   if (!market || price === null) {
@@ -235,16 +232,13 @@ function PolymarketCell({ pm, pick, trueP }: { pm?: PmFixture; pick: string; tru
   const sets = pm!.sets.map(s => s.question).join("\n");
   return (
     <span className="text-right">
-      <a
-        href={eventUrl(market)}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={e => e.stopPropagation()}
+      <span
+        onClick={onOpen}
         title={`${market.question}\nBuy ${pick} @ ${(price * 100).toFixed(1)}¢ · edge vs True P ${(pmEdge * 100).toFixed(1)}%${sets ? `\nAlso listed:\n${sets}` : ""}`}
         className={`inline-block text-[8px] font-bold font-mono px-1.5 py-0.5 rounded border cursor-pointer ${tone}`}
       >
         {Math.round(price * 100)}¢ {pmEdge >= 0 ? "+" : ""}{(pmEdge * 100).toFixed(1)}
-      </a>
+      </span>
     </span>
   );
 }

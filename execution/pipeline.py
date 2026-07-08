@@ -160,20 +160,21 @@ def run_signals(signals: list[dict], live: bool = False) -> list[dict]:
     return results
 
 
-def show_log(limit: int = 25) -> None:
-    rows = trade_log.recent_trades(limit)
+def show_log(limit: int = 25, user: str | None = None) -> None:
+    rows = trade_log.recent_trades(limit, user_name=user)
     if not rows:
-        print("No trades logged yet.")
+        print("No trades logged yet." + (f" (user: {user})" if user else ""))
         return
-    print(f"{'id':>4} {'ts (utc)':19} {'match':38} {'mkt':5} {'outcome':22} "
+    print(f"{'id':>4} {'ts (utc)':19} {'user':10} {'match':38} {'mkt':5} {'outcome':22} "
           f"{'price':>6} {'edge':>6} {'stake':>7} {'status':10}")
-    print("-" * 125)
+    print("-" * 136)
     for r in rows:
         print(f"{r['trade_id']:>4} {(r['ts_utc'] or '')[:19]:19} "
+              f"{(r.get('user_name') or 'local')[:10]:10} "
               f"{(r['match_name'] or '')[:38]:38} {r['market_type']:5} "
               f"{(r['outcome'] or '')[:22]:22} {r['market_price']:>6.3f} "
               f"{r['edge']:>+6.3f} {r['stake_usd']:>7.2f} {r['status']:10}")
-    s = trade_log.summary()
+    s = trade_log.summary(user_name=user)
     print(f"\n{s['trades']} trades | open stake ${s['open_stake_usd']:.2f} | "
           f"settled PnL ${s['settled_pnl_usd']:+.2f} "
           f"({s['wins']}W-{s['losses']}L)")
@@ -190,7 +191,12 @@ def main() -> None:
     parser.add_argument("--log", action="store_true", help="show the trade journal")
     parser.add_argument("--settle", nargs=2, metavar=("TRADE_ID", "WIN|LOSS"),
                         help="settle a trade, e.g. --settle 3 win")
+    parser.add_argument("--user", help="stamp trades with this user name and "
+                        "filter --log to it (default: $TRADING_USER or 'local')")
     args = parser.parse_args()
+
+    if args.user:
+        os.environ["TRADING_USER"] = args.user
 
     if args.settle:
         trade_id, outcome = int(args.settle[0]), args.settle[1].lower()
@@ -198,7 +204,7 @@ def main() -> None:
         print(f"Trade {trade_id} settled as {'WIN' if outcome.startswith('w') else 'LOSS'}.")
         return
     if args.log:
-        show_log()
+        show_log(user=args.user)
         return
     if not args.signals:
         parser.error("provide --signals <file.json>, --log, or --settle")

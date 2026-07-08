@@ -12,6 +12,11 @@ python -m execution.pipeline --signals signals.sample.json
 # view the bet journal (also mirrored to trades_log.csv)
 python -m execution.pipeline --log
 
+# per-user journals: stamp trades / filter the log by user
+python -m execution.pipeline --signals my_signals.json --user alice
+python -m execution.pipeline --log --user alice
+# (or set TRADING_USER=alice in .env; default user is "local")
+
 # settle a finished bet so PnL shows in the journal
 python -m execution.pipeline --settle 1 win     # or: loss
 

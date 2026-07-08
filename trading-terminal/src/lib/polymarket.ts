@@ -8,6 +8,7 @@
  */
 
 const GAMMA_URL = "https://gamma-api.polymarket.com";
+export const CLOB_URL = "https://clob.polymarket.com";
 const CACHE_TTL_MS = 60_000;
 
 export type PmMarketType = "match" | "set1" | "set2" | "set3";
@@ -20,6 +21,9 @@ export interface PmMarket {
   conditionId: string;
   outcomes: string[];
   prices: number[];      // gamma snapshot, aligned with outcomes
+  tokenIds: string[];    // CLOB token ids, aligned with outcomes
+  negRisk: boolean;      // routes to the neg-risk exchange contract
+  tickSize: number;      // minimum price increment (0.01 or 0.001)
 }
 
 export interface PmFixture {
@@ -68,9 +72,11 @@ function parseEvent(event: any): PmMarket[] {
     if (!marketType) continue;
     let outcomes: string[] = [];
     let prices: number[] = [];
+    let tokenIds: string[] = [];
     try {
       outcomes = JSON.parse(m.outcomes || "[]");
       prices = JSON.parse(m.outcomePrices || "[]").map(Number);
+      tokenIds = JSON.parse(m.clobTokenIds || "[]").map(String);
     } catch {
       continue;
     }
@@ -83,6 +89,9 @@ function parseEvent(event: any): PmMarket[] {
       conditionId: m.conditionId || "",
       outcomes,
       prices,
+      tokenIds,
+      negRisk: !!(m.negRisk ?? event.negRisk),
+      tickSize: Number(m.orderPriceMinTickSize) || 0.01,
     });
   }
   return out;
@@ -145,4 +154,30 @@ export function outcomePrice(market: PmMarket, playerName: string): number | nul
 
 export function eventUrl(market: PmMarket): string {
   return `https://polymarket.com/event/${market.eventSlug}`;
+}
+
+/** Index of a named player's outcome in a market, or -1. */
+export function outcomeIndex(market: PmMarket, playerName: string): number {
+  const sn = surname(playerName);
+  return market.outcomes.findIndex(o => sn && norm(o).includes(sn));
+}
+
+/* ── Live CLOB quotes ────────────────────────────────────────────────────── */
+
+export interface PmQuote {
+  bestBid: number | null;  // highest resting buy
+  bestAsk: number | null;  // lowest resting sell — the price a taker buys at
+}
+
+/** Live top-of-book for a token from the CLOB order book. */
+export async function fetchQuote(tokenId: string): Promise<PmQuote> {
+  const res = await fetch(`${CLOB_URL}/book?token_id=${tokenId}`);
+  if (!res.ok) throw new Error(`CLOB book ${res.status}`);
+  const book = await res.json();
+  const best = (levels: Array<{ price: string }> | undefined, pick: "max" | "min") => {
+    const ps = (levels ?? []).map(l => Number(l.price)).filter(p => p > 0 && p < 1);
+    if (!ps.length) return null;
+    return pick === "max" ? Math.max(...ps) : Math.min(...ps);
+  };
+  return { bestBid: best(book.bids, "max"), bestAsk: best(book.asks, "min") };
 }
