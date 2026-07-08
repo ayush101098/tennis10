@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import type { ScheduledMatch } from "@/lib/scheduleService";
 import { trackBet } from "@/components/BetTracker";
+import { usePolymarket } from "@/hooks/usePolymarket";
+import { eventUrl, fixtureKey, outcomePrice, type PmFixture } from "@/lib/polymarket";
 
 /**
  * VALUE BOARD — betting intelligence for every match on the schedule.
@@ -26,6 +28,7 @@ interface Props {
 export default function ValueBoard({ matches, onSelectMatch }: Props) {
   const [bankroll, setBankroll] = useState(1000);
   const [liveOnly, setLiveOnly] = useState(false);
+  const pmIndex = usePolymarket();
 
   const { actionable, watchlist, suspects, priced, unpriced } = useMemo(() => {
     const pool = matches.filter(m =>
@@ -95,7 +98,7 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
         {/* ── Actionable value bets ── */}
         <BoardSection title={`💎 VALUE BETS — edge ≥ ${MIN_EDGE * 100}% (${actionable.length})`} tone="green">
           <HeaderRow />
-          {actionable.map(m => <ValueRow key={m.id} m={m} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} />)}
+          {actionable.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} />)}
           {actionable.length === 0 && (
             <div className="text-terminal-muted text-[10px] text-center py-4">
               No edges above the {MIN_EDGE * 100}% floor right now — the discipline IS the system. Wait.
@@ -107,7 +110,7 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
         {watchlist.length > 0 && (
           <BoardSection title={`👁 WATCHLIST — positive but below floor (${watchlist.length})`} tone="muted">
             <HeaderRow />
-            {watchlist.map(m => <ValueRow key={m.id} m={m} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} dim />)}
+            {watchlist.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} dim />)}
           </BoardSection>
         )}
 
@@ -115,7 +118,7 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
         {suspects.length > 0 && (
           <BoardSection title={`⚠ SUSPECT DATA — edge >20% means bad inputs, DO NOT BET (${suspects.length})`} tone="red">
             <HeaderRow />
-            {suspects.map(m => <ValueRow key={m.id} m={m} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} dim />)}
+            {suspects.map(m => <ValueRow key={m.id} m={m} pm={pmIndex.get(fixtureKey(m.player1, m.player2))} bankroll={bankroll} onClick={() => onSelectMatch?.(m)} dim />)}
           </BoardSection>
         )}
 
@@ -132,7 +135,7 @@ export default function ValueBoard({ matches, onSelectMatch }: Props) {
 
 function HeaderRow() {
   return (
-    <div className="grid grid-cols-[44px_1fr_60px_44px_44px_48px_52px_60px_56px] gap-1 px-3 py-1 text-[8px] font-bold text-terminal-muted uppercase tracking-wider border-b border-terminal-border">
+    <div className="grid grid-cols-[44px_1fr_60px_44px_44px_48px_52px_60px_64px_56px] gap-1 px-3 py-1 text-[8px] font-bold text-terminal-muted uppercase tracking-wider border-b border-terminal-border">
       <span>Status</span>
       <span>Bet</span>
       <span className="text-right">True P</span>
@@ -141,13 +144,14 @@ function HeaderRow() {
       <span className="text-right">Edge</span>
       <span className="text-right">¼ Kelly</span>
       <span className="text-right">Signal</span>
+      <span className="text-right">Polymkt</span>
       <span className="text-right">Track</span>
     </div>
   );
 }
 
-function ValueRow({ m, bankroll, onClick, dim }: {
-  m: ScheduledMatch; bankroll: number; onClick: () => void; dim?: boolean;
+function ValueRow({ m, pm, bankroll, onClick, dim }: {
+  m: ScheduledMatch; pm?: PmFixture; bankroll: number; onClick: () => void; dim?: boolean;
 }) {
   const v = m.value!;
   const stake = Math.round(bankroll * Math.min(v.kelly * KELLY_FRACTION, KELLY_CAP));
@@ -172,7 +176,7 @@ function ValueRow({ m, bankroll, onClick, dim }: {
 
   return (
     <button onClick={onClick}
-      className={`w-full grid grid-cols-[44px_1fr_60px_44px_44px_48px_52px_60px_56px] gap-1 px-3 py-1.5 border-b border-terminal-border text-left items-center hover:bg-terminal-panel/40 ${dim ? "opacity-60" : ""}`}>
+      className={`w-full grid grid-cols-[44px_1fr_60px_44px_44px_48px_52px_60px_64px_56px] gap-1 px-3 py-1.5 border-b border-terminal-border text-left items-center hover:bg-terminal-panel/40 ${dim ? "opacity-60" : ""}`}>
       {/* status */}
       <span className={`text-[9px] font-bold ${live ? "text-terminal-green" : "text-terminal-muted"}`}>
         {live ? "● LIVE" : m.start_time || "TBD"}
@@ -199,6 +203,7 @@ function ValueRow({ m, bankroll, onClick, dim }: {
       <span className={`text-right text-[9px] font-bold ${strong ? "text-terminal-green" : v.edge >= MIN_EDGE ? "text-terminal-yellow" : "text-terminal-muted"}`}>
         {v.suspect ? "⚠ DATA?" : strong ? "🔥 STRONG" : v.edge >= MIN_EDGE ? "⚡ VALUE" : "— watch"}
       </span>
+      <PolymarketCell pm={pm} pick={v.player} trueP={v.trueP} />
       <span className="text-right">
         <span onClick={onTrack}
           className={`inline-block text-[8px] font-bold px-1.5 py-0.5 rounded border cursor-pointer ${
@@ -209,6 +214,38 @@ function ValueRow({ m, bankroll, onClick, dim }: {
         </span>
       </span>
     </button>
+  );
+}
+
+/**
+ * Live Polymarket quote for the model's pick, next to the signal CTA.
+ * Shows the PM price (¢) and edge vs True P; click opens the market to bet.
+ * Set-winner markets, when listed, are shown in the tooltip.
+ */
+function PolymarketCell({ pm, pick, trueP }: { pm?: PmFixture; pick: string; trueP: number }) {
+  const market = pm?.match;
+  const price = market ? outcomePrice(market, pick) : null;
+  if (!market || price === null) {
+    return <span className="text-right text-[9px] text-terminal-muted">—</span>;
+  }
+  const pmEdge = trueP - price;
+  const tone = pmEdge >= STRONG_EDGE ? "text-terminal-green border-terminal-green/40 hover:bg-terminal-green/10"
+    : pmEdge >= MIN_EDGE ? "text-terminal-yellow border-terminal-yellow/40 hover:bg-terminal-yellow/10"
+    : "text-terminal-muted border-terminal-border hover:bg-terminal-bg";
+  const sets = pm!.sets.map(s => s.question).join("\n");
+  return (
+    <span className="text-right">
+      <a
+        href={eventUrl(market)}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()}
+        title={`${market.question}\nBuy ${pick} @ ${(price * 100).toFixed(1)}¢ · edge vs True P ${(pmEdge * 100).toFixed(1)}%${sets ? `\nAlso listed:\n${sets}` : ""}`}
+        className={`inline-block text-[8px] font-bold font-mono px-1.5 py-0.5 rounded border cursor-pointer ${tone}`}
+      >
+        {Math.round(price * 100)}¢ {pmEdge >= 0 ? "+" : ""}{(pmEdge * 100).toFixed(1)}
+      </a>
+    </span>
   );
 }
 

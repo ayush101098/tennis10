@@ -1,0 +1,26 @@
+[
+  {
+    "note": "SAMPLE true_p — replace with your TRUE-P ensemble output",
+    "player1": "Marta Kostyuk",
+    "player2": "Jasmine Paolini",
+    "market": "match",
+    "side": "player1",
+    "true_p": 0.78
+  },
+  {
+    "note": "SAMPLE true_p — set-level signal for the same fixture",
+    "player1": "Marta Kostyuk",
+    "player2": "Jasmine Paolini",
+    "market": "set2",
+    "side": "player1",
+    "true_p": 0.60
+  },
+  {
+    "note": "SAMPLE true_p — thin edge, should be PASSED by the 2% threshold",
+    "player1": "Emiliana Arango",
+    "player2": "Paula Badosa",
+    "market": "match",
+    "side": "player2",
+    "true_p": 0.77
+  }
+]

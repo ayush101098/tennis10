@@ -26,3 +26,6 @@ flask-cors>=4.0.0
 # ── Cloud / Monitoring ─────────────────────────────────────────
 python-dotenv>=1.0.0
 structlog>=23.2.0
+
+# Polymarket live order placement (execution/): optional, dry-run works without it
+# py-clob-client>=0.17
