@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { loadSession } from "@/lib/auth";
+import { loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
+import { readUsdcBalance, fetchResolution, redeemWinnings, canRedeem } from "@/lib/pmSettlement";
 
 /**
  * BET TRACKER — the discipline half of the system.
@@ -29,6 +31,13 @@ export interface TrackedBet {
   shares?: number;      // PM-style: payout = $1/share on win
   orderId?: string;     // CLOB order id for real trades
   status: "open" | "won" | "lost" | "void";
+  // Polymarket identifiers — let the settlement poller auto-resolve won/lost and
+  // the redeemer pull USDC, with no manual W/L click.
+  conditionId?: string;
+  tokenId?: string;     // CLOB token of the backed outcome
+  negRisk?: boolean;
+  settledBy?: "auto" | "manual"; // provenance of a non-open status
+  redeemTx?: string;    // redemption tx hash once winnings are pulled
 }
 
 const LEGACY_KEY = "tt_bets_v1";
@@ -83,7 +92,13 @@ export default function BetTracker() {
   const [bets, setBets] = useState<TrackedBet[]>([]);
   const [venueFilter, setVenueFilter] = useState<"all" | BetVenue>("all");
   const [form, setForm] = useState({ match: "", selection: "", odds: "2.00", stake: "25" });
-  const email = loadSession()?.email || "guest";
+  const session = loadSession();
+  const email = session?.email || "guest";
+
+  // ── Polymarket connection + live wallet balance ──
+  const [conn, setConn] = useState<PmConnection | null>(null);
+  const [balance, setBalance] = useState<number | null>(null);
+  const [redeeming, setRedeeming] = useState<string | null>(null);
 
   const reload = () => setBets(loadBets());
   useEffect(() => {
@@ -92,9 +107,80 @@ export default function BetTracker() {
     return () => window.removeEventListener("tt-bets-changed", reload);
   }, []);
 
+  // Track the signed-in user's PM connection (funder address for the balance).
+  useEffect(() => {
+    const load = () => setConn(loadPmConnection(session?.email));
+    load();
+    window.addEventListener(PM_CHANGED_EVENT, load);
+    return () => window.removeEventListener(PM_CHANGED_EVENT, load);
+  }, [session?.email]);
+
+  // Live USDC balance — refresh every 20s so it visibly rises after a redemption.
+  useEffect(() => {
+    if (!conn?.funder) { setBalance(null); return; }
+    let alive = true;
+    const tick = () => readUsdcBalance(conn.funder).then(b => { if (alive) setBalance(b); });
+    tick();
+    const iv = setInterval(tick, 20_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [conn?.funder]);
+
+  // ── Auto-settle poller ──
+  // Every 30s, resolve any OPEN Polymarket bet against the CLOB winner flag and
+  // mark it won/lost automatically — no manual W/L. Only touches bets that
+  // carry a conditionId + tokenId (real orders / matched paper trades).
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      const current = loadBets();
+      const open = current.filter(b => b.status === "open" && b.conditionId && b.tokenId);
+      if (!open.length) return;
+      let changed = false;
+      const updates = new Map<string, TrackedBet["status"]>();
+      // De-dupe lookups by market
+      const byCond = new Map<string, TrackedBet[]>();
+      for (const b of open) {
+        const arr = byCond.get(b.conditionId!) || [];
+        arr.push(b); byCond.set(b.conditionId!, arr);
+      }
+      await Promise.all([...byCond.entries()].map(async ([cid, group]) => {
+        const r = await fetchResolution(cid);
+        if (!r || !r.closed || !r.winnerTokenId) return;
+        for (const b of group) {
+          updates.set(b.id, b.tokenId === r.winnerTokenId ? "won" : "lost");
+          changed = true;
+        }
+      }));
+      if (!alive || !changed) return;
+      const next = loadBets().map(b =>
+        updates.has(b.id) ? { ...b, status: updates.get(b.id)!, settledBy: "auto" as const } : b);
+      saveBets(next);
+      window.dispatchEvent(new Event("tt-bets-changed"));
+    };
+    poll();
+    const iv = setInterval(poll, 30_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
   const settle = (id: string, status: TrackedBet["status"]) => {
-    const next = bets.map(b => (b.id === id ? { ...b, status } : b));
+    const next = bets.map(b => (b.id === id ? { ...b, status, settledBy: "manual" as const } : b));
     saveBets(next); setBets(next);
+  };
+
+  const redeem = async (b: TrackedBet) => {
+    if (!conn || !b.conditionId) return;
+    setRedeeming(b.id);
+    try {
+      const tx = await redeemWinnings(conn, b.conditionId);
+      const next = loadBets().map(x => (x.id === b.id ? { ...x, redeemTx: tx } : x));
+      saveBets(next); setBets(next);
+      // Nudge the balance to refresh shortly after the tx lands.
+      setTimeout(() => conn.funder && readUsdcBalance(conn.funder).then(setBalance), 8_000);
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setRedeeming(null);
+    }
   };
   const remove = (id: string) => {
     const next = bets.filter(b => b.id !== id);
@@ -135,7 +221,10 @@ export default function BetTracker() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* P&L strip */}
-      <div className="grid grid-cols-6 gap-px bg-terminal-border shrink-0">
+      <div className="grid grid-cols-7 gap-px bg-terminal-border shrink-0">
+        <Stat label="USDC BAL" value={balance !== null ? `$${balance.toFixed(2)}` : conn ? "…" : "—"}
+          tone={balance !== null && balance > 0 ? "green" : undefined}
+          title={conn ? `Live Polygon USDC balance of ${conn.funder.slice(0, 6)}…${conn.funder.slice(-4)}` : "Connect Polymarket to see your wallet balance"} />
         <Stat label="SETTLED" value={`${stats.n}`} />
         <Stat label="WIN RATE" value={stats.n ? `${Math.round((stats.wins / stats.n) * 100)}%` : "—"} />
         <Stat label="STAKED" value={`$${stats.staked.toFixed(0)}`} />
@@ -198,15 +287,29 @@ export default function BetTracker() {
             <span className={`w-[55px] shrink-0 text-right font-mono font-bold ${pnl(b) > 0 ? "text-terminal-green" : pnl(b) < 0 ? "text-terminal-red" : "text-terminal-muted"}`}>
               {b.status === "open" ? "OPEN" : b.status === "void" ? "VOID" : `${pnl(b) >= 0 ? "+" : ""}$${pnl(b).toFixed(0)}`}
             </span>
-            <span className="w-[104px] shrink-0 flex gap-1 justify-end">
+            <span className="w-[150px] shrink-0 flex gap-1 justify-end items-center">
               {b.status === "open" ? (
                 <>
+                  {b.conditionId && <span className="text-[7px] text-terminal-muted" title="Auto-settles when the market resolves">⏳auto</span>}
                   <MiniBtn label="W" tone="green" onClick={() => settle(b.id, "won")} />
                   <MiniBtn label="L" tone="red" onClick={() => settle(b.id, "lost")} />
                   <MiniBtn label="V" onClick={() => settle(b.id, "void")} />
                 </>
               ) : (
-                <MiniBtn label="reopen" onClick={() => settle(b.id, "open")} />
+                <>
+                  {b.settledBy === "auto" && <span className="text-[7px] text-terminal-green" title="Settled automatically from Polymarket resolution">✓auto</span>}
+                  {b.status === "won" && venueOf(b) === "polymarket" && (
+                    b.redeemTx ? (
+                      <a href={`https://polygonscan.com/tx/${b.redeemTx}`} target="_blank" rel="noreferrer"
+                        className="text-[7px] text-terminal-green font-bold" title="Redemption tx">redeemed ↗</a>
+                    ) : canRedeem(conn, b.negRisk) ? (
+                      <MiniBtn label={redeeming === b.id ? "…" : "REDEEM"} tone="green" onClick={() => redeem(b)} />
+                    ) : (
+                      <span className="text-[7px] text-terminal-muted" title="Polymarket proxy accounts auto-redeem; neg-risk markets redeem on Polymarket">on PM</span>
+                    )
+                  )}
+                  <MiniBtn label="reopen" onClick={() => settle(b.id, "open")} />
+                </>
               )}
               <MiniBtn label="✕" onClick={() => remove(b.id)} />
             </span>
@@ -225,10 +328,10 @@ function VenueChip({ venue }: { venue: BetVenue }) {
   return <span className={`w-[44px] shrink-0 text-center text-[8px] font-bold px-1 py-0.5 rounded border ${style}`}>{label}</span>;
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: "green" | "red" }) {
+function Stat({ label, value, tone, title }: { label: string; value: string; tone?: "green" | "red"; title?: string }) {
   const c = tone === "green" ? "text-terminal-green" : tone === "red" ? "text-terminal-red" : "text-slate-100";
   return (
-    <div className="bg-terminal-panel px-3 py-2">
+    <div className="bg-terminal-panel px-3 py-2" title={title}>
       <div className="text-[8px] text-terminal-muted font-bold tracking-wider">{label}</div>
       <div className={`text-sm font-bold font-mono ${c}`}>{value}</div>
     </div>

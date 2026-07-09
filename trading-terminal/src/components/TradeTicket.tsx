@@ -128,6 +128,11 @@ export default function TradeTicket({ target, bankroll, onClose }: Props) {
       price: fillPrice,
       shares: filledShares,
       orderId,
+      // Identifiers the settlement poller / redeemer need to resolve this bet
+      // against Polymarket without any manual input.
+      conditionId: pmMarket?.conditionId,
+      tokenId: pmMarket && outcomeIdx >= 0 ? pmMarket.tokenIds[outcomeIdx] : undefined,
+      negRisk: pmMarket?.negRisk,
     });
   };
 
