@@ -36,7 +36,7 @@ export interface ScheduledMatch {
   score?: { p1_sets: number[]; p2_sets: number[]; winner?: 1 | 2 };
   /** Live-match extras (only present when status === "live") */
   liveScore?: {
-    server: 1 | 2;                  // who is serving (from ESPN possession)
+    server?: 1 | 2;                 // who is serving; undefined when the feed omits it (don't guess)
     completedSets: { p1: number; p2: number }[];  // finished sets (games)
     currentSetGames: { p1: number; p2: number };   // games in current set
     statusDetail: string;            // "1st Set", "2nd Set", etc.
@@ -211,7 +211,6 @@ async function fetchESPN(
     for (const event of data.events || []) {
       const tName = event.name || "";
       const surface = detectSurface(event);
-      const bestOf = detectBestOf(tName, tour.toUpperCase());
 
       // Gather all competitions
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -236,11 +235,17 @@ async function fetchESPN(
         const matchLocalDate = localDateStr(matchDt);
         if (matchLocalDate !== targetDate) continue;
 
-        // ── Singles only: type=athlete ──
+        // ── Tour from comp.type, NOT the /atp|/wta URL ──
+        // ESPN's atp scoreboard returns women's matches (and vice-versa), so the
+        // URL is useless for labeling. comp.type.id 1 = men's singles → ATP,
+        // 2 = women's singles → WTA; 3/4/6 are doubles/mixed → skip. This is what
+        // made ATP matches vanish: they were mislabeled and deduped as WTA.
         const competitors = comp.competitors || [];
         if (competitors.length < 2) continue;
-        // Skip doubles (type=team with roster)
-        if (competitors[0]?.type === "team") continue;
+        const compTypeId = String(comp.type?.id || "");
+        const matchTour = compTypeId === "1" ? "ATP" : compTypeId === "2" ? "WTA" : "";
+        if (!matchTour) continue; // doubles / mixed / unknown
+        const bestOf = detectBestOf(tName, matchTour);
 
         let p1d = competitors[0];
         let p2d = competitors[1];
@@ -254,6 +259,14 @@ async function fetchESPN(
         const p1Name = p1a?.displayName || p1a?.fullName || "";
         const p2Name = p2a?.displayName || p2a?.fullName || "";
         if (!p1Name || !p2Name) continue;
+        // Skip unfilled future-round slots. ESPN emits "TBD vs TBD" (and "?")
+        // placeholders that all normalize to the same name — dedup then collapses
+        // them into one entry AND swallows real matches. Drop them at the source.
+        const isPlaceholder = (n: string) => {
+          const t = n.trim().toLowerCase();
+          return t === "tbd" || t === "?" || t === "bye" || t === "qualifier";
+        };
+        if (isPlaceholder(p1Name) || isPlaceholder(p2Name)) continue;
 
         const p1Seed = parseInt(p1d.seed || "0") || 0;
         const p2Seed = parseInt(p2d.seed || "0") || 0;
@@ -290,9 +303,11 @@ async function fetchESPN(
         // ── Live score extras (server, set/game breakdown) ──
         let liveScore: ScheduledMatch["liveScore"];
         if (status === "live") {
-          // Server from 'possession' field (true = currently serving)
-          const p1Serving = !!p1d.possession;
-          const server: 1 | 2 = p1Serving ? 1 : 2;
+          // Server from ESPN 'possession' (the player holding serve is flagged).
+          // Leave undefined when ESPN flags neither — don't default to a player,
+          // that's what made the serve icon point at the wrong side.
+          const server: 1 | 2 | undefined =
+            p1d.possession ? 1 : p2d.possession ? 2 : undefined;
 
           // Build completed sets vs current set from linescores
           const p1ls: { value: number; winner?: boolean }[] = p1d.linescores || [];
@@ -327,12 +342,14 @@ async function fetchESPN(
         });
 
         out.push({
-          id: `espn_${tour}_${event.id}_${comp.id}`,
+          // ID excludes the URL tour so the same competition appearing in both
+          // the atp and wta feeds dedups to one entry instead of two.
+          id: `espn_${event.id}_${comp.id}`,
           player1: p1Name, player2: p2Name,
           p1_rank: p1Rank, p2_rank: p2Rank,
           p1_seed: p1Seed, p2_seed: p2Seed,
           tournament: tName, round: roundName,
-          tour: tour.toUpperCase(), surface, best_of: bestOf,
+          tour: matchTour, surface, best_of: bestOf,
           source: "espn", status, start_time: startTime,
           start_timestamp: startTs,
           p1_win_prob: p1_prob, p2_win_prob: p2_prob,
@@ -540,11 +557,12 @@ function sofaEventToMatch(evt: any, rankMap: RankMap): ScheduledMatch | null {
         }
       }
 
-      // Server: firstToServe = who is CURRENTLY serving (dynamic, updates every game)
-      // 1 = home is serving, 2 = away is serving
-      let server: 1 | 2 = 1;
+      // Server: SofaScore's firstToServe tracks the CURRENT server (verified live
+      // against ESPN possession — it updates each game, not just the set opener).
+      // 1 = home, 2 = away. P1 = home for sofa-sourced matches. Many feed entries
+      // (esp. ITF) omit it — leave server undefined then rather than guessing P1.
+      let server: 1 | 2 | undefined;
       if (evt.firstToServe) {
-        // P1 = home for sofa-sourced matches
         server = evt.firstToServe === 1 ? 1 : 2;
       }
 
@@ -602,10 +620,17 @@ function sofaEventToMatch(evt: any, rankMap: RankMap): ScheduledMatch | null {
 }
 
 /**
- * Category-specific endpoints for ITF — fetched in parallel alongside
- * the generic endpoint to ensure maximum coverage.
+ * Category-specific SofaScore endpoints. The sport-level generic endpoint
+ * (/sport/tennis/scheduled-events) currently 404s upstream, which silently
+ * wiped out ALL ATP/WTA/Challenger coverage (only ITF had its own category
+ * fetch). We now pull every professional tour by its category id directly —
+ * these keep working even while the generic endpoint is down.
+ *   ATP=3  WTA=6  Challenger=72  ITF Men=785  ITF Women=213
  */
 const SOFA_CAT_URLS: Record<string, string> = {
+  "atp": "/api/sofa/category/3/scheduled-events",
+  "wta": "/api/sofa/category/6/scheduled-events",
+  "challenger": "/api/sofa/category/72/scheduled-events",
   "itf-men": "/api/sofa/category/785/scheduled-events",
   "itf-women": "/api/sofa/category/213/scheduled-events",
 };
@@ -686,18 +711,23 @@ async function fetchSofaScheduled(
   if (cached && Date.now() - cached.ts < ttl) return cached.data;
 
   try {
-    // Fetch generic endpoint + category-specific ITF endpoints + daily odds in parallel
-    const [genericEvents, itfMenEvents, itfWomenEvents, dailyOdds] = await Promise.all([
+    // Fetch the generic endpoint (best-effort — often 404s) plus every
+    // per-category endpoint in parallel. The category feeds are what actually
+    // carry ATP/WTA/Challenger/ITF now that the generic one is unreliable.
+    const catKeys = Object.keys(SOFA_CAT_URLS);
+    const results = await Promise.all([
       fetchSofaEndpoint(`${SOFA_SCHEDULED}/${targetDate}`),
-      fetchSofaEndpoint(`${SOFA_CAT_URLS["itf-men"]}/${targetDate}`),
-      fetchSofaEndpoint(`${SOFA_CAT_URLS["itf-women"]}/${targetDate}`),
+      ...catKeys.map(k => fetchSofaEndpoint(`${SOFA_CAT_URLS[k]}/${targetDate}`)),
       fetchSofaDailyOdds(targetDate),
     ]);
+    const genericEvents = results[0] as unknown[];
+    const catEvents = results.slice(1, 1 + catKeys.length) as unknown[][];
+    const dailyOdds = results[results.length - 1] as Map<number, OddsPair>;
 
     // Merge all events, deduplicate by SofaScore event ID
     const seen = new Set<number>();
     const allEvents: unknown[] = [];
-    for (const evt of [...genericEvents, ...itfMenEvents, ...itfWomenEvents]) {
+    for (const evt of [genericEvents, ...catEvents].flat()) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const id = (evt as any).id as number;
       if (id && !seen.has(id)) {
@@ -720,7 +750,8 @@ async function fetchSofaScheduled(
       matches.push(m);
     }
     _sofaSchedCache[targetDate] = { data: matches, ts: Date.now() };
-    console.log(`[sofascore] ${targetDate}: ${matches.length} singles (generic=${genericEvents.length}, itfM=${itfMenEvents.length}, itfW=${itfWomenEvents.length}, deduped from ${allEvents.length})`);
+    const catCounts = catKeys.map((k, i) => `${k}=${catEvents[i].length}`).join(", ");
+    console.log(`[sofascore] ${targetDate}: ${matches.length} singles (generic=${genericEvents.length}, ${catCounts}, deduped from ${allEvents.length})`);
     return matches;
   } catch (e) {
     console.warn("[sofascore] scheduled fetch failed", e);
@@ -818,8 +849,16 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
     return out;
   };
 
-  const today = dedup([...at, ...wt], sofaToday).sort(sort);
-  const tomorrow = dedup([...ato, ...wto], sofaTomorrow).sort(sort);
+  // The atp and wta ESPN feeds overlap heavily (both return the same events, now
+  // labeled correctly by comp.type), so collapse exact-id duplicates before the
+  // fuzzy pass — cheaper and immune to surname false-positives.
+  const byId = (matches: ScheduledMatch[]): ScheduledMatch[] => {
+    const seen = new Set<string>();
+    return matches.filter(m => (seen.has(m.id) ? false : (seen.add(m.id), true)));
+  };
+
+  const today = dedup(byId([...at, ...wt]), sofaToday).sort(sort);
+  const tomorrow = dedup(byId([...ato, ...wto]), sofaTomorrow).sort(sort);
 
   // ── In-play odds for live matches (throttled; per-event cache absorbs polls) ──
   await attachLiveOdds(today.filter(m => m.status === "live" && m.liveScore?.sofaId));
@@ -939,6 +978,7 @@ interface SofaLiveEvent {
 function matchNames(espnName: string, sofaName: string): boolean {
   const a = normName(espnName);
   const b = normName(sofaName);
+  if (!a || !b) return false; // never fuzzy-match empty / placeholder names
   if (a === b) return true;
   // Compare last names
   const aLast = a.split(" ").pop() || "";
@@ -1273,8 +1313,12 @@ function attachBreakHoldSignals(match: ScheduledMatch): void {
   if (!match.liveScore) return;
   const ls = match.liveScore;
   try {
+    // Serve-conditioned analytics need a concrete server; when the feed omits it
+    // (server undefined) fall back to P1 for the math only — the displayed serve
+    // indicator stays hidden rather than pointing at a guessed player.
+    const srv: 1 | 2 = ls.server ?? 1;
     ls.breakHoldSignals = computeBreakHoldSignals(
-      ls.server,
+      srv,
       ls.pointScore,
       ls.currentSetGames || { p1: 0, p2: 0 },
       ls.completedSets || [],
@@ -1287,7 +1331,7 @@ function attachBreakHoldSignals(match: ScheduledMatch): void {
 
     // ── True P (Markov, set/match level, tour-aware) ──
     ls.trueProbabilities = computeTrueProbabilities(
-      ls.server,
+      srv,
       ls.currentSetGames || { p1: 0, p2: 0 },
       ls.completedSets || [],
       ls.stats || null,
@@ -1317,8 +1361,8 @@ function attachBreakHoldSignals(match: ScheduledMatch): void {
       const favourite: 1 | 2 = (ls.edge?.p1 ?? 0) >= (ls.edge?.p2 ?? 0) ? 1 : 2;
       const againstOdds = favourite === 1 ? ls.bookmakerOdds.p2 : ls.bookmakerOdds.p1;
       const isTiebreak = !!(ls.tiebreakScore && ls.currentSetGames?.p1 === 6 && ls.currentSetGames?.p2 === 6);
-      const srvPts = ls.server === 1 ? (PT[ls.pointScore.p1] ?? 0) : (PT[ls.pointScore.p2] ?? 0);
-      const retPts = ls.server === 1 ? (PT[ls.pointScore.p2] ?? 0) : (PT[ls.pointScore.p1] ?? 0);
+      const srvPts = srv === 1 ? (PT[ls.pointScore.p1] ?? 0) : (PT[ls.pointScore.p2] ?? 0);
+      const retPts = srv === 1 ? (PT[ls.pointScore.p2] ?? 0) : (PT[ls.pointScore.p1] ?? 0);
       ls.hedgeAlert = evaluateHedgeSignal(match.id, srvPts, retPts, isTiebreak, againstOdds);
     }
   } catch (e) {

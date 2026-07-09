@@ -990,7 +990,9 @@ function buildStateFromLiveScore(
   const sets = liveScore.completedSets.map(s => ({ ...s }));
   const currentSet = { ...liveScore.currentSetGames };
   const tiebreak = currentSet.p1 === 6 && currentSet.p2 === 6;
-  const server = liveScore.server;
+  // Analytics need a concrete server; fall back to P1 only for the math when the
+  // feed omits it (the schedule board's serve icon stays hidden in that case).
+  const server: 1 | 2 = liveScore.server ?? 1;
 
   // Point score from SofaScore
   let currentGame = { p1: 0, p2: 0 };
@@ -1031,7 +1033,8 @@ function buildGameLog(
   let totalGamesPlayed = 0;
   for (const s of liveScore.completedSets) totalGamesPlayed += s.p1 + s.p2;
   totalGamesPlayed += liveScore.currentSetGames.p1 + liveScore.currentSetGames.p2;
-  const startServer: 1 | 2 = (totalGamesPlayed % 2 === 0) ? liveScore.server : (liveScore.server === 1 ? 2 : 1);
+  const srv0: 1 | 2 = liveScore.server ?? 1;
+  const startServer: 1 | 2 = (totalGamesPlayed % 2 === 0) ? srv0 : (srv0 === 1 ? 2 : 1);
 
   const allSets = [...liveScore.completedSets, liveScore.currentSetGames];
   const completedBefore: { p1: number; p2: number }[] = [];

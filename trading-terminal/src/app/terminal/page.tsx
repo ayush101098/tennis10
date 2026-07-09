@@ -5,6 +5,7 @@ import Link from "next/link";
 import SchedulePanel from "@/components/SchedulePanel";
 import BetTracker from "@/components/BetTracker";
 import PricingModal from "@/components/PricingModal";
+import LiveUsers from "@/components/LiveUsers";
 import { useTier, signOut } from "@/lib/auth";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
@@ -36,6 +37,7 @@ export default function TerminalPage() {
           </button>
         </div>
         <div className="flex items-center gap-3 text-[10px]">
+          <LiveUsers />
           {session && <PmStatus email={session.email} />}
           {session ? (
             <>

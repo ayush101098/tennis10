@@ -200,6 +200,25 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Get in touch ── */}
+      <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
+        <h2 className="text-lg font-bold text-slate-100 mb-2">Interested?</h2>
+        <p className="text-[11px] text-terminal-muted mb-5">
+          Want early access, a partnership, or just to talk models and markets? Get in touch.
+        </p>
+        <a
+          href="mailto:jessefuture10@gmail.com?subject=Interested%20in%20Tennis%20Intelligence%20Terminal"
+          className="inline-flex items-center gap-2 px-6 py-3 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
+          ✉ GET IN TOUCH
+        </a>
+        <p className="text-[10px] text-terminal-muted mt-3">
+          or email{" "}
+          <a href="mailto:jessefuture10@gmail.com" className="text-terminal-green hover:underline">
+            jessefuture10@gmail.com
+          </a>
+        </p>
+      </section>
+
       {/* ── Footer ── */}
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.

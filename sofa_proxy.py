@@ -196,13 +196,17 @@ def _warm_cache():
     """Pre-fetch popular schedule endpoints so the first UI load is instant."""
     today = datetime.now().strftime("%Y-%m-%d")
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    # NOTE: the sport-level generic endpoint currently 404s upstream, so the
+    # per-category endpoints below are what actually carry each tour. ATP=3,
+    # WTA=6, Challenger=72, ITF Men=785, ITF Women=213.
     paths = [
         f"sport/tennis/scheduled-events/{today}",
         f"sport/tennis/scheduled-events/{tomorrow}",
-        f"category/785/scheduled-events/{today}",   # ITF men
-        f"category/213/scheduled-events/{today}",   # ITF women
-        f"category/785/scheduled-events/{tomorrow}",
-        f"category/213/scheduled-events/{tomorrow}",
+    ] + [
+        f"category/{cat}/scheduled-events/{d}"
+        for d in (today, tomorrow)
+        for cat in (3, 6, 72, 785, 213)  # ATP, WTA, Challenger, ITF M, ITF W
+    ] + [
         f"sport/tennis/odds/1/{today}",      # daily bulk odds — feeds the Value Board
         f"sport/tennis/odds/1/{tomorrow}",
         "sport/tennis/events/live",
