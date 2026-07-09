@@ -1,0 +1,2 @@
+trade_id,ts_utc,venue,match_name,market_type,question,outcome,side,true_p,market_price,edge,kelly_frac,stake_usd,shares,order_id,status,detail,condition_id,token_id
+1,2026-07-07T22:49:09+00:00,polymarket,Marta Kostyuk vs Jasmine Paolini,match,Wimbledon WTA: Marta Kostyuk vs Jasmine Paolini,Marta Kostyuk,player1,0.78,0.71,0.07000000000000006,0.05,25.0,35.21,,dry_run,simulated buy 35.21 sh @ 0.710,0x00a98be91394689188f2979411d033b64ac94e86fd64c8cdec0e47a44b2b5f2a,72013254678898753214536728564502317072144657539273156607012518774824530095181
