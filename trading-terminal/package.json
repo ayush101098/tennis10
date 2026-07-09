@@ -10,10 +10,11 @@
     "start:all": "cd .. && source .venv/bin/activate && python sofa_proxy.py &>/dev/null & sleep 2 && cd trading-terminal && next dev --port 3000"
   },
   "dependencies": {
+    "@netlify/blobs": "^8.2.0",
+    "clsx": "^2.1.0",
     "next": "^14.2.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "clsx": "^2.1.0"
+    "react-dom": "^18.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

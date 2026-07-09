@@ -21,6 +21,13 @@
   status = 200
   force = true
 
+# Live-presence counter (the static export strips the /api/presence route)
+[[redirects]]
+  from = "/api/presence"
+  to = "/.netlify/functions/presence"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
