@@ -319,11 +319,20 @@ async function fetchESPN(
           for (let si = 0; si < maxSets; si++) {
             const g1 = p1ls[si]?.value ?? 0;
             const g2 = p2ls[si]?.value ?? 0;
-            const isCompleted = p1ls[si]?.winner !== undefined || p2ls[si]?.winner !== undefined;
-            if (isCompleted) {
+            // A set is "completed" if ESPN's per-set winner flag says so — but
+            // ESPN OMITS that flag for lower-tier events (ITF/Challenger quali),
+            // so also treat a set as completed when the games show a finished set
+            // (6+ with a 2-game margin, or 7) or when it simply isn't the last
+            // set listed. Relying on the flag alone collapsed every completed set
+            // into "current" and fed an EMPTY set-score to the Markov engine —
+            // pricing a player down a set (or two) at ~50% and inventing an edge.
+            const flag = p1ls[si]?.winner !== undefined || p2ls[si]?.winner !== undefined;
+            const scoreDone = (g1 >= 6 && g1 - g2 >= 2) || (g2 >= 6 && g2 - g1 >= 2) || g1 === 7 || g2 === 7;
+            const isLast = si === maxSets - 1;
+            if (flag || scoreDone || !isLast) {
               completedSets.push({ p1: g1, p2: g2 });
             } else {
-              // Current (incomplete) set — last one without a winner
+              // Current (incomplete) set — the last, unfinished one
               currentSetGames = { p1: g1, p2: g2 };
             }
           }

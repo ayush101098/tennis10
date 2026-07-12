@@ -972,24 +972,6 @@ function gameHoldFromPointProb(p: number): number {
   return clamp(hold, 0, 1);
 }
 
-/** P(player wins set) given their hold-as-server prob and opponent's hold-as-server prob. Mirrors set_win_prob. */
-function setWinProbability(pHoldServer: number, pHoldReturner: number): number {
-  const pAvg = (pHoldServer + (1 - pHoldReturner)) / 2;
-  const qAvg = 1 - pAvg;
-
-  let pSet = 0;
-  for (let oppGames = 0; oppGames < 5; oppGames++) {
-    const total = 6 + oppGames - 1;
-    pSet += comb(total, oppGames) * pAvg ** 6 * qAvg ** oppGames;
-  }
-  const p55 = comb(10, 5) * pAvg ** 5 * qAvg ** 5;
-  const p75 = p55 * pAvg ** 2;
-  const p66 = comb(12, 6) * pAvg ** 6 * qAvg ** 6;
-  const pTb = clamp(0.5 + 0.8 * (pAvg - 0.5), 0, 1);
-
-  return clamp(pSet + p75 + p66 * pTb, 0, 1);
-}
-
 /** P(player wins match) from a single set-win probability. Mirrors match_win_prob_from_set_prob. */
 function matchWinProbFromSetProb(pSet: number, bestOf: number): number {
   if (bestOf >= 5) return pSet ** 3 * (6 * pSet ** 2 - 15 * pSet + 10);
@@ -1051,13 +1033,19 @@ function matchWinProbFromScore(
   const p1Hold = gameHoldFromPointProb(p1PointWin);
   const p2Hold = gameHoldFromPointProb(p2PointWin);
 
-  const p1SetAsServer = setWinProbability(p1Hold, p2Hold);
-  const p1SetAsReturner = setWinProbability(1 - p2Hold, 1 - p1Hold);
-  const p1Set = clamp((p1SetAsServer + p1SetAsReturner) / 2, 0.05, 0.95);
-
-  // Current set: exact games-race recursion instead of a ±2pp/game nudge
+  // Average game-win probability (alternating serve), used for both the current
+  // set and the value of a full future set.
   const pGame = clamp((p1Hold + (1 - p2Hold)) / 2, 0.05, 0.95);
   const pTb = clamp(0.5 + 0.8 * (pGame - 0.5), 0.05, 0.95);
+
+  // P(win a full set from 0-0) via the exact games-race recursion. The old
+  // closed-form setWinProbability() was NOT normalized — it returned 0.551 for
+  // two identical players (should be 0.500), biasing every True P ~5pp toward
+  // P1. setWinFromGames(0,0,...) is symmetric and consistent with the current
+  // set below.
+  const p1Set = clamp(setWinFromGames(0, 0, pGame, pTb), 0.05, 0.95);
+
+  // Current set: exact games-race recursion instead of a ±2pp/game nudge
   const pThisSet = setWinFromGames(gamesP1, gamesP2, pGame, pTb);
 
   const pMatch =
@@ -1127,9 +1115,11 @@ export function computeTrueProbabilities(
 
   const p1Hold = gameHoldFromPointProb(p1PointWin);
   const p2Hold = gameHoldFromPointProb(p2PointWin);
-  const p1SetAsServer = setWinProbability(p1Hold, p2Hold);
-  const p1SetAsReturner = setWinProbability(1 - p2Hold, 1 - p1Hold);
-  const p1SetProb = clamp((p1SetAsServer + p1SetAsReturner) / 2 + (currentSetGames.p1 - currentSetGames.p2) * 0.02, 0.05, 0.95);
+  // P(win the current set) from the LIVE game score — exact games-race
+  // recursion (symmetric), not the un-normalized closed form + a ±2pp nudge.
+  const pGameSet = clamp((p1Hold + (1 - p2Hold)) / 2, 0.05, 0.95);
+  const pTbSet = clamp(0.5 + 0.8 * (pGameSet - 0.5), 0.05, 0.95);
+  const p1SetProb = clamp(setWinFromGames(currentSetGames.p1, currentSetGames.p2, pGameSet, pTbSet), 0.05, 0.95);
 
   const gameHoldProb = server === 1 ? p1Hold : p2Hold;
 
