@@ -62,3 +62,108 @@ body {
 .live-dot {
   animation: blink 1s infinite;
 }
+
+/* ── Trading manual (/manual) — markdown-rendered playbook ── */
+.manual-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #cbd5e1;
+}
+.manual-content h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  line-height: 1.25;
+  margin: 0 0 0.75rem;
+}
+.manual-content h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin: 2.25rem 0 0.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #1e293b;
+  scroll-margin-top: 72px;
+}
+.manual-content h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #22c55e;
+  margin: 1.5rem 0 0.5rem;
+  scroll-margin-top: 72px;
+}
+.manual-content h1 { scroll-margin-top: 72px; }
+.manual-content p { margin: 0 0 0.85rem; }
+.manual-content a { color: #06b6d4; text-decoration: none; }
+.manual-content a:hover { text-decoration: underline; }
+.manual-content strong { color: #f1f5f9; font-weight: 700; }
+.manual-content ul,
+.manual-content ol { margin: 0 0 1rem; padding-left: 1.35rem; }
+.manual-content li { margin: 0.2rem 0; }
+.manual-content hr {
+  border: 0;
+  border-top: 1px solid #1e293b;
+  margin: 2rem 0;
+}
+.manual-content blockquote {
+  margin: 1rem 0;
+  padding: 0.65rem 1rem;
+  border-left: 3px solid #22c55e;
+  background: rgba(34, 197, 94, 0.06);
+  color: #e2e8f0;
+  border-radius: 0 4px 4px 0;
+}
+.manual-content code {
+  font-family: inherit;
+  font-size: 0.85em;
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+  color: #eab308;
+}
+.manual-content pre {
+  background: #0d1420;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  margin: 0 0 1.1rem;
+}
+.manual-content pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #94e2b8;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+}
+.manual-content .md-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+}
+.manual-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.manual-content th,
+.manual-content td {
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid #1e293b;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.manual-content th {
+  background: #111827;
+  color: #eab308;
+  font-weight: 700;
+  position: sticky;
+  top: 0;
+}
+.manual-content tbody tr:last-child td { border-bottom: 0; }
+.manual-content tbody tr:hover td { background: rgba(30, 41, 59, 0.35); }

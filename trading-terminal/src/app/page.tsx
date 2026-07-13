@@ -74,6 +74,7 @@ export default function LandingPage() {
           ◉ <span className="hidden sm:inline">TENNIS INTELLIGENCE TERMINAL</span><span className="sm:hidden">TENNIS T.</span>
         </span>
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
+          <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
           {session ? (
             <>
               <span className={`font-bold px-1.5 py-0.5 rounded ${session.isAdmin ? "bg-terminal-red/20 text-terminal-red" : isPro ? "bg-terminal-green/20 text-terminal-green" : "bg-terminal-border text-slate-300"}`}>

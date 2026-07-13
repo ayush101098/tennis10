@@ -35,6 +35,10 @@ export default function TerminalPage() {
             className={`text-[10px] font-bold px-2 py-0.5 rounded ${tab === "tracker" ? "text-terminal-cyan bg-terminal-cyan/10" : "text-terminal-muted hover:text-slate-300"}`}>
             {isPro ? "BET TRACKER" : "🔒 BET TRACKER"}
           </button>
+          <Link href="/manual"
+            className="text-[10px] font-bold px-2 py-0.5 rounded text-terminal-muted hover:text-slate-300">
+            📘 MANUAL
+          </Link>
         </div>
         <div className="flex items-center gap-3 text-[10px]">
           <LiveUsers />
