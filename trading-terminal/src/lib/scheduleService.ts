@@ -6,9 +6,11 @@
 
 import {
   computeBreakHoldSignals, computeTrueProbabilities, evaluateHedgeSignal,
+  resolveTourAvgs,
   type BreakHoldSignals, type TrueProbabilities, type HedgeAlert,
 } from "./breakHoldEngine";
 import { loadNNModel, nnMatchProb } from "./nnModel";
+import { parseGameLog, computeMomentum, type MomentumState } from "./momentumEngine";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -59,6 +61,8 @@ export interface ScheduledMatch {
     edge?: { p1: number; p2: number };
     /** Hedge-timing alert evaluated against the live score + bookmaker odds */
     hedgeAlert?: HedgeAlert;
+    /** Live momentum (game-control + serve regression) from point-by-point */
+    momentum?: MomentumState;
   };
   /** Pre-match bookmaker odds (from the SofaScore daily odds feed) */
   prematchOdds?: { p1: number; p2: number; source?: string; isLive?: boolean };
@@ -74,6 +78,8 @@ export interface ScheduledMatch {
     live: boolean;      // computed from live score-conditioned True P
     /** Edge too large to be real — almost always a data problem, not free money */
     suspect: boolean;
+    /** Live momentum surfaced on the main engine row */
+    momentum?: MomentumState;
   };
 }
 
@@ -1077,14 +1083,59 @@ export async function refreshLiveMatches(matches: ScheduledMatch[]): Promise<boo
   if (!sofaEvents.length) return false;
 
   let changed = false;
+  const updated: ScheduledMatch[] = [];
   for (const m of live) {
     const sofaMatch = sofaEvents.find(se => se.id === m.liveScore!.sofaId);
     if (!sofaMatch) continue;
     applySofaLiveScore(m, sofaMatch);
     attachIntelligence(m);
+    updated.push(m);
     changed = true;
   }
+  // Momentum needs a per-match point-by-point fetch — do them in parallel so the
+  // whole live list stays point-by-point fresh without serializing round-trips.
+  await Promise.all(updated.map(attachMomentum));
   return changed;
+}
+
+// ── Live momentum from point-by-point ───────────────────────────────────────
+// point-win-on-serve prior per player from tour baselines (sets the hold-rate
+// expectation the serve-regression signal is measured against).
+function serveWinPrior(tour: string): number {
+  const a = resolveTourAvgs(tour);
+  return a.firstServeIn * a.firstServeWon + (1 - a.firstServeIn) * a.secondServeWon;
+}
+
+// Short-TTL per-event point-by-point cache: fetched fresh each live cycle but
+// deduped within a cycle so momentum tracks the score point-by-point.
+const _pbpCache = new Map<number, { games: ReturnType<typeof parseGameLog>; ts: number }>();
+const PBP_TTL = 4_000;
+
+async function fetchGameLog(sofaId: number, sofaHomeIsP1: boolean) {
+  const hit = _pbpCache.get(sofaId);
+  if (hit && Date.now() - hit.ts < PBP_TTL) return hit.games;
+  try {
+    const res = await fetch(`/api/sofa/event/${sofaId}/point-by-point`);
+    if (!res.ok) return hit?.games ?? [];
+    const json = await res.json();
+    const games = parseGameLog(json, sofaHomeIsP1);
+    _pbpCache.set(sofaId, { games, ts: Date.now() });
+    return games;
+  } catch {
+    return hit?.games ?? [];
+  }
+}
+
+/** Fetch point-by-point + compute live momentum for one match, attach to it. */
+async function attachMomentum(m: ScheduledMatch): Promise<void> {
+  const ls = m.liveScore;
+  if (!ls?.sofaId) return;
+  const games = await fetchGameLog(ls.sofaId, ls.sofaHomeIsP1 !== false);
+  const sp = serveWinPrior(m.tour);
+  const mom = computeMomentum(games, sp, sp);
+  if (!mom.hasSignal) return;
+  ls.momentum = mom;
+  if (m.value) m.value.momentum = mom;
 }
 
 /** Cache SofaScore data — ultra-fast for local use */

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { TierProvider } from "@/lib/auth";
+import Analytics from "@/components/Analytics";
+import PageviewTracker from "@/components/PageviewTracker";
 
 export const metadata: Metadata = {
   title: "Tennis Intelligence Terminal",
@@ -15,6 +17,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-terminal-bg text-slate-200 font-mono">
+        <Analytics />
+        <PageviewTracker />
         <TierProvider>{children}</TierProvider>
       </body>
     </html>

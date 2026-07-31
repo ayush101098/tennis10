@@ -28,6 +28,27 @@
   status = 200
   force = true
 
+# Email capture + payment ledger (static export strips the /api/subscribe route)
+[[redirects]]
+  from = "/api/subscribe"
+  to = "/.netlify/functions/subscribe"
+  status = 200
+  force = true
+
+# First-party pageview tracking (static export strips the /api/track route)
+[[redirects]]
+  from = "/api/track"
+  to = "/.netlify/functions/track"
+  status = 200
+  force = true
+
+# Authoritative payment verification + entitlement (server-side source of truth)
+[[redirects]]
+  from = "/api/verify"
+  to = "/.netlify/functions/verify"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

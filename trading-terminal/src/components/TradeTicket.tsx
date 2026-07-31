@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ScheduledMatch } from "@/lib/scheduleService";
 import { trackBet } from "@/components/BetTracker";
-import { useTier } from "@/lib/auth";
+import { useTier, subActive, freeBetsRemaining, consumeFreeBet } from "@/lib/auth";
 import {
   eventUrl, fetchQuote, outcomeIndex,
   type PmFixture, type PmMarket, type PmMarketType,
@@ -43,7 +43,9 @@ type Phase = { kind: "idle" } | { kind: "placing" }
   | { kind: "error"; message: string };
 
 export default function TradeTicket({ target, bankroll, onClose }: Props) {
-  const { session } = useTier();
+  const { session, refresh } = useTier();
+  const paidUser = subActive(session);
+  const trialLeft = session ? freeBetsRemaining(session.email) : 0;
   const m = target.match;
   const fixture = target.fixture;
 
@@ -134,7 +136,16 @@ export default function TradeTicket({ target, bankroll, onClose }: Props) {
       tokenId: pmMarket && outcomeIdx >= 0 ? pmMarket.tokenIds[outcomeIdx] : undefined,
       negRisk: pmMarket?.negRisk,
     });
+    // Trial users spend one of their free bets per placement; refresh re-gates
+    // the terminal (which locks once the allowance hits zero).
+    if (!paidUser) {
+      consumeFreeBet(session?.email || "anon");
+      refresh();
+    }
   };
+
+  // Trial exhausted and not subscribed -> block placement outright.
+  const blockedNoTrial = !paidUser && trialLeft <= 0;
 
   const doConnect = async () => {
     setPhase({ kind: "placing" });
@@ -148,6 +159,7 @@ export default function TradeTicket({ target, bankroll, onClose }: Props) {
   };
 
   const doRealTrade = async () => {
+    if (blockedNoTrial) { setPhase({ kind: "error", message: `Your free trial (${trialLeft} bets) is used — subscribe to place more.` }); return; }
     if (!conn || !pmMarket || outcomeIdx < 0 || !price || stake <= 0) return;
     setPhase({ kind: "placing" });
     try {
@@ -163,6 +175,7 @@ export default function TradeTicket({ target, bankroll, onClose }: Props) {
   };
 
   const doPaperTrade = () => {
+    if (blockedNoTrial) { setPhase({ kind: "error", message: `Your free trial (${trialLeft} bets) is used — subscribe to place more.` }); return; }
     if (!price || stake <= 0) return;
     logBet("paper", price, shares);
     setPhase({

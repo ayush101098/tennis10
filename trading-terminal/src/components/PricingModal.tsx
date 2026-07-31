@@ -3,8 +3,9 @@
 import { useState } from "react";
 import {
   PAYMENT_ADDRESS, PRO_PRICE_USD,
-  signIn, verifyPaymentTx, grantPro, useTier,
+  signIn, grantPro, useTier,
 } from "@/lib/auth";
+import { serverVerifyPayment } from "@/lib/entitlement";
 
 interface Props {
   open: boolean;
@@ -29,7 +30,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
     const s = signIn(email);
     refresh();
-    setMsg({ ok: true, text: s.isAdmin ? "Welcome back, admin — full access enabled." : "Free account active — pre-match probabilities unlocked." });
+    setMsg({ ok: true, text: s.isAdmin ? "Welcome back, admin — full access enabled."
+      : s.tier === "pro" ? "Subscription active — full terminal unlocked."
+      : `Account created. Subscribe for $${PRO_PRICE_USD}/month to open the terminal.` });
     if (s.isAdmin || s.tier === "pro") { onDone?.(); onClose(); }
     else onDone?.();
   };
@@ -50,12 +53,14 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const verify = async () => {
     setBusy(true);
     setMsg(null);
-    const result = await verifyPaymentTx(txHash);
-    if (result.ok) {
-      grantPro(txHash.trim());
+    // Authoritative: the SERVER verifies the tx on-chain and issues entitlement.
+    // Fail-closed — no server "ok", no access.
+    const result = await serverVerifyPayment(email.trim().toLowerCase(), txHash.trim());
+    if (result.ok && result.paidUntil) {
+      grantPro(txHash.trim(), result.paidUntil, result.amountUsd);
       refresh();
-      setMsg({ ok: true, text: `${result.reason} Pro access unlocked — welcome.` });
-      setTimeout(() => { onDone?.(); onClose(); }, 1200);
+      setMsg({ ok: true, text: `${result.reason} Full terminal unlocked — welcome.` });
+      setTimeout(() => { onDone?.(); onClose(); }, 1400);
     } else {
       setMsg({ ok: false, text: result.reason });
     }
@@ -85,22 +90,20 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
 
             {/* Plans */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* FREE */}
+              {/* FREE ACCOUNT (no terminal) */}
               <div className="border border-terminal-border rounded-lg p-4 flex flex-col">
-                <div className="text-slate-200 font-bold text-sm mb-1">FREE</div>
+                <div className="text-slate-200 font-bold text-sm mb-1">FREE ACCOUNT</div>
                 <div className="text-2xl font-bold text-slate-100 mb-3">$0</div>
                 <ul className="text-[11px] text-slate-300 space-y-1.5 flex-1">
-                  <li>✓ Every match — ATP · WTA · Challenger · ITF</li>
-                  <li>✓ Live scores &amp; schedules</li>
-                  <li>✓ <b>Pre-match model probabilities</b> (NN + Elo)</li>
-                  <li className="text-terminal-muted">✗ Live True P &amp; edge vs bookmaker</li>
-                  <li className="text-terminal-muted">✗ Kelly staking &amp; Value Board</li>
-                  <li className="text-terminal-muted">✗ Hedge-timing &amp; break/hold signals</li>
+                  <li>✓ Live scores &amp; schedules — ATP · WTA · Challenger · ITF</li>
+                  <li>✓ One free match analysis a day on the home page</li>
+                  <li className="text-terminal-muted">✗ The terminal (Live True P, edge, Value Board)</li>
+                  <li className="text-terminal-muted">✗ Kelly staking &amp; hedge-timing signals</li>
                   <li className="text-terminal-muted">✗ Bet tracker</li>
                 </ul>
                 <button onClick={startFree}
                   className="mt-3 w-full py-2 rounded border border-terminal-border text-slate-200 text-xs font-bold hover:bg-terminal-bg transition">
-                  START FREE
+                  CREATE FREE ACCOUNT
                 </button>
               </div>
 
@@ -108,9 +111,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               <div className="border border-terminal-green/50 bg-terminal-green/5 rounded-lg p-4 flex flex-col relative">
                 <div className="absolute -top-2 right-3 text-[9px] font-bold bg-terminal-green text-black px-2 py-0.5 rounded">FULL TERMINAL</div>
                 <div className="text-terminal-green font-bold text-sm mb-1">PRO</div>
-                <div className="text-2xl font-bold text-slate-100 mb-3">${PRO_PRICE_USD}<span className="text-xs text-terminal-muted font-normal"> one-time</span></div>
+                <div className="text-2xl font-bold text-slate-100 mb-3">${PRO_PRICE_USD}<span className="text-xs text-terminal-muted font-normal"> / month</span></div>
                 <ul className="text-[11px] text-slate-300 space-y-1.5 flex-1">
-                  <li>✓ Everything in Free</li>
+                  <li>✓ <b>Unlimited bets</b> — no trial cap</li>
                   <li>✓ <b>Live True P</b> — score-conditioned Markov engine</li>
                   <li>✓ <b>Edge vs de-vigged bookmaker odds</b>, every match</li>
                   <li>✓ <b>Value Board</b> — ranked bets with ¼-Kelly stakes</li>
@@ -120,7 +123,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 </ul>
                 <button onClick={startPro}
                   className="mt-3 w-full py-2 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition">
-                  GET PRO — ${PRO_PRICE_USD}
+                  SUBSCRIBE — ${PRO_PRICE_USD}/mo
                 </button>
               </div>
             </div>
@@ -132,9 +135,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
         ) : (
           <div className="p-5">
             <button onClick={() => setStep("plans")} className="text-[10px] text-terminal-muted hover:text-slate-300 mb-3">← back to plans</button>
-            <div className="text-sm font-bold text-slate-100 mb-2">Pay ${PRO_PRICE_USD} in crypto</div>
+            <div className="text-sm font-bold text-slate-100 mb-2">Subscribe — ${PRO_PRICE_USD}/month in crypto</div>
             <ol className="text-[11px] text-slate-300 space-y-2 mb-4 list-decimal list-inside">
-              <li>Send <b>${PRO_PRICE_USD} worth of ETH / USDT / USDC</b> (Ethereum mainnet) to:</li>
+              <li>Send <b>at least ${PRO_PRICE_USD} in ETH / USDC / USDT / DAI</b> (Ethereum mainnet) to:</li>
             </ol>
             <div className="flex items-center gap-2 mb-4">
               <code className="flex-1 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-[11px] text-terminal-cyan break-all select-all">
@@ -160,8 +163,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               <div className={`mt-3 text-[11px] ${msg.ok ? "text-terminal-green" : "text-terminal-red"}`}>{msg.text}</div>
             )}
             <div className="mt-4 text-[9px] text-terminal-muted leading-relaxed">
-              Verification checks the transaction on Ethereum mainnet: it must be confirmed and pay the address above
-              (native ETH or an ERC-20 transfer). Access is tied to the email you entered ({email || "—"}).
+              Verification checks the transaction on Ethereum mainnet: it must be confirmed, pay the address above,
+              be worth at least <b>${PRO_PRICE_USD}</b>, and be from the last 30 days. Access runs 30 days from the
+              payment, then renews on your next monthly payment. Tied to the email you entered ({email || "—"}).
             </div>
           </div>
         )}

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { ScheduledMatch } from "@/lib/scheduleService";
+import type { MomentumState } from "@/lib/momentumEngine";
 import { usePolymarket } from "@/hooks/usePolymarket";
 import { fixtureKey, outcomePrice, type PmFixture } from "@/lib/polymarket";
 import TradeTicket, { type TicketTarget } from "@/components/TradeTicket";
@@ -184,7 +185,10 @@ function ValueRow({ m, pm, bankroll, onClick, onTrade, dim }: {
           {v.live && <span className="text-terminal-cyan"> · live Markov</span>}
         </span>
       </span>
-      <span className="text-right text-[10px] font-mono text-slate-200">{(v.trueP * 100).toFixed(1)}%</span>
+      <span className="text-right text-[10px] font-mono text-slate-200 leading-tight">
+        {(v.trueP * 100).toFixed(1)}%
+        {live && v.momentum?.hasSignal && <MomentumBadge mom={v.momentum} side={v.side} />}
+      </span>
       <span className="text-right text-[10px] font-mono text-terminal-yellow">{v.odds.toFixed(2)}</span>
       <span className="text-right text-[10px] font-mono text-terminal-muted">{(v.marketP * 100).toFixed(1)}%</span>
       <span className={`text-right text-[10px] font-mono font-bold ${strong ? "text-terminal-green" : v.edge >= MIN_EDGE ? "text-terminal-yellow" : "text-terminal-muted"}`}>
@@ -217,6 +221,30 @@ function ValueRow({ m, pm, bankroll, onClick, onTrade, dim }: {
  * Shows the PM price (¢) and edge vs True P; click opens the trade ticket
  * (match + any listed set-winner markets).
  */
+/**
+ * Live momentum indicator on the main engine row, oriented to the bet side:
+ * ▲ surging / ▼ fading (recency-weighted game control), with a serve-regression
+ * flag when the backed player's serve is trending below baseline. Leads the score.
+ */
+function MomentumBadge({ mom, side }: { mom: MomentumState; side: 1 | 2 }) {
+  const mv = side === 1 ? mom.momentumP1 : -mom.momentumP1;
+  const sregSelf = side === 1 ? mom.serveRegP1 : mom.serveRegP2;
+  const breaksFor = side === 1 ? mom.recentBreaksP1 : mom.recentBreaksP2;
+  const breaksAgainst = side === 1 ? mom.recentBreaksP2 : mom.recentBreaksP1;
+  const arr = mv > 0.05 ? "▲" : mv < -0.05 ? "▼" : "▬";
+  const tone = mv > 0.05 ? "text-terminal-green" : mv < -0.05 ? "text-terminal-red" : "text-terminal-muted";
+  const srvWarn = sregSelf < -0.15 ? " ⚠srv" : "";
+  const title =
+    `Live momentum ${mv >= 0 ? "+" : ""}${mv.toFixed(2)} (recency-weighted game control) · ` +
+    `serve regression ${sregSelf >= 0 ? "+" : ""}${sregSelf.toFixed(2)} · ` +
+    `recent breaks ${breaksFor} for / ${breaksAgainst} against · leads the scoreboard`;
+  return (
+    <span title={title} className={`block text-[8px] font-bold font-mono ${tone}`}>
+      {arr} {mv >= 0 ? "+" : ""}{mv.toFixed(2)}{srvWarn}
+    </span>
+  );
+}
+
 function PolymarketCell({ pm, pick, trueP, onOpen }: {
   pm?: PmFixture; pick: string; trueP: number; onOpen: (e: React.MouseEvent) => void;
 }) {

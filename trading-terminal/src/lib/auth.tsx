@@ -29,7 +29,36 @@ export const ADMIN_EMAILS = new Set([
   "yuvamsharma98@gmail.com",
 ]);
 export const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
-export const PRO_PRICE_USD = 99;
+export const PRO_PRICE_USD = 100;            // monthly subscription
+export const SUBSCRIPTION_DAYS = 30;          // access window per payment
+export const MIN_PAYMENT_USD = 100;           // payments below this are rejected
+export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription
+
+// Stablecoins we can price 1:1 for the payment-amount guardrail (mainnet).
+const STABLES: Record<string, { sym: string; dec: number }> = {
+  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": { sym: "USDC", dec: 6 },
+  "0xdac17f958d2ee523a2206206994597c13d831ec7": { sym: "USDT", dec: 6 },
+  "0x6b175474e89094c44da98b954eedeac495271d0f": { sym: "DAI", dec: 18 },
+};
+
+/**
+ * Time-boxed pro grants (manual comps for off-platform payments): email ->
+ * expiry epoch-ms. While Date.now() < expiry the email is treated as pro on any
+ * browser it signs in from; after expiry it lapses back to free automatically
+ * (see loadSession/signIn). Unlike ADMIN_EMAILS this is NOT free-forever.
+ */
+export const TIME_GRANTS: Record<string, number> = {
+  // paid off-platform 2026-07-21 13:53Z; access REVOKED 2026-07-22 by operator.
+  // Kept (expiry in the past) rather than deleted so loadSession actively
+  // downgrades any already-"pro" session for this email back to free.
+  "x7kobe@gmail.com": 1,
+};
+
+/** Grant expiry for an email if one is currently ACTIVE, else null. */
+export function activeGrantExpiry(email: string): number | null {
+  const exp = TIME_GRANTS[normEmail(email)];
+  return exp !== undefined && Date.now() < exp ? exp : null;
+}
 
 export type Tier = "public" | "free" | "pro";
 
@@ -38,6 +67,7 @@ export interface Session {
   tier: "free" | "pro";
   isAdmin: boolean;
   txHash?: string;
+  paidUntil?: number;   // epoch-ms the current subscription lapses (undefined = never paid)
   since: number;
 }
 
@@ -47,17 +77,26 @@ function normEmail(e: string): string {
   return e.trim().toLowerCase();
 }
 
+/** True if this session currently has PAID access: admin, an active comp grant,
+ *  or a subscription payment whose 30-day window hasn't lapsed. */
+export function subActive(s: Session | null): boolean {
+  if (!s) return false;
+  const e = normEmail(s.email);
+  if (s.isAdmin || ADMIN_EMAILS.has(e)) return true;
+  if (activeGrantExpiry(e)) return true;
+  return typeof s.paidUntil === "number" && s.paidUntil > Date.now();
+}
+
 export function loadSession(): Session | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return null;
     const s: Session = JSON.parse(raw);
-    // Admin is always pro regardless of what was stored
-    if (s.isAdmin || ADMIN_EMAILS.has(normEmail(s.email))) {
-      s.isAdmin = true;
-      s.tier = "pro";
-    }
+    // The subscription is the single source of truth for tier — an expired
+    // paidUntil (or a lapsed comp) drops the user straight back to free.
+    s.tier = subActive(s) ? "pro" : "free";
+    if (s.isAdmin || ADMIN_EMAILS.has(normEmail(s.email))) s.isAdmin = true;
     return s;
   } catch {
     return null;
@@ -73,13 +112,18 @@ export function signIn(email: string): Session {
   const e = normEmail(email);
   const isAdmin = ADMIN_EMAILS.has(e);
   const prev = loadSession();
+  // Carry over an existing subscription only for the same email — paidUntil is
+  // the source of truth, and subActive() enforces its expiry.
+  const samePrev = prev && normEmail(prev.email) === e ? prev : null;
   const s: Session = {
     email: e,
-    tier: isAdmin ? "pro" : prev && normEmail(prev.email) === e && prev.tier === "pro" ? "pro" : "free",
+    tier: "free",  // set correctly just below via subActive
     isAdmin,
-    txHash: prev?.txHash,
+    txHash: samePrev?.txHash,
+    paidUntil: samePrev?.paidUntil,
     since: Date.now(),
   };
+  s.tier = subActive(s) ? "pro" : "free";
   saveSession(s);
   return s;
 }
@@ -99,12 +143,37 @@ const RPCS = [
 export interface VerifyResult {
   ok: boolean;
   reason: string;
+  paidUntil?: number;   // subscription expiry (block time + 30d) on success
+  amountUsd?: number;   // verified USD value of the payment
+}
+
+async function rpc<T = unknown>(url: string, method: string, params: unknown[]): Promise<T | null> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  if (!res.ok) return null;
+  return (await res.json()).result ?? null;
+}
+
+async function ethUsd(): Promise<number | null> {
+  try {
+    const j = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot").then((r) => r.json());
+    const p = parseFloat(j.data.amount);
+    return Number.isFinite(p) ? p : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Verify a payment tx hash: the transaction must exist, be confirmed, and its
- * `to` must be the payment address (native transfer) OR an ERC-20 `transfer`
- * whose recipient (first calldata arg) is the payment address.
+ * Verify a subscription payment. REAL guardrail — the tx must:
+ *   1. exist and be confirmed,
+ *   2. pay PAYMENT_ADDRESS (native ETH, or a USDC/USDT/DAI transfer),
+ *   3. be worth at least $100 (MIN_PAYMENT_USD), and
+ *   4. be no older than the 30-day window (so an old tx can't be re-used forever).
+ * On success returns paidUntil = block time + 30 days.
  */
 export async function verifyPaymentTx(txHash: string): Promise<VerifyResult> {
   const hash = txHash.trim();
@@ -113,36 +182,54 @@ export async function verifyPaymentTx(txHash: string): Promise<VerifyResult> {
   }
   const target = PAYMENT_ADDRESS.toLowerCase();
 
-  for (const rpc of RPCS) {
+  for (const url of RPCS) {
     try {
-      const res = await fetch(rpc, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionByHash", params: [hash] }),
-      });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const tx = json.result;
+      const tx = await rpc<{ to: string; input: string; value: string; blockNumber: string }>(
+        url, "eth_getTransactionByHash", [hash]);
       if (!tx) return { ok: false, reason: "Transaction not found on Ethereum mainnet. Wait for confirmation and try again." };
       if (!tx.blockNumber) return { ok: false, reason: "Transaction is still pending — try again once it confirms." };
 
       const to = (tx.to || "").toLowerCase();
       const input: string = tx.input || "0x";
 
-      // Native ETH transfer straight to the payment address
-      const valueHex = (tx.value || "0x0").replace(/^0x/, "");
-      const hasValue = /[1-9a-f]/i.test(valueHex);
-      if (to === target && hasValue) {
-        return { ok: true, reason: "Payment verified (ETH transfer)." };
-      }
-      // ERC-20 transfer(address,uint256) → recipient is the first calldata word
-      if (input.startsWith("0xa9059cbb") && input.length >= 10 + 64) {
+      // Determine the USD value paid to the access address.
+      let usd: number | null = null;
+      let kind = "";
+      const valueWei = BigInt(tx.value || "0x0");
+      if (to === target && valueWei > BigInt(0)) {
+        const price = await ethUsd();
+        if (price == null) return { ok: false, reason: "Couldn't fetch the ETH price to verify the amount — pay in USDC/USDT for an instant check, or retry." };
+        usd = (Number(valueWei) / 1e18) * price;
+        kind = "ETH";
+      } else if (input.startsWith("0xa9059cbb") && input.length >= 10 + 128) {
         const recipient = "0x" + input.slice(10 + 24, 10 + 64).toLowerCase();
-        if (recipient === target) {
-          return { ok: true, reason: "Payment verified (token transfer)." };
+        if (recipient !== target) {
+          return { ok: false, reason: "That transaction does not pay the access address." };
         }
+        const stable = STABLES[to];
+        if (!stable) {
+          return { ok: false, reason: "Unsupported token. Pay in ETH, USDC, USDT or DAI." };
+        }
+        const amount = BigInt("0x" + input.slice(10 + 64, 10 + 128));
+        usd = Number(amount) / 10 ** stable.dec;
+        kind = stable.sym;
+      } else {
+        return { ok: false, reason: "That transaction does not pay the access address." };
       }
-      return { ok: false, reason: "That transaction does not pay the access address." };
+
+      if (usd == null || usd + 0.5 < MIN_PAYMENT_USD) {
+        return { ok: false, reason: `Payment is ~$${(usd || 0).toFixed(2)} ${kind} — the subscription is $${MIN_PAYMENT_USD}/month. Send at least $${MIN_PAYMENT_USD}.` };
+      }
+
+      // Block timestamp -> 30-day access window. Reject stale (re-used) txs.
+      const block = await rpc<{ timestamp: string }>(url, "eth_getBlockByNumber", [tx.blockNumber, false]);
+      const blockMs = block ? Number(BigInt(block.timestamp)) * 1000 : Date.now();
+      const paidUntil = blockMs + SUBSCRIPTION_DAYS * 86400000;
+      if (paidUntil <= Date.now()) {
+        return { ok: false, reason: "That payment is more than 30 days old — the subscription has lapsed. Send a new monthly payment." };
+      }
+
+      return { ok: true, reason: `Payment verified — $${usd.toFixed(2)} ${kind}. Access until ${new Date(paidUntil).toLocaleDateString()}.`, paidUntil, amountUsd: usd };
     } catch {
       continue; // try next RPC
     }
@@ -150,12 +237,16 @@ export async function verifyPaymentTx(txHash: string): Promise<VerifyResult> {
   return { ok: false, reason: "Could not reach Ethereum RPC to verify — check your connection and retry." };
 }
 
-/** Upgrade the current session to pro after a verified payment. */
-export function grantPro(txHash: string): Session | null {
+/** Upgrade the current session to a paid subscription until `paidUntil`. */
+export function grantPro(txHash: string, paidUntil: number, amountUsd?: number): Session | null {
   const s = loadSession();
   if (!s) return null;
-  const up: Session = { ...s, tier: "pro", txHash };
+  const up: Session = { ...s, tier: "pro", txHash, paidUntil };
   saveSession(up);
+  // Link the payment to the email server-side so "who paid" is answerable
+  // (the on-chain tx has no email). Fire-and-forget — never blocks the grant.
+  import("./subscribe").then((m) => m.recordPayment(up.email, txHash, amountUsd != null ? String(Math.round(amountUsd)) : undefined)).catch(() => {});
+  import("@/components/Analytics").then((m) => m.trackEvent("Payment")).catch(() => {});
   return up;
 }
 
@@ -187,6 +278,65 @@ export function claimPublicAnalysis(matchId: string): boolean {
   return true;
 }
 
+/* ── Free-bet trial quota (3 bets before a subscription is required) ─────── */
+
+const FREE_BETS_PREFIX = "tt_free_bets_";
+
+function freeBetsKey(email: string): string {
+  return FREE_BETS_PREFIX + normEmail(email || "anon");
+}
+
+/** How many of the FREE_BET_LIMIT trial bets this email has left. */
+export function freeBetsRemaining(email: string): number {
+  try {
+    const used = parseInt(localStorage.getItem(freeBetsKey(email)) || "0", 10) || 0;
+    return Math.max(0, FREE_BET_LIMIT - used);
+  } catch {
+    return 0;
+  }
+}
+
+/** Spend one trial bet. Returns the number remaining afterwards. */
+export function consumeFreeBet(email: string): number {
+  try {
+    const key = freeBetsKey(email);
+    const used = parseInt(localStorage.getItem(key) || "0", 10) || 0;
+    localStorage.setItem(key, String(used + 1));
+    return Math.max(0, FREE_BET_LIMIT - (used + 1));
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The single access gate for the terminal: a paid/active subscription (or admin
+ * / comp) OR trial bets still remaining. No session at all -> no access.
+ */
+export function canAccessTerminal(s: Session | null): boolean {
+  if (!s) return false;
+  return subActive(s) || freeBetsRemaining(s.email) > 0;
+}
+
+/**
+ * Reconcile the local session against the SERVER's authoritative entitlement.
+ * The server (which verified the payment on-chain) is the source of truth, so a
+ * hand-edited localStorage paidUntil is overwritten here. If the server can't be
+ * reached we keep the current session rather than locking a real subscriber out
+ * on a transient network blip. Admins/comps bypass (handled by subActive).
+ */
+export async function syncEntitlement(): Promise<Session | null> {
+  const s = loadSession();
+  if (!s) return null;
+  if (s.isAdmin || ADMIN_EMAILS.has(normEmail(s.email)) || activeGrantExpiry(s.email)) return s;
+  const { serverEntitlement } = await import("./entitlement");
+  const ent = await serverEntitlement(s.email);
+  if (!ent) return s;                       // server unreachable -> don't lock out
+  const up: Session = { ...s, paidUntil: ent.paidUntil || undefined };
+  up.tier = subActive(up) ? "pro" : "free";
+  saveSession(up);
+  return up;
+}
+
 /* ── React context ───────────────────────────────────────────────────────── */
 
 interface TierContextValue {
@@ -200,7 +350,12 @@ const TierContext = createContext<TierContextValue>({ session: null, tier: "publ
 export function TierProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const refresh = () => setSession(loadSession());
-  useEffect(refresh, []);
+  useEffect(() => {
+    setSession(loadSession());
+    // Server is authoritative — reconcile on load so a spoofed localStorage
+    // entitlement is corrected before the terminal renders as unlocked.
+    syncEntitlement().then((s) => s && setSession(s)).catch(() => {});
+  }, []);
   const tier: Tier = session ? session.tier : "public";
   return <TierContext.Provider value={{ session, tier, refresh }}>{children}</TierContext.Provider>;
 }

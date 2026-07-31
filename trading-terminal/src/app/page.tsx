@@ -5,8 +5,8 @@ import Link from "next/link";
 import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
-import PricingModal from "@/components/PricingModal";
-import { useTier, claimPublicAnalysis, getPublicAnalysisId } from "@/lib/auth";
+import EmailCapture from "@/components/EmailCapture";
+import { useTier } from "@/lib/auth";
 
 /**
  * Landing page — the public storefront.
@@ -16,10 +16,9 @@ import { useTier, claimPublicAnalysis, getPublicAnalysisId } from "@/lib/auth";
  * complete trading terminal).
  */
 export default function LandingPage() {
-  const { session, tier, refresh } = useTier();
+  const { session, tier } = useTier();
   const [data, setData] = useState<ScheduleData | null>(null);
   const [selected, setSelected] = useState<ScheduledMatch | null>(null);
-  const [pricingOpen, setPricingOpen] = useState(false);
   const isPro = tier === "pro";
   const dataRef = useRef<ScheduleData | null>(null);
   dataRef.current = data;
@@ -58,13 +57,9 @@ export default function LandingPage() {
   const liveCount = matches.filter(m => m.status === "live").length;
   const tours = useMemo(() => Array.from(new Set(matches.map(m => m.tour))), [matches]);
 
-  const onPick = useCallback((m: ScheduledMatch) => {
-    // Signed-in users analyse freely (depth still gated by tier inside EdgePanel).
-    if (session) { setSelected(m); return; }
-    // Public visitors: exactly one match per day.
-    if (claimPublicAnalysis(m.id)) setSelected(m);
-    else setPricingOpen(true);
-  }, [session]);
+  // Everyone analyses freely on the landing page — the subscription ask lives
+  // in the terminal (after the free preview window), never here.
+  const onPick = useCallback((m: ScheduledMatch) => setSelected(m), []);
 
   return (
     <div className="min-h-screen bg-terminal-bg text-slate-200">
@@ -85,12 +80,9 @@ export default function LandingPage() {
               </Link>
             </>
           ) : (
-            <>
-              <button onClick={() => setPricingOpen(true)} className="text-terminal-muted hover:text-slate-200">Pricing</button>
-              <button onClick={() => setPricingOpen(true)} className="font-bold px-3 py-1.5 rounded bg-terminal-green text-black hover:opacity-90">
-                GET ACCESS
-              </button>
-            </>
+            <Link href="/terminal" className="font-bold px-3 py-1.5 rounded bg-terminal-green text-black hover:opacity-90">
+              OPEN TERMINAL →
+            </Link>
           )}
         </div>
       </nav>
@@ -106,10 +98,10 @@ export default function LandingPage() {
           ATP · WTA · Challenger · W125 · ITF, every day.
         </p>
         <div className="mt-6 flex items-center justify-center gap-3">
-          <button onClick={() => setPricingOpen(true)}
+          <Link href="/terminal"
             className="px-5 py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-            GET FULL ACCESS — $99
-          </button>
+            OPEN THE TERMINAL →
+          </Link>
           <a href="#matches" className="px-5 py-2.5 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
             SEE TODAY&apos;S MATCHES ↓
           </a>
@@ -131,7 +123,7 @@ export default function LandingPage() {
           <div className="flex items-center justify-between px-4 py-2 border-b border-terminal-border bg-terminal-panel/60">
             <span className="text-[11px] font-bold text-terminal-yellow tracking-wider">📅 TODAY — LIVE &amp; UPCOMING</span>
             <span className="text-[10px] text-terminal-muted">
-              {session ? "click any match to analyse" : "analyse 1 match free — no account needed"}
+              click any match to analyse — no account needed
             </span>
           </div>
           {/* On mobile: list caps at ~55vh (scrolls), analysis flows in the
@@ -143,8 +135,8 @@ export default function LandingPage() {
               {!data && <div className="p-8 text-center text-terminal-muted text-xs animate-pulse">Loading live schedule…</div>}
               {matches.slice(0, 120).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
-                  freeSlot={!session && getPublicAnalysisId() === m.id}
-                  showProb={tier !== "public"}
+                  freeSlot={false}
+                  showProb
                   onClick={() => onPick(m)} />
               ))}
               {data && matches.length === 0 && (
@@ -154,18 +146,13 @@ export default function LandingPage() {
             {/* Analysis pane */}
             <div className="md:overflow-y-auto bg-terminal-bg min-h-[360px]">
               {selected ? (
-                <EdgePanel
-                  match={selected}
-                  tier={session ? tier : "pro" /* the one free public analysis shows the full stack */}
-                  onUpgrade={() => setPricingOpen(true)}
-                />
+                <EdgePanel match={selected} tier="pro" />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center gap-2 text-center p-8">
                   <div className="text-2xl">⚡</div>
                   <div className="text-[12px] font-bold text-slate-200">Pick a match to see the full analysis</div>
                   <div className="text-[10px] text-terminal-muted max-w-[280px]">
-                    Model probability, bookmaker edge, Kelly stake, live break/hold signals and hedge timing
-                    {session ? "" : " — one match free, then choose a plan"}.
+                    Model probability, bookmaker edge, Kelly stake, live break/hold signals and hedge timing.
                   </div>
                 </div>
               )}
@@ -185,34 +172,16 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Pricing ── */}
-      <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
-        <h2 className="text-lg font-bold text-slate-100 mb-2">Simple pricing</h2>
-        <p className="text-[11px] text-terminal-muted mb-6">Free gets you the model&apos;s pre-match probabilities on every match. Pro gets you the terminal.</p>
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
-          <button onClick={() => setPricingOpen(true)}
-            className="w-full sm:w-auto px-6 py-3 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
-            START FREE
-          </button>
-          <button onClick={() => setPricingOpen(true)}
-            className="w-full sm:w-auto px-6 py-3 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-            GO PRO — $99 ONE-TIME
-          </button>
-        </div>
-      </section>
-
       {/* ── Get in touch ── */}
       <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
         <h2 className="text-lg font-bold text-slate-100 mb-2">Interested?</h2>
         <p className="text-[11px] text-terminal-muted mb-5">
-          Want early access, a partnership, or just to talk models and markets? Get in touch.
+          Drop your email for early access, or reach out about a partnership.
         </p>
-        <a
-          href="mailto:jessefuture10@gmail.com?subject=Interested%20in%20Tennis%20Intelligence%20Terminal"
-          className="inline-flex items-center gap-2 px-6 py-3 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-          ✉ GET IN TOUCH
-        </a>
-        <p className="text-[10px] text-terminal-muted mt-3">
+        <div className="flex justify-center">
+          <EmailCapture source="landing-cta" cta="Get early access" />
+        </div>
+        <p className="text-[10px] text-terminal-muted mt-4">
           or email{" "}
           <a href="mailto:jessefuture10@gmail.com" className="text-terminal-green hover:underline">
             jessefuture10@gmail.com
@@ -227,7 +196,6 @@ export default function LandingPage() {
         <br />© {new Date().getFullYear()} Tennis Intelligence Terminal
       </footer>
 
-      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} onDone={refresh} />
     </div>
   );
 }

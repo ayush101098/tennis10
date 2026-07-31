@@ -75,7 +75,12 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
 
   const raw = data ? (day === "today" ? data.today : data.tomorrow) : [];
   const tours = Array.from(new Set(raw.map(m => m.tour))).sort();
-  const afterTour = tourFilter === "ALL" ? raw : raw.filter(m => m.tour === tourFilter);
+  // "ITF" is a group filter (matches "ITF M" + "ITF W"); every other value is exact.
+  const itfCount = raw.filter(m => m.tour.includes("ITF")).length;
+  const afterTour =
+    tourFilter === "ALL" ? raw :
+    tourFilter === "ITF" ? raw.filter(m => m.tour.includes("ITF")) :
+    raw.filter(m => m.tour === tourFilter);
   const matches = statusFilter === "ALL" ? afterTour : afterTour.filter(m => m.status === statusFilter);
 
   const counts: Record<string, number> = {};
@@ -130,6 +135,9 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
       {/* Tour + Status filters */}
       <div className="flex items-center gap-1 px-3 py-1 border-b border-terminal-border shrink-0 flex-wrap">
         <Pill active={tourFilter === "ALL"} onClick={() => setTourFilter("ALL")}>ALL</Pill>
+        {itfCount > 0 && (
+          <Pill active={tourFilter === "ITF"} onClick={() => setTourFilter("ITF")}>ITF ({itfCount})</Pill>
+        )}
         {tours.map(t => <Pill key={t} active={tourFilter === t} onClick={() => setTourFilter(t)}>{t}</Pill>)}
         <span className="text-terminal-border mx-0.5">│</span>
         <Pill active={statusFilter === "ALL"} onClick={() => setStatusFilter("ALL")}>ALL ({raw.length})</Pill>
