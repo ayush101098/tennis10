@@ -1,70 +1,144 @@
 /**
- * Netlify serverless function — SofaScore API proxy.
+ * Netlify serverless function — SofaScore API proxy, with a push-fed cache.
  *
  * When the frontend is deployed as a static export on Netlify, Next.js API
- * routes don't exist.  This function handles /api/sofa/* requests instead.
+ * routes don't exist. This function handles /api/sofa/* requests instead.
  *
- * SofaScore blocks ALL programmatic HTTP requests via TLS fingerprinting
- * (Varnish CDN returns 403 for Node.js fetch, curl, etc.).
+ * SofaScore blocks programmatic HTTP requests via TLS fingerprinting: its CDN
+ * returns 403 {"error":{"code":403,"reason":"challenge"}} to Node fetch, curl,
+ * etc. sofa_proxy.py defeats that with Chrome TLS impersonation — but only from
+ * a host SofaScore hasn't challenged. In practice the deployed proxy gets
+ * challenged too, so production had NO working tennis source (ESPN returns
+ * tournaments but zero individual matches), and the board rendered empty while
+ * ATP/WTA matches were live.
  *
- * This function forwards requests to a deployed instance of sofa_proxy.py
- * (which uses tls_client with Chrome TLS fingerprint impersonation).
+ * So this function now has two sources, in order:
+ *   1. UPSTREAM  — SOFA_PROXY_URL (a deployed sofa_proxy.py), when it works.
+ *                  A successful response is written to the cache.
+ *   2. CACHE     — Netlify Blobs, populated either by (1) or by pushes from a
+ *                  local machine that CAN reach SofaScore (tennis/push_sofa.py).
  *
- * Set the SOFA_PROXY_URL env var on Netlify to the deployed proxy URL:
- *   e.g. https://sofa-proxy.onrender.com
- *        https://sofa-proxy-xxxx.fly.dev
+ * The URL contract is unchanged, so no client code has to know any of this.
+ *
+ *   GET  /api/sofa/<sofa path>      -> JSON (upstream, else cache)
+ *   POST /api/sofa/_push            -> { path, payload }, needs x-tt-token
+ *
+ * Env: SOFA_PROXY_URL (optional upstream), TT_PUSH_TOKEN (required to push).
  */
 
-exports.handler = async (event) => {
-  const SOFA_PROXY_URL = process.env.SOFA_PROXY_URL;
+const STORE = "sofa";
+const MAX_CACHE_AGE_MS = 30 * 60 * 1000;   // served with a warning past this
 
-  if (!SOFA_PROXY_URL) {
-    return {
-      statusCode: 503,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        error: "SOFA_PROXY_URL not configured. Deploy sofa_proxy.py and set the env var.",
-      }),
-    };
-  }
-
-  // Extract the SofaScore API path from the request
-  const fnPrefix = "/.netlify/functions/sofa-proxy/";
-  let sofaPath = event.path;
-  if (sofaPath.startsWith(fnPrefix)) {
-    sofaPath = sofaPath.slice(fnPrefix.length);
-  } else if (sofaPath.startsWith("/api/sofa/")) {
-    sofaPath = sofaPath.slice("/api/sofa/".length);
-  }
-
-  // Forward to the deployed sofa_proxy.py (which handles TLS fingerprinting)
-  const url = `${SOFA_PROXY_URL.replace(/\/$/, "")}/${sofaPath}`;
-
+function blobs() {
   try {
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-    });
-
-    const body = await res.text();
-
-    return {
-      statusCode: res.status,
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "public, s-maxage=3, stale-while-revalidate=5",
-        "Access-Control-Allow-Origin": "*",
-      },
-      body,
-    };
-  } catch (err) {
-    console.error("[sofa-proxy]", err);
-    return {
-      statusCode: 502,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        error: "Failed to reach sofa_proxy — is it deployed?",
-        proxyUrl: SOFA_PROXY_URL,
-      }),
-    };
+    const { getStore } = require("@netlify/blobs");
+    return getStore(STORE);
+  } catch {
+    return null;
   }
+}
+
+// Blob keys can't contain "/" — flatten the SofaScore path.
+const keyFor = (p) => "p_" + String(p).replace(/^\/+|\/+$/g, "").replace(/[^A-Za-z0-9._-]/g, "_");
+
+const json = (statusCode, obj, extra) => ({
+  statusCode,
+  headers: {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "*",
+    ...(extra || {}),
+  },
+  body: typeof obj === "string" ? obj : JSON.stringify(obj),
+});
+
+function pathFrom(event) {
+  const fnPrefix = "/.netlify/functions/sofa-proxy/";
+  let p = event.path || "";
+  if (p.startsWith(fnPrefix)) p = p.slice(fnPrefix.length);
+  else if (p.startsWith("/api/sofa/")) p = p.slice("/api/sofa/".length);
+  return p;
+}
+
+exports.handler = async (event) => {
+  const sofaPath = pathFrom(event);
+  const store = blobs();
+
+  // ── push from a machine that can actually reach SofaScore ──
+  if (event.httpMethod === "POST") {
+    const token = process.env.TT_PUSH_TOKEN;
+    const sent = event.headers["x-tt-token"] || event.headers["X-Tt-Token"];
+    if (!token || sent !== token) return json(401, { ok: false, reason: "unauthorized" });
+    if (!store) return json(503, { ok: false, reason: "blob store unavailable" });
+
+    let body = {};
+    try { body = JSON.parse(event.body || "{}"); } catch {
+      return json(400, { ok: false, reason: "invalid JSON" });
+    }
+    const p = String(body.path || "").replace(/^\/+/, "");
+    if (!p) return json(400, { ok: false, reason: "path required" });
+    if (body.payload == null) return json(400, { ok: false, reason: "payload required" });
+    try {
+      await store.setJSON(keyFor(p), { at: Date.now(), payload: body.payload });
+    } catch (e) {
+      return json(500, { ok: false, reason: String(e).slice(0, 200) });
+    }
+    return json(200, { ok: true, path: p });
+  }
+
+  if (event.httpMethod !== "GET") return json(405, { error: "method not allowed" });
+
+  // ── 1. upstream ──
+  const upstream = process.env.SOFA_PROXY_URL;
+  if (upstream) {
+    try {
+      const res = await fetch(`${upstream.replace(/\/$/, "")}/${sofaPath}`, {
+        headers: { Accept: "application/json" },
+      });
+      const text = await res.text();
+      // SofaScore answers a challenge with 403 and a JSON error body; treat any
+      // non-2xx as a miss so we fall through to the cache rather than handing
+      // the client an error page it will render as "no matches".
+      if (res.ok) {
+        if (store) {
+          try {
+            await store.setJSON(keyFor(sofaPath), { at: Date.now(), payload: JSON.parse(text) });
+          } catch { /* caching is best-effort */ }
+        }
+        return json(200, text, {
+          "Cache-Control": "public, s-maxage=3, stale-while-revalidate=5",
+          "x-sofa-source": "upstream",
+        });
+      }
+      console.warn(`[sofa-proxy] upstream ${res.status} for ${sofaPath}`);
+    } catch (err) {
+      console.warn("[sofa-proxy] upstream unreachable:", String(err).slice(0, 120));
+    }
+  }
+
+  // ── 2. cache ──
+  if (store) {
+    try {
+      const hit = await store.get(keyFor(sofaPath), { type: "json" });
+      if (hit && hit.payload != null) {
+        const age = Date.now() - (hit.at || 0);
+        return json(200, hit.payload, {
+          "x-sofa-source": "cache",
+          "x-sofa-age-ms": String(age),
+          ...(age > MAX_CACHE_AGE_MS ? { "x-sofa-stale": "true" } : {}),
+        });
+      }
+    } catch (e) {
+      console.error("[sofa-proxy] cache read failed:", String(e).slice(0, 120));
+    }
+  }
+
+  return json(503, {
+    error: "No SofaScore data available.",
+    detail: upstream
+      ? "Upstream proxy was challenged/unreachable and nothing is cached for this path. "
+        + "Run `python -m tennis_push` (tennis/push_sofa.py) locally to populate the cache."
+      : "SOFA_PROXY_URL is not set and nothing is cached for this path.",
+    path: sofaPath,
+  });
 };
