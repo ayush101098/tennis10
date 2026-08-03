@@ -20,6 +20,12 @@ import { useTier, PAYMENT_ADDRESS } from "@/lib/auth";
 type Lead = { email: string; ts: number; lastSeen: number; source: string; paid: boolean };
 type Payment = { email: string; txHash: string; amount: string | null; from: string | null; ts: number };
 type OnchainTx = { hash: string; from: string; when: number; amount: number; symbol: string; usd: number | null };
+type AccountRow = {
+  email: string; firstSeen: number; lastLogin: number; loginCount: number;
+  source: string; active: boolean; paidUntil: number; daysLeft: number;
+  totalPaidUsd: number; payments: number; grants: number;
+};
+type AccountCounts = { accounts: number; active: number; paying: number; comped: number; revenueUsd: number };
 type KV = { k: string; v: number };
 type Traffic = {
   views: number; uniques: number;
@@ -42,8 +48,23 @@ export default function AdminPage() {
   const [onchain, setOnchain] = useState<OnchainTx[] | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  const [accCounts, setAccCounts] = useState<AccountCounts | null>(null);
 
   useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ""); }, []);
+
+  // The account database — logins, payments and grants in one roster.
+  useEffect(() => {
+    if (!token) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/account", { headers: { "x-admin-token": token } });
+        if (!res.ok) return;
+        const d = await res.json();
+        setAccounts(d.rows || []); setAccCounts(d.counts || null);
+      } catch { /* leave null — section shows its own empty state */ }
+    })();
+  }, [token]);
 
   const loadLeads = useCallback(async (t: string) => {
     setLoading(true); setErr("");
@@ -144,6 +165,43 @@ export default function AdminPage() {
           </div>
 
           {err && <p className="text-xs text-red-400 mb-4">{err} <button className="underline" onClick={() => { localStorage.removeItem(TOKEN_KEY); setToken(""); }}>re-enter token</button></p>}
+
+          <Section title={`Accounts — logins, payments & grants${accCounts ? ` (${accCounts.accounts})` : ""}`}>
+            {accounts === null ? <Muted>Loading account database…</Muted> :
+              accounts.length === 0 ? <Muted>No accounts yet. Every sign-in is recorded here from now on.</Muted> :
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-3">
+                  <Kpi label="Accounts" value={accCounts?.accounts ?? "…"} />
+                  <Kpi label="Active now" value={accCounts?.active ?? "…"} />
+                  <Kpi label="Paying" value={accCounts?.paying ?? "…"} />
+                  <Kpi label="Comped" value={accCounts?.comped ?? "…"} />
+                  <Kpi label="Revenue" value={`$${(accCounts?.revenueUsd ?? 0).toFixed(0)}`} />
+                </div>
+                <Table head={["Status", "Email", "Last login", "Logins", "Access until", "Days left", "Paid", "Source"]}>
+                  {accounts.map(a => (
+                    <tr key={a.email} className="border-t border-terminal-border">
+                      <td className="py-1.5 pr-3">
+                        <span className={a.active ? "text-terminal-green font-bold" : "text-terminal-muted"}>
+                          {a.active ? (a.payments > 0 ? "● PAID" : "● COMP") : "○ none"}
+                        </span>
+                      </td>
+                      <td className="pr-3 text-slate-200">{a.email}</td>
+                      <td className="pr-3 text-terminal-muted">{fmtDate(a.lastLogin)}</td>
+                      <td className="pr-3 tabular-nums">{a.loginCount}</td>
+                      <td className="pr-3 text-terminal-muted">{a.paidUntil ? fmtDate(a.paidUntil) : "—"}</td>
+                      <td className="pr-3 tabular-nums">{a.daysLeft || "—"}</td>
+                      <td className="pr-3 tabular-nums">{a.totalPaidUsd ? `$${a.totalPaidUsd.toFixed(0)}` : "—"}</td>
+                      <td className="pr-3 text-terminal-muted">{a.source || "—"}</td>
+                    </tr>
+                  ))}
+                </Table>
+                <p className="text-[11px] text-terminal-muted mt-2">
+                  One row per email — the single source of truth for who signed in, who paid and until when.
+                  ● PAID = on-chain payment · ● COMP = manual grant. Grant access with{" "}
+                  <code>POST /api/account {`{email, action:"grant", days, adminToken}`}</code>.
+                </p>
+              </>}
+          </Section>
 
           <Section title="On-chain payments — who actually paid">
             {onchain === null ? <Muted>Loading chain…</Muted> :

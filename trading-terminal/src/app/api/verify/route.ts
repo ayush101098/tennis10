@@ -120,5 +120,22 @@ export async function POST(req: NextRequest) {
   const prev = db.byEmail[email]?.paidUntil || 0;
   db.byEmail[email] = { paidUntil: Math.max(prev, v.paidUntil!), txHash, from: v.from!, amountUsd: Math.round(v.amountUsd!), verifiedAt: Date.now() };
   await save(db);
+
+  // Mirror into the unified account database so the roster shows this payer.
+  // `ts` MUST be the on-chain block time, not now: the account DB derives
+  // payment expiry as ts + 30d, so stamping it with the verification time would
+  // let someone pay, sit on the receipt for 29 days, then verify and collect
+  // ~59 days of access. v.paidUntil is blockMs + 30d, so subtract that back out.
+  const blockMs = v.paidUntil! - SUBSCRIPTION_DAYS * 86400000;
+  // Best-effort: a verified payment must never fail because the mirror did.
+  try {
+    await fetch(new URL("/api/account", req.nextUrl.origin), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email, txHash, amountUsd: Math.round(v.amountUsd!), from: v.from, ts: blockMs,
+      }),
+    });
+  } catch { /* entitlement above is already persisted */ }
   return NextResponse.json({ ok: true, reason: v.reason, paidUntil: v.paidUntil, amountUsd: v.amountUsd }, { headers: { "Cache-Control": "no-store" } });
 }

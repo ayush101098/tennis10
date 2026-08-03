@@ -27,6 +27,13 @@ export const ADMIN_EMAILS = new Set([
   "mishrapriyanka9515@gmail.com",
   "sahil7goyal18@gmail.com",
   "yuvamsharma98@gmail.com",
+  // First paying customer (tx 0x4548736331c3…, $100.31 ETH, 2026-07-23).
+  // Added here to unblock access while the Netlify verify function's blob write
+  // is failing ("Could not record entitlement"). NOTE: admin is free-forever AND
+  // opens /admin (leads, revenue, payments) — downgrade to the TIME_GRANTS entry
+  // below, which already grants this email access to 2026-09-02, once verify is
+  // fixed. See also the accounts DB record for the real payment.
+  "mateimo012@gmail.com",
 ]);
 export const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
 export const PRO_PRICE_USD = 100;            // monthly subscription
@@ -52,6 +59,10 @@ export const TIME_GRANTS: Record<string, number> = {
   // Kept (expiry in the past) rather than deleted so loadSession actively
   // downgrades any already-"pro" session for this email back to free.
   "x7kobe@gmail.com": 1,
+  // paid off-platform 2026-08-03; full access for one month → 2026-09-02.
+  // Mirrored in the account DB (grants[]); this entry makes it effective
+  // immediately on any browser without waiting on a server round-trip.
+  "mateimo012@gmail.com": 1788339135450,
 };
 
 /** Grant expiry for an email if one is currently ACTIVE, else null. */
@@ -95,8 +106,14 @@ export function loadSession(): Session | null {
     const s: Session = JSON.parse(raw);
     // The subscription is the single source of truth for tier — an expired
     // paidUntil (or a lapsed comp) drops the user straight back to free.
+    const before = s.tier;
     s.tier = subActive(s) ? "pro" : "free";
     if (s.isAdmin || ADMIN_EMAILS.has(normEmail(s.email))) s.isAdmin = true;
+    // Write the corrected tier back, so the stored session can't disagree with
+    // what the app renders (a granted user previously stayed "free" on disk
+    // while showing PRO everywhere — confusing to debug, and a trap for any
+    // code that reads localStorage directly instead of going through subActive).
+    if (s.tier !== before) saveSession(s);
     return s;
   } catch {
     return null;
@@ -125,7 +142,23 @@ export function signIn(email: string): Session {
   };
   s.tier = subActive(s) ? "pro" : "free";
   saveSession(s);
+  // Record the login in the account database (fire-and-forget: sign-in must
+  // never block on it). Without this, logins existed only in this browser's
+  // localStorage and there was no way to see who was actually using the app.
+  recordLogin(e);
   return s;
+}
+
+/** Tell the account DB this email just signed in. Never throws. */
+export function recordLogin(email: string, source?: string): void {
+  try {
+    void fetch("/api/account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: normEmail(email), source }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch { /* never block sign-in */ }
 }
 
 export function signOut(): void {

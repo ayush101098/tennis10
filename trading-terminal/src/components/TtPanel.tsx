@@ -164,6 +164,10 @@ export function TtMatchCentre({ email }: { email: string }) {
 
   const liveStale = feed?.live && Date.now() / 1000 - feed.live.generated_ts > 90;
   const preStale = feed?.predictions && Date.now() / 1000 - feed.predictions.generated_ts > 12 * 3600;
+  // Production serves whatever the local pipeline last pushed (see
+  // tabletennis/push.py). Reaching the endpoint but getting nothing back means
+  // nothing has been pushed yet — say so, instead of an endless "Loading…".
+  const noData = !!feed && !feed.predictions && !feed.live;
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -190,6 +194,7 @@ export function TtMatchCentre({ email }: { email: string }) {
         </button>
         <span className="ml-auto text-terminal-muted whitespace-nowrap">
           {error ? <span className="text-terminal-red">feed unreachable</span>
+            : noData ? <span className="text-terminal-yellow">⚠ no data pushed yet — run python -m tabletennis.push</span>
             : liveStale ? <span className="text-terminal-yellow">⚠ live poller stale — run python -m tabletennis.live</span>
             : preStale ? <span className="text-terminal-yellow">⚠ pre-match file &gt;12h old</span>
             : `${rows.length} fixtures · model ${feed?.predictions?.model ?? "…"}`}
@@ -204,6 +209,20 @@ export function TtMatchCentre({ email }: { email: string }) {
       {!feed ? (
         <div className="flex-1 flex items-center justify-center text-[11px] text-terminal-muted">
           Loading table-tennis intelligence…
+        </div>
+      ) : noData ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-6">
+          <div className="text-2xl">🏓</div>
+          <div className="text-[12px] font-bold text-slate-200">No table-tennis data available</div>
+          <div className="text-[10px] text-terminal-muted max-w-[420px] leading-relaxed">
+            The feed is reachable but empty. TT predictions are generated locally (the model
+            needs the SofaScore proxy) and pushed to the site, so the pipeline has to be
+            running and pushing:
+            <span className="block mt-1 font-mono text-terminal-cyan">
+              python -m tabletennis.live<br />
+              python -m tabletennis.push
+            </span>
+          </div>
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex">

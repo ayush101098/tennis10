@@ -35,14 +35,30 @@ export async function serverVerifyPayment(email: string, txHash: string): Promis
   }
 }
 
-/** The server's current entitlement for an email, or null if it can't be reached. */
+/** The server's current entitlement for an email, or null if it can't be reached.
+ *
+ * Checks BOTH sources and takes the later expiry: /api/verify (on-chain payment
+ * entitlements) and /api/account (the unified account DB, which also carries
+ * manual grants for off-platform payments). Querying only the verifier meant a
+ * granted account still read as unpaid. Null only if neither can be reached, so
+ * a single outage can't silently revoke access. */
 export async function serverEntitlement(email: string): Promise<{ active: boolean; paidUntil: number } | null> {
-  try {
-    const res = await fetch(`/api/verify?email=${encodeURIComponent(email)}`, { cache: "no-store" });
-    if (!res.ok) return null;
-    const d = await res.json();
-    return { active: !!d.active, paidUntil: Number(d.paidUntil) || 0 };
-  } catch {
-    return null;
-  }
+  const one = async (url: string) => {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return Number(d.paidUntil) || 0;
+    } catch {
+      return null;
+    }
+  };
+  const q = encodeURIComponent(email);
+  const [paid, acct] = await Promise.all([
+    one(`/api/verify?email=${q}`),
+    one(`/api/account?email=${q}`),
+  ]);
+  if (paid === null && acct === null) return null;
+  const paidUntil = Math.max(paid || 0, acct || 0);
+  return { active: paidUntil > Date.now(), paidUntil };
 }

@@ -49,6 +49,22 @@
   status = 200
   force = true
 
+# Account database — logins, payments and grants in one store
+[[redirects]]
+  from = "/api/account"
+  to = "/.netlify/functions/account"
+  status = 200
+  force = true
+
+# Table-tennis feed. The TT model runs locally (it needs sofa_proxy.py), so the
+# local pipeline pushes its artifacts to this function's blob store and the
+# terminal reads them back from here. See tabletennis/push.py.
+[[redirects]]
+  from = "/api/tt"
+  to = "/.netlify/functions/tt"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

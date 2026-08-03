@@ -146,6 +146,18 @@ exports.handler = async (event) => {
   if (!v.ok) return reply(200, v);
 
   // Persist entitlement + prevent tx re-use across accounts.
+  //
+  // The chain has ALREADY confirmed this payment by the time we get here, so a
+  // storage failure is our bookkeeping problem, not the customer's. It used to
+  // return 500 "Could not record entitlement", which locked a legitimate payer
+  // out of the product they had just paid for. Now it grants access and reports
+  // the real error so the operator can fix storage.
+  //
+  // Trade-off while storage is down: the tx-reuse check can't run, so the same
+  // hash could in principle be claimed by two emails. Losing that guard is far
+  // cheaper than refusing every paying customer, and reuse is auditable
+  // after the fact from the chain + the account DB.
+  let storeWarning = null;
   try {
     const s = store();
     const claims = (await s.get(CLAIMS, { type: "json" })) || {};
@@ -163,7 +175,8 @@ exports.handler = async (event) => {
     await s.setJSON(CLAIMS, claims);
     await s.setJSON(BYEMAIL, byEmail);
   } catch (e) {
-    return reply(500, { ok: false, reason: "Could not record entitlement — try again." });
+    storeWarning = String((e && e.message) || e).slice(0, 200);
+    console.error("[verify] entitlement store write FAILED:", storeWarning);
   }
 
   // Mirror into the leads/payments ledger so the admin dashboard sees it.
@@ -177,5 +190,34 @@ exports.handler = async (event) => {
     }
   } catch { /* non-critical */ }
 
-  return reply(200, { ok: true, reason: v.reason, paidUntil: v.paidUntil, amountUsd: v.amountUsd });
+  // Mirror into the unified account database (the roster the admin reads).
+  // ts MUST be the on-chain block time, not now: the account DB derives payment
+  // expiry as ts + 30d, so stamping it with the verification time would let
+  // someone pay, sit on the receipt for 29 days, then verify and collect ~59
+  // days of access. v.paidUntil is blockMs + 30d, so subtract that back out.
+  try {
+    const { getStore } = require("@netlify/blobs");
+    const accounts = getStore("accounts");
+    const db = (await accounts.get("byEmail", { type: "json" })) || {};
+    const blockMs = v.paidUntil - SUBSCRIPTION_DAYS * 86400000;
+    const now = Date.now();
+    if (!db[email]) {
+      db[email] = { email, firstSeen: now, lastLogin: now, loginCount: 0, paidUntil: 0, payments: [], grants: [] };
+    }
+    if (!db[email].payments.some((p) => p.txHash === txHash)) {
+      db[email].payments.push({
+        txHash, amountUsd: Math.round(v.amountUsd), from: v.from, ts: blockMs,
+      });
+    }
+    const fromPayments = db[email].payments.reduce((m, p) => Math.max(m, p.ts + 30 * 86400000), 0);
+    const fromGrants = db[email].grants.reduce((m, g) => Math.max(m, g.until), 0);
+    db[email].paidUntil = Math.max(fromPayments, fromGrants);
+    await accounts.setJSON("byEmail", db);
+  } catch { /* non-critical — the entitlement above is already persisted */ }
+
+  return reply(200, {
+    ok: true, reason: v.reason, paidUntil: v.paidUntil, amountUsd: v.amountUsd,
+    // present only when server-side persistence failed; access is still granted
+    ...(storeWarning ? { storeWarning } : {}),
+  });
 };
