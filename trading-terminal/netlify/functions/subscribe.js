@@ -20,6 +20,8 @@
  * the GET is disabled (never expose the list publicly).
  */
 
+const { store: sharedStore } = require("./_blobs");
+
 const STORE = "leads";
 const LEADS_KEY = "list";
 const PAY_KEY = "payments";
@@ -61,8 +63,7 @@ const mem = { leads: [], payments: [] };
 
 async function getStoreSafe() {
   try {
-    const { getStore } = require("@netlify/blobs");
-    return getStore(STORE);
+        return sharedStore(STORE);
   } catch {
     return null;
   }
@@ -102,8 +103,7 @@ exports.handler = async (event) => {
     const payments = await readList(store, PAY_KEY);
     let events = [];
     try {
-      const { getStore } = require("@netlify/blobs");
-      events = (await getStore(ANALYTICS_STORE).get(ANALYTICS_KEY, { type: "json" })) || [];
+            events = (await sharedStore(ANALYTICS_STORE).get(ANALYTICS_KEY, { type: "json" })) || [];
     } catch { /* analytics optional */ }
     return reply(200, {
       counts: { leads: leads.length, payments: payments.length, views: events.length },

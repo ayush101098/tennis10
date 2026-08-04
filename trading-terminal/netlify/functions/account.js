@@ -13,6 +13,8 @@
  *   GET  (x-admin-token)    -> { rows, counts }       (admin roster)
  */
 
+const { store: sharedStore } = require("./_blobs");
+
 const STORE = "accounts";
 const KEY = "byEmail";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -27,8 +29,7 @@ const reply = (statusCode, obj) => ({
 
 async function store(name) {
   try {
-    const { getStore } = require("@netlify/blobs");
-    return getStore(name);
+        return sharedStore(name);
   } catch {
     return null;
   }

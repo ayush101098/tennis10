@@ -9,6 +9,8 @@
  * POST /api/track  { path, ref, vid }
  */
 
+const { store: sharedStore } = require("./_blobs");
+
 const STORE = "analytics";
 const KEY = "events";
 const CAP = 5000; // keep only the most recent N events
@@ -17,8 +19,7 @@ const mem = [];
 
 async function getStoreSafe() {
   try {
-    const { getStore } = require("@netlify/blobs");
-    return getStore(STORE);
+        return sharedStore(STORE);
   } catch {
     return null;
   }

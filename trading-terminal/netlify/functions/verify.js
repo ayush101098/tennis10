@@ -21,6 +21,8 @@
  * the shipped JS — closing that needs the premium data served from here too.
  */
 
+const { store: sharedStore } = require("./_blobs");
+
 const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
 const MIN_PAYMENT_USD = 100;
 const SUBSCRIPTION_DAYS = 30;
@@ -41,8 +43,7 @@ const CLAIMS = "claims";     // { txHash: email }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function store() {
-  const { getStore } = require("@netlify/blobs");
-  return getStore(STORE);
+    return sharedStore(STORE);
 }
 const reply = (statusCode, obj) => ({
   statusCode,
@@ -181,8 +182,7 @@ exports.handler = async (event) => {
 
   // Mirror into the leads/payments ledger so the admin dashboard sees it.
   try {
-    const { getStore } = require("@netlify/blobs");
-    const leads = getStore("leads");
+        const leads = sharedStore("leads");
     const payments = (await leads.get("payments", { type: "json" })) || [];
     if (!payments.some((p) => p.txHash === txHash)) {
       payments.push({ email, txHash, amount: String(Math.round(v.amountUsd)), from: v.from, ts: Date.now(), verified: true });
@@ -196,8 +196,7 @@ exports.handler = async (event) => {
   // someone pay, sit on the receipt for 29 days, then verify and collect ~59
   // days of access. v.paidUntil is blockMs + 30d, so subtract that back out.
   try {
-    const { getStore } = require("@netlify/blobs");
-    const accounts = getStore("accounts");
+        const accounts = sharedStore("accounts");
     const db = (await accounts.get("byEmail", { type: "json" })) || {};
     const blockMs = v.paidUntil - SUBSCRIPTION_DAYS * 86400000;
     const now = Date.now();

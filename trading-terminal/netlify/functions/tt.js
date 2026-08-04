@@ -19,6 +19,8 @@
  * Reads stay public — the terminal itself gates access client-side.
  */
 
+const { store: sharedStore } = require("./_blobs");
+
 const STORE = "tt";
 const KINDS = new Set(["predictions", "live", "metrics"]);
 
@@ -30,8 +32,7 @@ const reply = (statusCode, obj) => ({
 
 async function store() {
   try {
-    const { getStore } = require("@netlify/blobs");
-    return getStore(STORE);
+        return sharedStore(STORE);
   } catch {
     return null;
   }

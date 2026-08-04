@@ -10,6 +10,8 @@
  * Blobs isn't available we fall back to per-container memory (best-effort).
  */
 
+const { store: sharedStore } = require("./_blobs");
+
 const WINDOW_MS = 30_000; // an id is "online" if seen within the last 30s
 const STORE_NAME = "presence";
 const KEY = "seen";
@@ -26,8 +28,7 @@ function prune(seen, now) {
 
 async function getStoreSafe() {
   try {
-    const { getStore } = require("@netlify/blobs");
-    return getStore(STORE_NAME);
+        return sharedStore(STORE_NAME);
   } catch {
     return null;
   }
