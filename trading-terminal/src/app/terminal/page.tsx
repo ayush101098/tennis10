@@ -7,7 +7,8 @@ import BetTracker from "@/components/BetTracker";
 import PricingModal from "@/components/PricingModal";
 import LiveUsers from "@/components/LiveUsers";
 import { TtMatchCentre, TtBetTracker } from "@/components/TtPanel";
-import { useTier, signOut, subActive, PRO_PRICE_USD } from "@/lib/auth";
+import { useTier, signIn, signOut, subActive, grantPro, PRO_PRICE_USD } from "@/lib/auth";
+import { confirmStripeSession } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
 /**
@@ -59,6 +60,31 @@ export default function TerminalPage() {
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get("tab") === "tt") setSport("tt");
   }, []);
+
+  // Return from Stripe Checkout: confirm the session server-side and unlock.
+  // The server asks Stripe directly, so this does not wait on the webhook —
+  // a customer who has just paid must never land back on a paywall.
+  const [checkoutMsg, setCheckoutMsg] = useState<string | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("checkout") !== "success") return;
+    const sid = q.get("session_id");
+    if (!sid) return;
+    setCheckoutMsg("Confirming your payment…");
+    confirmStripeSession(sid).then(r => {
+      if (r.ok && r.paidUntil) {
+        if (r.email) signIn(r.email);
+        grantPro(`stripe:${sid}`, r.paidUntil, r.amountUsd);
+        refresh();
+        setCheckoutMsg(`${r.reason} Full terminal unlocked — welcome.`);
+      } else {
+        setCheckoutMsg(r.reason);
+      }
+      // drop the query so a refresh doesn't re-run this
+      window.history.replaceState({}, "", window.location.pathname);
+      setTimeout(() => setCheckoutMsg(null), 6000);
+    });
+  }, [refresh]);
 
   // the moment the preview runs out, put the subscription ask in front of them
   useEffect(() => { if (expired) setPricingOpen(true); }, [expired]);
@@ -123,6 +149,12 @@ export default function TerminalPage() {
           )}
         </div>
       </header>
+
+      {checkoutMsg && (
+        <div className="px-4 py-1.5 text-[11px] font-bold text-center bg-terminal-green/15 text-terminal-green border-b border-terminal-green/40 shrink-0">
+          {checkoutMsg}
+        </div>
+      )}
 
       {/* ── Body ── */}
       <div className="flex-1 min-h-0 relative">

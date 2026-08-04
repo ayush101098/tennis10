@@ -5,7 +5,7 @@ import {
   PAYMENT_ADDRESS, PRO_PRICE_USD,
   signIn, grantPro, useTier,
 } from "@/lib/auth";
-import { serverVerifyPayment } from "@/lib/entitlement";
+import { serverVerifyPayment, startStripeCheckout } from "@/lib/entitlement";
 
 interface Props {
   open: boolean;
@@ -19,7 +19,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const [email, setEmail] = useState(session?.email || "");
   const [step, setStep] = useState<"plans" | "pay">("plans");
   const [txHash, setTxHash] = useState("");
-  const [busy, setBusy] = useState(false);
+  // which action is in flight — distinguishes the card and crypto buttons so
+  // only the one that was clicked shows a spinner
+  const [busy, setBusy] = useState<false | "card" | "crypto">(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   if (!open) return null;
@@ -50,8 +52,24 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     setStep("pay");
   };
 
+  /** Card: hand off to Stripe's hosted checkout. Access is granted on return,
+   *  where the server confirms the session with Stripe (see /terminal). */
+  const payByCard = async () => {
+    const e = email.trim().toLowerCase();
+    if (!/\S+@\S+\.\S+/.test(e)) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
+    setBusy("card"); setMsg(null);
+    signIn(e); refresh();   // so the returning session is already tied to this email
+    const r = await startStripeCheckout(e);
+    if (r.ok && r.url) {
+      window.location.href = r.url;
+      return;               // leaving the page; keep the button disabled
+    }
+    setMsg({ ok: false, text: r.reason });
+    setBusy(false);
+  };
+
   const verify = async () => {
-    setBusy(true);
+    setBusy("crypto");
     setMsg(null);
     // Authoritative: the SERVER verifies the tx on-chain and issues entitlement.
     // Fail-closed — no server "ok", no access.
@@ -135,7 +153,23 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
         ) : (
           <div className="p-5">
             <button onClick={() => setStep("plans")} className="text-[10px] text-terminal-muted hover:text-slate-300 mb-3">← back to plans</button>
-            <div className="text-sm font-bold text-slate-100 mb-2">Subscribe — ${PRO_PRICE_USD}/month in crypto</div>
+
+            {/* ── Card (Stripe) — the default path for most people ── */}
+            <div className="text-sm font-bold text-slate-100 mb-2">Subscribe — ${PRO_PRICE_USD}/month</div>
+            <button onClick={payByCard} disabled={!!busy}
+              className="w-full py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition disabled:opacity-40">
+              {busy === "card" ? "OPENING SECURE CHECKOUT…" : `💳 PAY BY CARD — $${PRO_PRICE_USD}/MONTH`}
+            </button>
+            <div className="mt-2 text-[9px] text-terminal-muted text-center">
+              Secure checkout hosted by Stripe · cancel anytime · card details never touch this site
+            </div>
+
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 h-px bg-terminal-border" />
+              <span className="text-[9px] text-terminal-muted">OR PAY IN CRYPTO</span>
+              <div className="flex-1 h-px bg-terminal-border" />
+            </div>
+
             <ol className="text-[11px] text-slate-300 space-y-2 mb-4 list-decimal list-inside">
               <li>Send <b>at least ${PRO_PRICE_USD} in ETH / USDC / USDT / DAI</b> (Ethereum mainnet) to:</li>
             </ol>
@@ -155,9 +189,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               placeholder="0x…"
               className="w-full mb-3 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-[11px] font-mono text-slate-200 focus:border-terminal-cyan outline-none"
             />
-            <button onClick={verify} disabled={busy || !txHash.trim()}
+            <button onClick={verify} disabled={!!busy || !txHash.trim()}
               className="w-full py-2 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition disabled:opacity-40">
-              {busy ? "VERIFYING ON-CHAIN…" : "VERIFY PAYMENT & UNLOCK"}
+              {busy === "crypto" ? "VERIFYING ON-CHAIN…" : "VERIFY PAYMENT & UNLOCK"}
             </button>
             {msg && (
               <div className={`mt-3 text-[11px] ${msg.ok ? "text-terminal-green" : "text-terminal-red"}`}>{msg.text}</div>

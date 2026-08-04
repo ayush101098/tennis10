@@ -56,6 +56,25 @@
   status = 200
   force = true
 
+# Stripe card payments: start checkout, confirm the return, receive webhooks.
+[[redirects]]
+  from = "/api/stripe/checkout"
+  to = "/.netlify/functions/stripe-checkout"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/stripe/confirm"
+  to = "/.netlify/functions/stripe-confirm"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/stripe/webhook"
+  to = "/.netlify/functions/stripe-webhook"
+  status = 200
+  force = true
+
 # Table-tennis feed. The TT model runs locally (it needs sofa_proxy.py), so the
 # local pipeline pushes its artifacts to this function's blob store and the
 # terminal reads them back from here. See tabletennis/push.py.
