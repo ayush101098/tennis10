@@ -29,13 +29,41 @@
 const STORE = "sofa";
 const MAX_CACHE_AGE_MS = 30 * 60 * 1000;   // served with a warning past this
 
+let lastBlobError = null;
+
+/**
+ * Netlify Blobs handle.
+ *
+ * getStore() relies on site context that Netlify injects automatically, but
+ * that injection doesn't always happen (older function runtimes, some build
+ * setups). When it's missing the call throws and every read/write silently
+ * degrades — this is what made both the tennis cache and payment entitlements
+ * fail in production. Fall back to explicit credentials when they're provided.
+ */
 function blobs() {
+  const { getStore } = (() => {
+    try { return require("@netlify/blobs"); } catch (e) {
+      lastBlobError = "require failed: " + String(e && e.message).slice(0, 120);
+      return {};
+    }
+  })();
+  if (!getStore) return null;
   try {
-    const { getStore } = require("@netlify/blobs");
     return getStore(STORE);
-  } catch {
-    return null;
+  } catch (e) {
+    lastBlobError = String((e && e.message) || e).slice(0, 200);
   }
+  // explicit-credentials fallback
+  const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+  const token = process.env.NETLIFY_API_TOKEN || process.env.NETLIFY_AUTH_TOKEN;
+  if (siteID && token) {
+    try {
+      return getStore({ name: STORE, siteID, token });
+    } catch (e) {
+      lastBlobError += " | explicit: " + String((e && e.message) || e).slice(0, 150);
+    }
+  }
+  return null;
 }
 
 // Blob keys can't contain "/" — flatten the SofaScore path.
@@ -74,6 +102,9 @@ exports.handler = async (event) => {
       tokenConfigured: !!t,
       tokenLength: t ? t.length : 0,
       blobStore: !!store,
+      blobError: lastBlobError,
+      hasSiteId: !!(process.env.NETLIFY_SITE_ID || process.env.SITE_ID),
+      hasApiToken: !!(process.env.NETLIFY_API_TOKEN || process.env.NETLIFY_AUTH_TOKEN),
       upstreamConfigured: !!process.env.SOFA_PROXY_URL,
     });
   }
