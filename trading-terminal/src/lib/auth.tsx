@@ -142,6 +142,9 @@ export function signIn(email: string): Session {
   };
   s.tier = subActive(s) ? "pro" : "free";
   saveSession(s);
+  // Remembered separately so a redirect-based payment return (PayPal) can still
+  // identify the payer even if the session was cleared while they were away.
+  try { localStorage.setItem("tt_last_email", e); } catch { /* non-critical */ }
   // Record the login in the account database (fire-and-forget: sign-in must
   // never block on it). Without this, logins existed only in this browser's
   // localStorage and there was no way to see who was actually using the app.

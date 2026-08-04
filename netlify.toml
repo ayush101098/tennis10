@@ -75,6 +75,26 @@
   status = 200
   force = true
 
+# PayPal — international / US cards (guest card checkout, no PayPal account needed)
+[[redirects]]
+  from = "/api/paypal"
+  to = "/.netlify/functions/paypal"
+  status = 200
+  force = true
+
+# Razorpay — India: UPI, netbanking, cards, wallets
+[[redirects]]
+  from = "/api/razorpay"
+  to = "/.netlify/functions/razorpay"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/razorpay/webhook"
+  to = "/.netlify/functions/razorpay-webhook"
+  status = 200
+  force = true
+
 # Table-tennis feed. The TT model runs locally (it needs sofa_proxy.py), so the
 # local pipeline pushes its artifacts to this function's blob store and the
 # terminal reads them back from here. See tabletennis/push.py.

@@ -52,6 +52,85 @@ export async function confirmStripeSession(sessionId: string): Promise<ServerVer
   }
 }
 
+/* ── PayPal (international / US cards, guest checkout without a PayPal account) ── */
+
+/** Create a PayPal order and return the approval URL to redirect to. */
+export async function startPaypal(email: string): Promise<{ ok: boolean; url?: string; reason: string }> {
+  try {
+    const res = await fetch("/api/paypal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", email }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return { ok: !!d.ok && !!d.url, url: d.url, reason: d.reason || "Could not start PayPal checkout." };
+  } catch {
+    return { ok: false, reason: "Couldn't reach the payment service." };
+  }
+}
+
+/** Capture an approved PayPal order — the server confirms with PayPal. */
+export async function capturePaypal(orderId: string, email: string): Promise<ServerVerify & { email?: string }> {
+  try {
+    const res = await fetch("/api/paypal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "capture", orderId, email }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return { ok: !!d.ok, reason: d.reason || "Could not confirm the payment.", paidUntil: d.paidUntil, amountUsd: d.amountUsd, email: d.email };
+  } catch {
+    return { ok: false, reason: "Couldn't reach the payment service to confirm." };
+  }
+}
+
+/* ── Razorpay (India: UPI, netbanking, cards, wallets) ── */
+
+export interface RzpOrder { ok: boolean; orderId?: string; keyId?: string; amount?: number; currency?: string; amountInr?: number; reason?: string }
+
+export async function startRazorpay(email: string): Promise<RzpOrder> {
+  try {
+    const res = await fetch("/api/razorpay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", email }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false, reason: "Couldn't reach the payment service." };
+  }
+}
+
+export async function verifyRazorpay(
+  email: string,
+  fields: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string },
+): Promise<ServerVerify> {
+  try {
+    const res = await fetch("/api/razorpay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "verify", email, ...fields }),
+    });
+    const d = await res.json().catch(() => ({}));
+    return { ok: !!d.ok, reason: d.reason || "Could not verify the payment.", paidUntil: d.paidUntil };
+  } catch {
+    return { ok: false, reason: "Couldn't reach the payment service to verify." };
+  }
+}
+
+/** Load Razorpay's checkout script once, on demand. */
+export function loadRazorpayScript(): Promise<boolean> {
+  return new Promise(resolve => {
+    if (typeof window === "undefined") return resolve(false);
+    if ((window as unknown as { Razorpay?: unknown }).Razorpay) return resolve(true);
+    const s = document.createElement("script");
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.body.appendChild(s);
+  });
+}
+
 /** Authoritative verification + grant. Fail-closed: no ok unless the server says so. */
 export async function serverVerifyPayment(email: string, txHash: string): Promise<ServerVerify> {
   try {

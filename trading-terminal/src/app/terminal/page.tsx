@@ -8,7 +8,7 @@ import PricingModal from "@/components/PricingModal";
 import LiveUsers from "@/components/LiveUsers";
 import { TtMatchCentre, TtBetTracker } from "@/components/TtPanel";
 import { useTier, signIn, signOut, subActive, grantPro, PRO_PRICE_USD } from "@/lib/auth";
-import { confirmStripeSession } from "@/lib/entitlement";
+import { confirmStripeSession, capturePaypal } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
 /**
@@ -85,6 +85,30 @@ export default function TerminalPage() {
       setTimeout(() => setCheckoutMsg(null), 6000);
     });
   }, [refresh]);
+
+  // Return from PayPal approval: capture server-side and unlock. PayPal sends
+  // the order back as ?token=<orderId>; the money is only actually taken when
+  // we capture, so this step is mandatory, not cosmetic.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("paypal") !== "success") return;
+    const orderId = q.get("token");
+    if (!orderId) return;
+    const who = session?.email || localStorage.getItem("tt_last_email") || "";
+    setCheckoutMsg("Completing your PayPal payment…");
+    capturePaypal(orderId, who).then(r => {
+      if (r.ok && r.paidUntil) {
+        if (r.email) signIn(r.email);
+        grantPro(`paypal:${orderId}`, r.paidUntil, r.amountUsd);
+        refresh();
+        setCheckoutMsg(`${r.reason} Full terminal unlocked — welcome.`);
+      } else {
+        setCheckoutMsg(r.reason);
+      }
+      window.history.replaceState({}, "", window.location.pathname);
+      setTimeout(() => setCheckoutMsg(null), 6000);
+    });
+  }, [refresh, session?.email]);
 
   // the moment the preview runs out, put the subscription ask in front of them
   useEffect(() => { if (expired) setPricingOpen(true); }, [expired]);

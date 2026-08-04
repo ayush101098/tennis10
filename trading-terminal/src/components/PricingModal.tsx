@@ -5,7 +5,10 @@ import {
   PAYMENT_ADDRESS, PRO_PRICE_USD,
   signIn, grantPro, useTier,
 } from "@/lib/auth";
-import { serverVerifyPayment, startStripeCheckout } from "@/lib/entitlement";
+import {
+  serverVerifyPayment, startStripeCheckout,
+  startPaypal, startRazorpay, verifyRazorpay, loadRazorpayScript,
+} from "@/lib/entitlement";
 
 interface Props {
   open: boolean;
@@ -21,7 +24,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const [txHash, setTxHash] = useState("");
   // which action is in flight — distinguishes the card and crypto buttons so
   // only the one that was clicked shows a spinner
-  const [busy, setBusy] = useState<false | "card" | "crypto">(false);
+  const [busy, setBusy] = useState<false | "card" | "paypal" | "upi" | "crypto">(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   if (!open) return null;
@@ -66,6 +69,63 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     }
     setMsg({ ok: false, text: r.reason });
     setBusy(false);
+  };
+
+  /** PayPal — international cards, including guest checkout with no PayPal account. */
+  const payByPaypal = async () => {
+    const e = email.trim().toLowerCase();
+    if (!/\S+@\S+\.\S+/.test(e)) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
+    setBusy("paypal"); setMsg(null);
+    signIn(e); refresh();
+    const r = await startPaypal(e);
+    if (r.ok && r.url) { window.location.href = r.url; return; }
+    setMsg({ ok: false, text: r.reason });
+    setBusy(false);
+  };
+
+  /** Razorpay — UPI, netbanking, Indian cards and wallets, via their modal. */
+  const payByUpi = async () => {
+    const e = email.trim().toLowerCase();
+    if (!/\S+@\S+\.\S+/.test(e)) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
+    setBusy("upi"); setMsg(null);
+    const order = await startRazorpay(e);
+    if (!order.ok || !order.orderId || !order.keyId) {
+      setMsg({ ok: false, text: order.reason || "Could not start the payment." });
+      setBusy(false); return;
+    }
+    if (!(await loadRazorpayScript())) {
+      setMsg({ ok: false, text: "Couldn't load the payment window. Check your connection." });
+      setBusy(false); return;
+    }
+    signIn(e); refresh();
+    type RzpResp = { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string };
+    const Rzp = (window as unknown as { Razorpay: new (o: Record<string, unknown>) => { open: () => void } }).Razorpay;
+    const rzp = new Rzp({
+      key: order.keyId,
+      order_id: order.orderId,
+      amount: order.amount,
+      currency: order.currency,
+      name: "Tennis Intelligence Terminal",
+      description: `Pro — 30 days`,
+      prefill: { email: e },
+      theme: { color: "#22c55e" },
+      // Money has already moved by this point, so verify server-side and unlock.
+      handler: async (resp: RzpResp) => {
+        setMsg({ ok: true, text: "Payment received — verifying…" });
+        const v = await verifyRazorpay(e, resp);
+        if (v.ok && v.paidUntil) {
+          grantPro(`razorpay:${resp.razorpay_payment_id}`, v.paidUntil);
+          refresh();
+          setMsg({ ok: true, text: `${v.reason} Full terminal unlocked — welcome.` });
+          setTimeout(() => { onDone?.(); onClose(); }, 1400);
+        } else {
+          setMsg({ ok: false, text: v.reason });
+        }
+        setBusy(false);
+      },
+      modal: { ondismiss: () => { setBusy(false); } },
+    });
+    rzp.open();
   };
 
   const verify = async () => {
@@ -154,14 +214,31 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
           <div className="p-5">
             <button onClick={() => setStep("plans")} className="text-[10px] text-terminal-muted hover:text-slate-300 mb-3">← back to plans</button>
 
-            {/* ── Card (Stripe) — the default path for most people ── */}
-            <div className="text-sm font-bold text-slate-100 mb-2">Subscribe — ${PRO_PRICE_USD}/month</div>
-            <button onClick={payByCard} disabled={!!busy}
+            <div className="text-sm font-bold text-slate-100 mb-1">Subscribe — ${PRO_PRICE_USD}/month</div>
+            <div className="text-[10px] text-terminal-muted mb-3">Pick whatever is easiest where you are.</div>
+
+            {/* ── India: UPI / netbanking / Indian cards ── */}
+            <button onClick={payByUpi} disabled={!!busy}
               className="w-full py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition disabled:opacity-40">
-              {busy === "card" ? "OPENING SECURE CHECKOUT…" : `💳 PAY BY CARD — $${PRO_PRICE_USD}/MONTH`}
+              {busy === "upi" ? "OPENING PAYMENT WINDOW…" : "🇮🇳 UPI / NETBANKING / CARD (INDIA)"}
             </button>
-            <div className="mt-2 text-[9px] text-terminal-muted text-center">
-              Secure checkout hosted by Stripe · cancel anytime · card details never touch this site
+            <div className="mt-1.5 mb-3 text-[9px] text-terminal-muted text-center">
+              GPay · PhonePe · Paytm · UPI · netbanking · Indian cards — via Razorpay
+            </div>
+
+            {/* ── International cards ── */}
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={payByPaypal} disabled={!!busy}
+                className="py-2.5 rounded border border-terminal-cyan/50 text-terminal-cyan text-xs font-bold hover:bg-terminal-cyan/10 transition disabled:opacity-40">
+                {busy === "paypal" ? "OPENING…" : "🌍 PAYPAL / CARD"}
+              </button>
+              <button onClick={payByCard} disabled={!!busy}
+                className="py-2.5 rounded border border-terminal-border text-slate-200 text-xs font-bold hover:bg-terminal-bg transition disabled:opacity-40">
+                {busy === "card" ? "OPENING…" : "💳 CARD (STRIPE)"}
+              </button>
+            </div>
+            <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
+              International cards — PayPal also accepts cards without a PayPal account
             </div>
 
             <div className="flex items-center gap-3 my-4">
