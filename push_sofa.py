@@ -33,6 +33,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
@@ -41,6 +42,24 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 LOCAL_PROXY = os.getenv("SOFA_PROXY", "http://127.0.0.1:3001")
+
+
+def _ssl_ctx() -> ssl.SSLContext:
+    """A context with a real CA bundle.
+
+    A stock python.org build on macOS ships no root certificates, so every
+    HTTPS push dies with CERTIFICATE_VERIFY_FAILED while the local (plain HTTP)
+    proxy reads succeed — i.e. it looks like the site is rejecting us when
+    nothing has actually left the machine. Prefer certifi when it's installed.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+SSL_CTX = _ssl_ctx()
 
 # ATP=3 WTA=6 Challenger=72 ITF Men=785 ITF Women=213 (must match
 # SOFA_CAT_URLS in trading-terminal/src/lib/scheduleService.ts)
@@ -92,7 +111,7 @@ def push(path: str, payload, endpoint: str, token: str):
         endpoint, data=body, method="POST",
         headers={"Content-Type": "application/json", "x-tt-token": token})
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
+        with urllib.request.urlopen(req, timeout=90, context=SSL_CTX) as r:
             return r.status == 200, f"HTTP {r.status}"
     except urllib.error.HTTPError as e:
         return False, f"HTTP {e.code} {e.read()[:100].decode(errors='replace')}"

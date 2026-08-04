@@ -26,6 +26,7 @@ SETUP
 import argparse
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
@@ -34,6 +35,20 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SITE = Path(__file__).resolve().parent / "site"
+
+
+def _ssl_ctx() -> ssl.SSLContext:
+    """A context with a real CA bundle — a stock python.org build on macOS ships
+    no root certificates, so every HTTPS push would die with
+    CERTIFICATE_VERIFY_FAILED."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+SSL_CTX = _ssl_ctx()
 
 FILES = {
     "live": "live_predictions.json",
@@ -70,7 +85,7 @@ def push(kind: str, payload, url: str, token: str) -> tuple[bool, str]:
         headers={"Content-Type": "application/json", "x-tt-token": token},
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=60, context=SSL_CTX) as r:
             return r.status == 200, f"HTTP {r.status}"
     except urllib.error.HTTPError as e:
         return False, f"HTTP {e.code} {e.read()[:120].decode(errors='replace')}"
