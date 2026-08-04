@@ -64,6 +64,20 @@ exports.handler = async (event) => {
   const sofaPath = pathFrom(event);
   const store = blobs();
 
+  // Diagnostic: is push auth actually configured in this runtime? Reports only
+  // whether the var is present and its length — never the value — so a 401 can
+  // be told apart from a missing env var (the usual cause is a Netlify variable
+  // scoped to Builds only, so Functions never receive it).
+  if (sofaPath === "_authcheck") {
+    const t = process.env.TT_PUSH_TOKEN;
+    return json(200, {
+      tokenConfigured: !!t,
+      tokenLength: t ? t.length : 0,
+      blobStore: !!store,
+      upstreamConfigured: !!process.env.SOFA_PROXY_URL,
+    });
+  }
+
   // ── push from a machine that can actually reach SofaScore ──
   if (event.httpMethod === "POST") {
     const token = process.env.TT_PUSH_TOKEN;
