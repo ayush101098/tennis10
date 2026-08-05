@@ -5,12 +5,15 @@
  *   NEXT_PUBLIC_PLAUSIBLE_DOMAIN = yourdomain.com        (Plausible — privacy-first, recommended)
  *   NEXT_PUBLIC_GA_ID            = G-XXXXXXXXXX           (Google Analytics 4)
  *
- * If neither is set the component renders nothing — safe to ship un-configured.
+ * GA4 defaults to this site's own property. NEXT_PUBLIC_* is inlined at build
+ * time, so an env-only setup would need the var present in the Netlify build —
+ * the default keeps the tag working without that. A measurement ID is public
+ * by construction (it ships in the HTML of every page it tags), not a secret.
  * Custom events (signups, payments) can be sent from anywhere via trackEvent().
  */
 
 const PLAUSIBLE = process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN;
-const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
+const GA_ID = process.env.NEXT_PUBLIC_GA_ID || "G-WTTMQK5ZZJ";
 
 export default function Analytics() {
   if (PLAUSIBLE) {

@@ -50,7 +50,23 @@ interface TtLiveMatch {
 interface TtFeed {
   predictions: { generated_ts: number; model: string; predictions: TtPrediction[] } | null;
   live: { generated_ts: number; matches: TtLiveMatch[] } | null;
-  metrics: { accuracy?: number; log_loss?: number; n_test?: number } | null;
+  // metrics.json reports every candidate model plus which one won; the flat
+  // accuracy/log_loss fields never existed, so the held-out chip below was
+  // always blank. Read the best model's numbers instead.
+  metrics: {
+    best_model?: string;
+    n_test_rows?: number;
+    models?: Record<string, { accuracy?: number; log_loss?: number }>;
+  } | null;
+}
+
+/** Held-out accuracy of the winning model, or null if metrics are unusable. */
+function heldOutAccuracy(metrics: TtFeed["metrics"]): number | null {
+  const models = metrics?.models;
+  if (!models) return null;
+  const best = metrics?.best_model && models[metrics.best_model];
+  const acc = (best || Object.values(models)[0])?.accuracy;
+  return typeof acc === "number" ? acc : null;
 }
 
 /* ── paper bet journal ── */
@@ -82,23 +98,57 @@ const pnl = (b: TtBet) =>
 
 /* ── data hook: poll /api/tt every 8 s (matches the live poller cadence) ── */
 
+/**
+ * Static snapshot fallback.
+ *
+ * /api/tt serves whatever the local pipeline pushed into Netlify Blobs — but
+ * when the blob store is unavailable on the deployed site (no injected context
+ * and no NETLIFY_API_TOKEN) it returns all-nulls and the TT tab goes dark.
+ * So the pipeline also drops predictions.json/metrics.json into
+ * trading-terminal/public/tt/, which the static export ships with the deploy;
+ * we read those when the live endpoint has nothing. Pre-match board only —
+ * in-play True P still needs the push path, since it changes every 8s.
+ */
+async function loadSnapshot(): Promise<TtFeed | null> {
+  const get = async (name: string) => {
+    try {
+      const r = await fetch(`/tt/${name}`, { cache: "no-store" });
+      return r.ok ? await r.json() : null;
+    } catch { return null; }
+  };
+  const [predictions, metrics] = await Promise.all([get("predictions.json"), get("metrics.json")]);
+  return predictions ? { predictions, live: null, metrics } : null;
+}
+
 function useTtFeed() {
   const [feed, setFeed] = useState<TtFeed | null>(null);
+  const [snapshot, setSnapshot] = useState(false);
   const [error, setError] = useState(false);
   useEffect(() => {
     let alive = true;
     const load = async () => {
+      let data: TtFeed | null = null;
       try {
         const res = await fetch("/api/tt", { cache: "no-store" });
-        const data = await res.json();
-        if (alive) { setFeed(data); setError(false); }
-      } catch { if (alive) setError(true); }
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      const empty = !data || (!data.predictions && !data.live);
+      if (empty) {
+        const snap = await loadSnapshot();
+        if (!alive) return;
+        if (snap) { setFeed(snap); setSnapshot(true); setError(false); return; }
+      }
+      if (!alive) return;
+      if (data) { setFeed(data); setSnapshot(false); setError(false); }
+      else { setError(true); }
     };
     load();
     const t = setInterval(load, 8000);
     return () => { alive = false; clearInterval(t); };
   }, []);
-  return { feed, error };
+  return { feed, error, snapshot };
 }
 
 /* ── match centre ── */
@@ -110,7 +160,7 @@ type Row = {
 };
 
 export function TtMatchCentre({ email }: { email: string }) {
-  const { feed, error } = useTtFeed();
+  const { feed, error, snapshot } = useTtFeed();
   const [cat, setCat] = useState<string>("ALL");
   const [statusFilter, setStatusFilter] = useState<"all" | "live" | "sched">("all");
   const [selected, setSelected] = useState<number | null>(null);
@@ -162,6 +212,14 @@ export function TtMatchCentre({ email }: { email: string }) {
   const liveCount = rows.filter(r => r.status === "live").length;
   const selectedRow = rows.find(r => r.pred.event_id === selected) ?? null;
 
+  const heldOut = heldOutAccuracy(feed?.metrics ?? null);
+
+  // a deploy snapshot only refreshes on redeploy, so say how old it is —
+  // a day-old file means yesterday's slate, which must not read as today's
+  const snapshotAgeH = snapshot && feed?.predictions
+    ? Math.floor((Date.now() / 1000 - feed.predictions.generated_ts) / 3600)
+    : null;
+
   const liveStale = feed?.live && Date.now() / 1000 - feed.live.generated_ts > 90;
   const preStale = feed?.predictions && Date.now() / 1000 - feed.predictions.generated_ts > 12 * 3600;
   // Production serves whatever the local pipeline last pushed (see
@@ -195,12 +253,19 @@ export function TtMatchCentre({ email }: { email: string }) {
         <span className="ml-auto text-terminal-muted whitespace-nowrap">
           {error ? <span className="text-terminal-red">feed unreachable</span>
             : noData ? <span className="text-terminal-yellow">⚠ no data pushed yet — run python -m tabletennis.push</span>
+            : snapshot ? (
+              <span className="text-terminal-yellow"
+                title="Live push feed is offline, so this is the pre-match snapshot shipped with the deploy. In-play True P needs the push path.">
+                ⚠ snapshot{snapshotAgeH != null && ` ${snapshotAgeH}h old`} — pre-match only, no live feed
+              </span>
+            )
             : liveStale ? <span className="text-terminal-yellow">⚠ live poller stale — run python -m tabletennis.live</span>
             : preStale ? <span className="text-terminal-yellow">⚠ pre-match file &gt;12h old</span>
             : `${rows.length} fixtures · model ${feed?.predictions?.model ?? "…"}`}
-          {feed?.metrics?.accuracy != null && (
-            <span title="Held-out walk-forward validation — see tabletennis/site/metrics.json">
-              {" "}· held-out acc {(feed.metrics.accuracy * 100).toFixed(1)}%
+          {heldOut != null && (
+            <span title={`Held-out walk-forward validation (${feed?.metrics?.best_model ?? "best model"}, `
+              + `n=${feed?.metrics?.n_test_rows ?? "?"}) — see tabletennis/site/metrics.json`}>
+              {" "}· held-out acc {(heldOut * 100).toFixed(1)}%
             </span>
           )}
         </span>
@@ -221,6 +286,11 @@ export function TtMatchCentre({ email }: { email: string }) {
             <span className="block mt-1 font-mono text-terminal-cyan">
               python -m tabletennis.live<br />
               python -m tabletennis.push
+            </span>
+            <span className="block mt-1">
+              No deploy snapshot either — <span className="font-mono text-terminal-cyan">
+              python -m tabletennis.push --snapshot-only</span> then redeploy to ship the
+              pre-match board without the live feed.
             </span>
           </div>
         </div>

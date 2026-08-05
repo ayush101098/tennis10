@@ -64,6 +64,9 @@ trading-terminal/index_old.html
 !vercel.json
 !trading-terminal/public/rankings.json
 !trading-terminal/public/nn_model.json
+# Table-tennis deploy snapshot — shipped with the static export so the TT tab
+# still has a pre-match board when the live push feed is down (tabletennis/push.py)
+!trading-terminal/public/tt/*.json
 nohup.out
 
 # Next.js build output

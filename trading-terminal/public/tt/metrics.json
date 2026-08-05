@@ -1,0 +1,86 @@
+{
+  "n_train_rows": 95622,
+  "n_test_rows": 23906,
+  "n_matches_total": 59764,
+  "features": [
+    "elo_diff",
+    "form10_diff",
+    "form20_diff",
+    "gwr10_diff",
+    "streak_diff",
+    "h2h_n",
+    "h2h_p1_rate",
+    "rest_hrs_diff",
+    "load24_diff",
+    "exp_diff"
+  ],
+  "models": {
+    "logistic": {
+      "accuracy": 0.568,
+      "log_loss": 0.6772,
+      "calibration": [
+        {
+          "bin": "50-60%",
+          "n": 17764,
+          "pred": 0.544,
+          "actual": 0.542
+        },
+        {
+          "bin": "60-70%",
+          "n": 5418,
+          "pred": 0.635,
+          "actual": 0.626
+        },
+        {
+          "bin": "70-80%",
+          "n": 652,
+          "pred": 0.734,
+          "actual": 0.755
+        },
+        {
+          "bin": "80-100%",
+          "n": 72,
+          "pred": 0.824,
+          "actual": 0.861
+        }
+      ]
+    },
+    "gbdt": {
+      "accuracy": 0.5779,
+      "log_loss": 0.674,
+      "calibration": [
+        {
+          "bin": "50-60%",
+          "n": 18184,
+          "pred": 0.541,
+          "actual": 0.553
+        },
+        {
+          "bin": "60-70%",
+          "n": 4502,
+          "pred": 0.638,
+          "actual": 0.637
+        },
+        {
+          "bin": "70-80%",
+          "n": 845,
+          "pred": 0.736,
+          "actual": 0.707
+        },
+        {
+          "bin": "80-100%",
+          "n": 375,
+          "pred": 0.871,
+          "actual": 0.803
+        }
+      ]
+    }
+  },
+  "baselines": {
+    "majority_accuracy": 0.5,
+    "elo_only_accuracy": 0.5538,
+    "elo_only_log_loss": 0.6907,
+    "coin_flip_log_loss": 0.6931
+  },
+  "best_model": "gbdt"
+}

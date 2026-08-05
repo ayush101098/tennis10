@@ -21,6 +21,15 @@ SETUP
 
     python -m tabletennis.push --once      # one push, prints what happened
     python -m tabletennis.push             # loop every 15s (run alongside live.py)
+
+DEPLOY SNAPSHOT (no token needed)
+  Every cycle also copies the pre-match artifacts into
+  trading-terminal/public/tt/, which the static export ships. The terminal
+  reads those when /api/tt comes back empty — so table tennis still has a
+  board when the blob store is unavailable. Refreshes on redeploy, not on
+  push, and carries no in-play True P.
+
+    python -m tabletennis.push --snapshot-only   # refresh, then commit + deploy
 """
 
 import argparse
@@ -78,6 +87,34 @@ def _read(name: str):
         return None
 
 
+# Files copied into the static export so table tennis survives a dead push path.
+# live_predictions.json is deliberately excluded: it changes every 8s and would
+# only ever be stale by the time a deploy finished.
+SNAPSHOT_DEST = REPO_ROOT / "trading-terminal" / "public" / "tt"
+SNAPSHOT_FILES = ("predictions.json", "metrics.json")
+
+
+def snapshot() -> list[str]:
+    """Copy the pre-match artifacts into the terminal's public/ directory.
+
+    The deployed site reads these (`/tt/predictions.json`) when /api/tt comes
+    back empty — which is what happens whenever Netlify Blobs is unavailable.
+    They ship with the build, so they refresh on redeploy, not on push.
+    """
+    SNAPSHOT_DEST.mkdir(parents=True, exist_ok=True)
+    written = []
+    for fname in SNAPSHOT_FILES:
+        src = SITE / fname
+        if not src.exists():
+            continue
+        dst = SNAPSHOT_DEST / fname
+        body = src.read_text()
+        if not dst.exists() or dst.read_text() != body:
+            dst.write_text(body)
+            written.append(fname)
+    return written
+
+
 def push(kind: str, payload, url: str, token: str) -> tuple[bool, str]:
     body = json.dumps({"kind": kind, "payload": payload}).encode()
     req = urllib.request.Request(
@@ -93,8 +130,17 @@ def push(kind: str, payload, url: str, token: str) -> tuple[bool, str]:
         return False, str(e)[:160]
 
 
-def cycle(url: str, token: str, sent: dict, force: bool = False) -> None:
+def cycle(url: str, token: str, sent: dict, force: bool = False,
+          push_remote: bool = True) -> None:
     stamp = time.strftime("%H:%M:%S")
+
+    written = snapshot()
+    if written:
+        print(f"[{stamp}] snapshot    ok   {', '.join(written)} → public/tt/ "
+              f"(commit + redeploy to publish)", flush=True)
+    if not push_remote:
+        return
+
     for kind, fname in FILES.items():
         payload = _read(fname)
         if payload is None:
@@ -120,12 +166,23 @@ def main() -> None:
     ap.add_argument("--token", default=os.getenv("TT_PUSH_TOKEN", ""))
     ap.add_argument("--interval", type=int, default=15, help="seconds between pushes")
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--snapshot-only", action="store_true",
+                    help="only refresh trading-terminal/public/tt/ (no token needed); "
+                         "commit + redeploy to publish the pre-match board")
     args = ap.parse_args()
+
+    if args.snapshot_only:
+        written = snapshot()
+        print(f"snapshot → {SNAPSHOT_DEST}")
+        print("  " + (", ".join(written) + " updated" if written else "already up to date"))
+        print("  commit these and redeploy — the terminal reads them when /api/tt is empty")
+        return
 
     if not args.url or not args.token:
         print("ERROR: set TT_SITE_URL and TT_PUSH_TOKEN (env or .env), or pass "
               "--url/--token.\n       The same TT_PUSH_TOKEN must be set in the "
-              "Netlify site env.", file=sys.stderr)
+              "Netlify site env.\n       (Use --snapshot-only to refresh the deploy "
+              "snapshot without pushing.)", file=sys.stderr)
         sys.exit(2)
 
     endpoint = args.url.rstrip("/") + "/api/tt"
