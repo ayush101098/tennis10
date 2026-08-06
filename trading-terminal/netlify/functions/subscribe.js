@@ -58,6 +58,38 @@ function aggregateTraffic(events) {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/**
+ * Mirror a lead into the Google Sheet.
+ *
+ * Netlify Blobs stays the system of record — the sheet is a mirror, so the
+ * signup must never fail because Google is slow or the script is misdeployed.
+ * Every error here is swallowed and reported back only as a diagnostic flag.
+ *
+ * Transport is a Google Apps Script Web App bound to the sheet (its /exec URL
+ * in SHEETS_WEBHOOK_URL). That avoids putting a service-account private key in
+ * the Netlify env — the script runs as the sheet's owner and appends a row.
+ * Setup lives in docs/GOOGLE_SHEET_LEADS.md.
+ */
+async function mirrorToSheet(row) {
+  const url = process.env.SHEETS_WEBHOOK_URL;
+  if (!url) return "not configured";
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...row, token: process.env.SHEETS_WEBHOOK_TOKEN || "" }),
+      signal: ctrl.signal,
+      redirect: "follow", // Apps Script /exec always 302s to script.googleusercontent.com
+    });
+    clearTimeout(timer);
+    return res.ok ? "ok" : `http ${res.status}`;
+  } catch (e) {
+    return String((e && e.message) || e).slice(0, 80);
+  }
+}
+
 // per-container fallback (best-effort; Blobs is the real store)
 const mem = { leads: [], payments: [] };
 
@@ -141,17 +173,30 @@ exports.handler = async (event) => {
   // ── lead capture (dedup by email) ──
   const leads = await readList(store, LEADS_KEY);
   const existing = leads.find((l) => l.email === email);
+  const source = body.source ? String(body.source).slice(0, 40) : "cta";
+  let isNew = false;
   if (existing) {
     existing.lastSeen = now;
     if (body.txHash) existing.paid = true;
   } else {
-    leads.push({
-      email, ts: now, lastSeen: now,
-      source: body.source ? String(body.source).slice(0, 40) : "cta",
-      paid: !!body.txHash,
-    });
+    isNew = true;
+    leads.push({ email, ts: now, lastSeen: now, source, paid: !!body.txHash });
   }
   await writeList(store, LEADS_KEY, leads);
 
-  return reply(200, { ok: true });
+  // Mirror new leads (and any payment) to the sheet. A returning visitor
+  // re-submitting the same address must not append a duplicate row.
+  let sheet = "skipped";
+  if (isNew || body.txHash) {
+    sheet = await mirrorToSheet({
+      email,
+      source,
+      paid: !!body.txHash,
+      txHash: body.txHash ? String(body.txHash) : "",
+      amount: body.amount != null ? String(body.amount) : "",
+      capturedAt: new Date(now).toISOString(),
+    });
+  }
+
+  return reply(200, { ok: true, sheet });
 };

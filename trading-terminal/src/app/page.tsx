@@ -75,12 +75,12 @@ export default function LandingPage() {
               <span className={`font-bold px-1.5 py-0.5 rounded ${session.isAdmin ? "bg-terminal-red/20 text-terminal-red" : isPro ? "bg-terminal-green/20 text-terminal-green" : "bg-terminal-border text-slate-300"}`}>
                 {session.isAdmin ? "ADMIN" : isPro ? "PRO" : "FREE"}
               </span>
-              <Link href="/terminal" className="font-bold px-3 py-1.5 rounded bg-terminal-green text-black hover:opacity-90">
+              <Link href="/terminal" className="inline-flex items-center justify-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
                 LAUNCH TERMINAL →
               </Link>
             </>
           ) : (
-            <Link href="/terminal" className="font-bold px-3 py-1.5 rounded bg-terminal-green text-black hover:opacity-90">
+            <Link href="/terminal" className="inline-flex items-center justify-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
               OPEN TERMINAL →
             </Link>
           )}
@@ -99,13 +99,30 @@ export default function LandingPage() {
         </p>
         <div className="mt-6 flex items-center justify-center gap-3">
           <Link href="/terminal"
-            className="px-5 py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
+            className="inline-flex items-center justify-center min-h-[44px] px-5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
             OPEN THE TERMINAL →
           </Link>
-          <a href="#matches" className="px-5 py-2.5 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
+          <a href="#matches" className="inline-flex items-center justify-center min-h-[44px] px-5 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
             SEE TODAY&apos;S MATCHES ↓
           </a>
         </div>
+        {/* Capture, in the hero — most visitors never reach the foot of the
+            page, so the one at the bottom was collecting from a small slice of
+            traffic. This is the same component and the same endpoint. */}
+        <div className="mt-7 max-w-md mx-auto">
+          <div className="rounded-lg border border-terminal-green/30 bg-terminal-green/[0.06] p-3.5">
+            <p className="text-[11px] font-bold text-slate-100 mb-2">
+              Get early access — and the signals worth acting on
+            </p>
+            <div className="flex justify-center">
+              <EmailCapture source="landing-hero" cta="Keep me posted" />
+            </div>
+            <p className="text-[9px] text-terminal-muted mt-2">
+              Your address, nothing else. Unsubscribe whenever.
+            </p>
+          </div>
+        </div>
+
         {/* Stat chips */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-2 text-[10px]">
           <Chip label={`${matches.length || "—"} matches today`} />
@@ -120,9 +137,9 @@ export default function LandingPage() {
       {/* ── Live board + analysis ── */}
       <section id="matches" className="px-4 sm:px-6 pb-14 max-w-[1180px] mx-auto">
         <div className="border border-terminal-border rounded-lg overflow-hidden bg-terminal-panel/30">
-          <div className="flex items-center justify-between px-4 py-2 border-b border-terminal-border bg-terminal-panel/60">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 sm:px-4 py-2 border-b border-terminal-border bg-terminal-panel/60">
             <span className="text-[11px] font-bold text-terminal-yellow tracking-wider">📅 TODAY — LIVE &amp; UPCOMING</span>
-            <span className="text-[10px] text-terminal-muted">
+            <span className="hidden xs:block text-[10px] text-terminal-muted">
               click any match to analyse — no account needed
             </span>
           </div>
@@ -131,7 +148,7 @@ export default function LandingPage() {
               both panes side-by-side, each scrolling internally. */}
           <div className="grid md:grid-cols-[1fr_420px] md:h-[560px]">
             {/* Match list */}
-            <div className="overflow-y-auto border-b md:border-b-0 md:border-r border-terminal-border max-h-[55vh] md:max-h-none">
+            <div className="overflow-y-auto border-b md:border-b-0 md:border-r border-terminal-border max-h-[55vh] [max-height:55dvh] md:max-h-none md:[max-height:none]">
               {!data && <div className="p-8 text-center text-terminal-muted text-xs animate-pulse">Loading live schedule…</div>}
               {matches.slice(0, 120).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
@@ -204,12 +221,14 @@ export default function LandingPage() {
 
       {/* ── Get in touch ── */}
       <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
-        <h2 className="text-lg font-bold text-slate-100 mb-2">Interested?</h2>
-        <p className="text-[11px] text-terminal-muted mb-5">
-          Drop your email for early access, or reach out about a partnership.
-        </p>
-        <div className="flex justify-center">
-          <EmailCapture source="landing-cta" cta="Get early access" />
+        <div className="rounded-lg border border-terminal-green/30 bg-terminal-green/[0.06] px-4 sm:px-6 py-7">
+          <h2 className="text-lg font-bold text-slate-100 mb-2">Interested?</h2>
+          <p className="text-[12px] text-slate-400 mb-5 max-w-[420px] mx-auto leading-relaxed">
+            Drop your email for early access, or reach out about a partnership.
+          </p>
+          <div className="flex justify-center">
+            <EmailCapture source="landing-cta" cta="Get early access" />
+          </div>
         </div>
         <p className="text-[10px] text-terminal-muted mt-4">
           or email{" "}
