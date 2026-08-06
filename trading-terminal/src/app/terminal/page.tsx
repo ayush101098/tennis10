@@ -137,6 +137,13 @@ export default function TerminalPage() {
           </Link>
         </div>
         <div className="flex items-center gap-3 text-[10px]">
+          {/* Capacity note. States the cap only — no seats-remaining counter,
+              since we do not enforce a live count and inventing one would be
+              manufactured scarcity. */}
+          <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-terminal-yellow/40 text-terminal-yellow whitespace-nowrap"
+            title="This terminal is kept to 50 members. The edge is thin and shared — a bigger room would move the prices we trade into.">
+            🔒 CAPPED AT 50 MEMBERS
+          </span>
           <LiveUsers />
           {session && <PmStatus email={session.email} />}
           {!paid && remaining !== null && (
