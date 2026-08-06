@@ -68,6 +68,10 @@ export const TIME_GRANTS: Record<string, number> = {
   // Mirrored in the account DB (grants[]); this entry makes it effective
   // immediately on any browser without waiting on a server round-trip.
   "mateimo012@gmail.com": 1788339135450,
+  // Comped by the operator 2026-08-07 for a trial period → 2026-09-06 23:59Z.
+  // Lapses back to free on its own; shorten the expiry (or set it to 1) to end
+  // it sooner — a past expiry actively downgrades an existing pro session.
+  "blokhin.ia.9801@gmail.com": 1788739199000,
 };
 
 /** Grant expiry for an email if one is currently ACTIVE, else null. */

@@ -9,6 +9,8 @@ import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
 import { useTier } from "@/lib/auth";
 
+const X_URL = "https://x.com/future_jesse";
+
 /**
  * Landing page — the public storefront.
  * Anyone can see today's live + upcoming matches across every professional
@@ -235,12 +237,26 @@ export default function LandingPage() {
             jessefuture10@gmail.com
           </a>
         </p>
+        {/* Socials. rel="noreferrer" on an outbound link so the destination is
+            not handed the referring URL, and 44px tall for a thumb. */}
+        <div className="mt-4 flex items-center justify-center gap-2">
+          <a href={X_URL} target="_blank" rel="noreferrer"
+            aria-label="Tennis Alpha on X"
+            className="inline-flex items-center gap-2 min-h-[44px] px-4 rounded border border-terminal-border text-[11px] font-bold text-slate-300 hover:bg-terminal-panel hover:text-slate-100 transition">
+            <XIcon /> @future_jesse
+          </a>
+        </div>
       </section>
 
       {/* ── Footer ── */}
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
         Staking discipline (¼ Kelly, 5% cap, 2% edge floor) is enforced in the product for a reason.
+        <br />
+        <a href={X_URL} target="_blank" rel="noreferrer"
+          className="inline-flex items-center gap-1.5 mt-2 text-terminal-muted hover:text-slate-300">
+          <XIcon /> @future_jesse
+        </a>
         <br />© {new Date().getFullYear()} Tennis Alpha
       </footer>
 
@@ -249,6 +265,15 @@ export default function LandingPage() {
 }
 
 /* ── Sub-components ── */
+
+/** The X logo, inline so no request leaves the page for a 16px glyph. */
+function XIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
+      <path d="M18.9 2H22l-7.4 8.5L23 22h-6.8l-5.3-7-6.1 7H1.7l7.9-9.1L1 2h7l4.8 6.4L18.9 2Zm-1.2 18h1.9L7.4 3.9H5.4L17.7 20Z" />
+    </svg>
+  );
+}
 
 function Chip({ label, tone, pulse }: { label: string; tone?: "green"; pulse?: boolean }) {
   return (

@@ -53,33 +53,41 @@ export default function AdminPage() {
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [accCounts, setAccCounts] = useState<AccountCounts | null>(null);
   const [granting, setGranting] = useState<string | null>(null);
+  const [grantEmail, setGrantEmail] = useState("");
+  const [grantDays, setGrantDays] = useState(30);
+  const [grantMsg, setGrantMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   /**
    * Confirm a payment claim: grant 30 days and clear the pending flag.
    * Only ever driven by a human who has just seen the money land — the claim
    * itself proves nothing.
    */
-  const confirmClaim = async (email: string) => {
+  const grant = async (email: string, days: number, reason: string) => {
     setGranting(email);
+    setGrantMsg(null);
     try {
       const res = await fetch("/api/account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, action: "grant", days: 30, reason: "paypal.me confirmed", adminToken: token }),
+        body: JSON.stringify({ email, action: "grant", days, reason, adminToken: token }),
       });
       const data = await res.json();
       if (data.ok) {
         setAccounts(prev => prev && prev.map(a => a.email === email
           ? { ...a, active: true, paidUntil: data.paidUntil, pending: [] } : a));
-      } else {
-        setErr(data.reason || "Grant failed.");
+        setGrantMsg({ ok: true, text: `${email} has access until ${fmtDate(data.paidUntil)} (${days} days).` });
+        return true;
       }
+      setGrantMsg({ ok: false, text: data.reason || "Grant failed." });
     } catch {
-      setErr("Grant failed — network error.");
+      setGrantMsg({ ok: false, text: "Grant failed — network error." });
     } finally {
       setGranting(null);
     }
+    return false;
   };
+
+  const confirmClaim = (email: string) => grant(email, 30, "paypal.me confirmed");
 
   useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ""); }, []);
 
@@ -195,6 +203,48 @@ export default function AdminPage() {
           </div>
 
           {err && <p className="text-xs text-red-400 mb-4">{err} <button className="underline" onClick={() => { localStorage.removeItem(TOKEN_KEY); setToken(""); }}>re-enter token</button></p>}
+
+          {/* Comp an account directly — a reviewer, a trial, someone who paid by
+              a route the site never saw. Writes a grant, same as confirming a
+              claim; access lapses on its own when the window ends. */}
+          <Section title="Grant access">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] text-terminal-muted">Email</span>
+                <input value={grantEmail} onChange={e => setGrantEmail(e.target.value)}
+                  placeholder="someone@example.com" type="email"
+                  className="min-h-[36px] w-[260px] max-w-full bg-terminal-bg border border-terminal-border rounded px-3 text-[12px] text-slate-100 focus:border-terminal-green outline-none" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] text-terminal-muted">Days</span>
+                <input value={grantDays} onChange={e => setGrantDays(Math.max(1, Number(e.target.value) || 1))}
+                  type="number" min={1} max={3650}
+                  className="min-h-[36px] w-[90px] bg-terminal-bg border border-terminal-border rounded px-3 text-[12px] text-slate-100 focus:border-terminal-green outline-none" />
+              </label>
+              <button
+                disabled={!/\S+@\S+\.\S+/.test(grantEmail) || granting === grantEmail.trim().toLowerCase()}
+                onClick={async () => {
+                  const e = grantEmail.trim().toLowerCase();
+                  if (await grant(e, grantDays, "granted from admin")) setGrantEmail("");
+                }}
+                className="min-h-[36px] px-4 rounded bg-terminal-green text-black text-[11px] font-bold hover:opacity-90 disabled:opacity-40">
+                {granting === grantEmail.trim().toLowerCase() ? "GRANTING…" : `GRANT ${grantDays}d`}
+              </button>
+              {[7, 30, 90].map(d => (
+                <button key={d} onClick={() => setGrantDays(d)}
+                  className={`min-h-[36px] px-2.5 rounded border text-[10px] font-bold ${grantDays === d ? "border-terminal-green text-terminal-green" : "border-terminal-border text-terminal-muted hover:text-slate-300"}`}>
+                  {d}d
+                </button>
+              ))}
+            </div>
+            {grantMsg && (
+              <p className={`mt-2 text-[11px] ${grantMsg.ok ? "text-terminal-green" : "text-terminal-red"}`}>{grantMsg.text}</p>
+            )}
+            <p className="mt-2 text-[10px] text-terminal-muted">
+              The account does not need to exist yet — it is created, and the grant applies when they sign in
+              with that address. Access expires on its own; nothing to undo.
+            </p>
+          </Section>
 
           {/* Claims come from payment methods with no callback (PayPal.me), so
               they are queued rather than trusted — this is where a human turns
