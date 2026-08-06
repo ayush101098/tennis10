@@ -1,52 +1,39 @@
 #!/usr/bin/env node
 /**
- * Push already-captured leads into the Google Sheet.
+ * Replay every already-captured address into the waitlist sheet.
  *
- * Leads collected before the sheet mirror existed live only in Netlify Blobs.
- * This reads them back through the admin readout and replays each one at the
- * Apps Script webhook. The script on the sheet side skips addresses it already
- * has, so running this twice is harmless.
+ * Signups collected before the sheet was connected live only in Netlify Blobs.
+ * The work happens server-side — this just calls the admin resync, so it uses
+ * whichever transport the site is configured with (service account or Apps
+ * Script) and needs no Google credentials locally.
  *
- *   SITE_URL=https://tennisalpha.in \
- *   LEADS_ADMIN_TOKEN=... \
- *   SHEETS_WEBHOOK_URL=... SHEETS_WEBHOOK_TOKEN=... \
- *   node trading-terminal/scripts/backfill-leads-to-sheet.js
+ * Addresses already in the sheet are skipped, so running it twice is harmless.
+ *
+ *   LEADS_ADMIN_TOKEN=... node trading-terminal/scripts/backfill-leads-to-sheet.js
+ *   SITE_URL=https://staging.example.com LEADS_ADMIN_TOKEN=... node ...   # elsewhere
  */
 
 const SITE = (process.env.SITE_URL || "https://tennisalpha.in").replace(/\/$/, "");
 const ADMIN = process.env.LEADS_ADMIN_TOKEN;
-const HOOK = process.env.SHEETS_WEBHOOK_URL;
-const TOKEN = process.env.SHEETS_WEBHOOK_TOKEN || "";
 
 async function main() {
-  if (!ADMIN) throw new Error("LEADS_ADMIN_TOKEN is required (it gates the lead readout)");
-  if (!HOOK) throw new Error("SHEETS_WEBHOOK_URL is required");
+  if (!ADMIN) throw new Error("LEADS_ADMIN_TOKEN is required — it is what authorises the resync");
 
-  const res = await fetch(`${SITE}/api/subscribe`, { headers: { "x-admin-token": ADMIN } });
-  if (!res.ok) throw new Error(`lead readout failed: HTTP ${res.status}`);
-  const { leads = [] } = await res.json();
-  console.log(`${leads.length} leads to replay`);
+  console.log(`resyncing the waitlist into the sheet via ${SITE}`);
+  const res = await fetch(`${SITE}/api/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "resync", adminToken: ADMIN }),
+  });
 
-  let ok = 0, dup = 0, fail = 0;
-  for (const l of leads) {
-    const r = await fetch(HOOK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: l.email,
-        joinedAt: new Date(l.ts || Date.now()).toISOString(),
-        token: TOKEN,
-      }),
-      redirect: "follow",
-    }).catch((e) => ({ ok: false, statusText: String(e) }));
-
-    let body = {};
-    try { body = await r.json(); } catch { /* Apps Script can return HTML on error */ }
-    if (r.ok && body.duplicate) dup++;
-    else if (r.ok && body.ok) ok++;
-    else { fail++; console.warn(`  failed: ${l.email} — ${body.reason || r.statusText || "?"}`); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) {
+    throw new Error(`resync failed: HTTP ${res.status} ${data.reason || ""}`.trim());
   }
-  console.log(`appended ${ok} · already present ${dup} · failed ${fail}`);
+  console.log(
+    `  ${data.total} captured · ${data.added} appended · ${data.skipped} already present`
+    + (data.failed ? ` · ${data.failed} failed` : ""),
+  );
 }
 
 main().catch((e) => { console.error(String(e.message || e)); process.exit(1); });

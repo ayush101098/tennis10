@@ -21,6 +21,7 @@
  */
 
 const { store: sharedStore } = require("./_blobs");
+const { appendWaitlist, appendWaitlistBatch, config: sheetsConfig } = require("./_sheets");
 
 const STORE = "leads";
 const LEADS_KEY = "list";
@@ -62,15 +63,19 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * Mirror a waitlist signup into the Google Sheet: email + timestamp, nothing else.
  *
  * Netlify Blobs stays the system of record — the sheet is a mirror, so the
- * signup must never fail because Google is slow or the script is misdeployed.
- * Every error here is swallowed and reported back only as a diagnostic flag.
+ * signup must never fail because Google is slow or misconfigured. Every error
+ * here is swallowed and surfaced only as a diagnostic string on the response.
  *
- * Transport is a Google Apps Script Web App bound to the sheet (its /exec URL
- * in SHEETS_WEBHOOK_URL). That avoids putting a service-account private key in
- * the Netlify env — the script runs as the sheet's owner and appends a row.
- * Setup lives in docs/GOOGLE_SHEET_LEADS.md.
+ * Two transports, whichever is configured (service account wins):
+ *   service account  GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY
+ *                    server-to-server, nothing to deploy by hand
+ *   Apps Script      SHEETS_WEBHOOK_URL + SHEETS_WEBHOOK_TOKEN
+ *                    no key in the env, but deployed from the sheet's UI
+ * Setup for both: docs/GOOGLE_SHEET_LEADS.md.
  */
 async function mirrorToSheet(row) {
+  if (sheetsConfig()) return appendWaitlist(row);
+
   const url = process.env.SHEETS_WEBHOOK_URL;
   if (!url) return "not configured";
   try {
@@ -149,6 +154,35 @@ exports.handler = async (event) => {
 
   let body = {};
   try { body = JSON.parse(event.body || "{}"); } catch { /* ignore */ }
+  // ── admin: replay every captured address into the sheet ──
+  // Signups collected before the sheet was connected live only in Blobs. This
+  // walks them in one batch (one column read, one append) so a few hundred
+  // leads fit inside a single invocation. Safe to run repeatedly — addresses
+  // already in the sheet are skipped.
+  if (body.action === "resync") {
+    const adminToken = process.env.LEADS_ADMIN_TOKEN;
+    if (!adminToken || String(body.adminToken || "") !== adminToken) {
+      return reply(401, { ok: false, reason: "unauthorized" });
+    }
+    const all = await readList(store, LEADS_KEY);
+    const rows = all
+      .filter((l) => EMAIL_RE.test(String(l.email || "")))
+      .map((l) => ({ email: l.email, joinedAt: new Date(l.ts || Date.now()).toISOString() }));
+    if (sheetsConfig()) {
+      const r = await appendWaitlistBatch(rows);
+      return reply(r.ok ? 200 : 502, { ...r, total: rows.length });
+    }
+    // webhook transport has no batch endpoint — replay one at a time
+    let added = 0, skipped = 0, failed = 0;
+    for (const row of rows) {
+      const res = await mirrorToSheet(row);
+      if (res === "ok") added++;
+      else if (res === "duplicate") skipped++;
+      else failed++;
+    }
+    return reply(200, { ok: true, added, skipped, failed, total: rows.length });
+  }
+
   const email = String(body.email || "").trim().toLowerCase();
   if (!EMAIL_RE.test(email)) {
     return reply(400, { error: "Enter a valid email address." });
