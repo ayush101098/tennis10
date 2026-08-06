@@ -37,6 +37,10 @@ export const ADMIN_EMAILS = new Set([
 ]);
 export const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
 export const PRO_PRICE_USD = 100;            // monthly subscription
+// PayPal.me is a plain payment link — it produces no callback and nothing the
+// site can verify, so payments through it are confirmed by hand (see the claim
+// flow in PricingModal). The API-based PayPal button above it unlocks instantly.
+export const PAYPAL_ME_URL = "https://paypal.me/jessefuture20";
 export const SUBSCRIPTION_DAYS = 30;          // access window per payment
 export const MIN_PAYMENT_USD = 100;           // payments below this are rejected
 export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription

@@ -36,7 +36,7 @@ async function store(name) {
 }
 
 function blank(email, now) {
-  return { email, firstSeen: now, lastLogin: now, loginCount: 0, paidUntil: 0, payments: [], grants: [] };
+  return { email, firstSeen: now, lastLogin: now, loginCount: 0, paidUntil: 0, payments: [], grants: [], claims: [] };
 }
 
 function recompute(a) {
@@ -123,6 +123,8 @@ function summarize(db, now) {
     totalPaidUsd: a.payments.reduce((s, p) => s + (p.amountUsd || 0), 0),
     payments: a.payments.length,
     grants: a.grants.length,
+    // unverified claims awaiting manual confirmation
+    pending: (a.claims || []).filter((c) => c.status === "pending"),
   }));
   rows.sort((x, y) => y.lastLogin - x.lastLogin);
   return {
@@ -133,6 +135,7 @@ function summarize(db, now) {
       paying: rows.filter((r) => r.payments > 0).length,
       comped: rows.filter((r) => r.grants > 0 && r.payments === 0).length,
       revenueUsd: rows.reduce((s, r) => s + r.totalPaidUsd, 0),
+      pendingClaims: rows.reduce((s, r) => s + r.pending.length, 0),
     },
   };
 }
@@ -178,9 +181,33 @@ exports.handler = async (event) => {
       by: String(body.by || "operator"),
       ts: now,
     });
+    // Granting is the act of confirming a claim, so clear the queue for this
+    // email — otherwise /admin keeps showing work that is already done.
+    for (const c of db[email].claims || []) {
+      if (c.status === "pending") { c.status = "confirmed"; c.confirmedAt = now; }
+    }
     db[email].paidUntil = recompute(db[email]);
     await save(s, db);
     return reply(200, { ok: true, email, paidUntil: db[email].paidUntil, days });
+  }
+
+  // ── unverified payment claim ──
+  // PayPal.me (and any other off-platform transfer) gives the site no callback
+  // and nothing to verify against, so a claim NEVER grants access — it queues
+  // the customer for manual confirmation in /admin. Anything that self-granted
+  // here would be a free-access button with extra steps.
+  if (body.action === "claim") {
+    if (!db[email]) db[email] = blank(email, now);
+    if (!db[email].claims) db[email].claims = [];
+    db[email].claims.push({
+      method: String(body.method || "paypal.me").slice(0, 24),
+      note: String(body.note || "").slice(0, 120),
+      amountUsd: Number(body.amountUsd) || 0,
+      ts: now,
+      status: "pending",
+    });
+    await save(s, db);
+    return reply(200, { ok: true, email, pending: true });
   }
 
   if (body.txHash) {

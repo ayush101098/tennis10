@@ -24,8 +24,10 @@ type AccountRow = {
   email: string; firstSeen: number; lastLogin: number; loginCount: number;
   source: string; active: boolean; paidUntil: number; daysLeft: number;
   totalPaidUsd: number; payments: number; grants: number;
+  pending?: PendingClaim[];
 };
-type AccountCounts = { accounts: number; active: number; paying: number; comped: number; revenueUsd: number };
+type PendingClaim = { method: string; note: string; amountUsd: number; ts: number; status: string };
+type AccountCounts = { accounts: number; active: number; paying: number; comped: number; revenueUsd: number; pendingClaims?: number };
 type KV = { k: string; v: number };
 type Traffic = {
   views: number; uniques: number;
@@ -50,6 +52,34 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [accCounts, setAccCounts] = useState<AccountCounts | null>(null);
+  const [granting, setGranting] = useState<string | null>(null);
+
+  /**
+   * Confirm a payment claim: grant 30 days and clear the pending flag.
+   * Only ever driven by a human who has just seen the money land — the claim
+   * itself proves nothing.
+   */
+  const confirmClaim = async (email: string) => {
+    setGranting(email);
+    try {
+      const res = await fetch("/api/account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, action: "grant", days: 30, reason: "paypal.me confirmed", adminToken: token }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setAccounts(prev => prev && prev.map(a => a.email === email
+          ? { ...a, active: true, paidUntil: data.paidUntil, pending: [] } : a));
+      } else {
+        setErr(data.reason || "Grant failed.");
+      }
+    } catch {
+      setErr("Grant failed — network error.");
+    } finally {
+      setGranting(null);
+    }
+  };
 
   useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ""); }, []);
 
@@ -165,6 +195,35 @@ export default function AdminPage() {
           </div>
 
           {err && <p className="text-xs text-red-400 mb-4">{err} <button className="underline" onClick={() => { localStorage.removeItem(TOKEN_KEY); setToken(""); }}>re-enter token</button></p>}
+
+          {/* Claims come from payment methods with no callback (PayPal.me), so
+              they are queued rather than trusted — this is where a human turns
+              money that actually arrived into access. */}
+          {accounts && accounts.some(a => (a.pending || []).length > 0) && (
+            <Section title={`Payment claims awaiting confirmation (${accCounts?.pendingClaims ?? accounts.reduce((n, a) => n + (a.pending || []).length, 0)})`}>
+              <p className="text-[11px] text-terminal-muted mb-2">
+                Check the payment actually landed in PayPal before confirming — a claim is only the
+                customer&apos;s word for it. Confirming grants 30 days.
+              </p>
+              <Table head={["Claimed", "Email", "Method", "Their reference", "Amount", ""]}>
+                {accounts.flatMap(a => (a.pending || []).map((c, i) => (
+                  <tr key={`${a.email}-${i}`} className="border-t border-terminal-border">
+                    <td className="py-1.5 pr-3 text-terminal-muted">{fmtDate(c.ts)}</td>
+                    <td className="pr-3 text-slate-200">{a.email}</td>
+                    <td className="pr-3 text-terminal-muted">{c.method}</td>
+                    <td className="pr-3 text-slate-300">{c.note || "—"}</td>
+                    <td className="pr-3 tabular-nums">{c.amountUsd ? `$${c.amountUsd}` : "—"}</td>
+                    <td className="pr-3">
+                      <button onClick={() => confirmClaim(a.email)} disabled={granting === a.email}
+                        className="min-h-[32px] px-2 rounded bg-terminal-green text-black text-[10px] font-bold hover:opacity-90 disabled:opacity-40">
+                        {granting === a.email ? "GRANTING…" : "CONFIRM & GRANT 30d"}
+                      </button>
+                    </td>
+                  </tr>
+                )))}
+              </Table>
+            </Section>
+          )}
 
           <Section title={`Accounts — logins, payments & grants${accCounts ? ` (${accCounts.accounts})` : ""}`}>
             {accounts === null ? <Muted>Loading account database…</Muted> :

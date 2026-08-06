@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import {
-  PAYMENT_ADDRESS, PRO_PRICE_USD,
+  PAYMENT_ADDRESS, PRO_PRICE_USD, PAYPAL_ME_URL,
   signIn, grantPro, useTier,
 } from "@/lib/auth";
 import {
@@ -24,12 +24,52 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const [txHash, setTxHash] = useState("");
   // which action is in flight — distinguishes the card and crypto buttons so
   // only the one that was clicked shows a spinner
-  const [busy, setBusy] = useState<false | "card" | "paypal" | "upi" | "crypto">(false);
+  const [busy, setBusy] = useState<false | "card" | "paypal" | "upi" | "crypto" | "paypalme">(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // PayPal.me: the follow-up form only appears once they have actually opened
+  // the link, so the modal is not cluttered for everyone else
+  const [paypalMeOpened, setPaypalMeOpened] = useState(false);
+  const [paypalNote, setPaypalNote] = useState("");
 
   if (!open) return null;
 
   const validEmail = /\S+@\S+\.\S+/.test(email);
+
+  /**
+   * Record a PayPal.me payment claim.
+   *
+   * Deliberately does NOT call grantPro: nothing here has been verified, and a
+   * client-side unlock on an unverifiable claim is just a free-access button.
+   * The claim lands in the account database as pending and is switched on by
+   * hand from /admin once the payment is matched in PayPal.
+   */
+  const claimPaypalMe = async () => {
+    if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
+    setBusy("paypalme"); setMsg(null);
+    try {
+      const res = await fetch("/api/account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email, action: "claim", method: "paypal.me",
+          note: paypalNote.trim(), amountUsd: PRO_PRICE_USD,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        signIn(email);
+        refresh();
+        setMsg({ ok: true, text: "Got it — we'll match the payment and switch your access on. You'll keep this email as your login." });
+        setPaypalNote("");
+      } else {
+        setMsg({ ok: false, text: data.reason || "Could not record that. Email us and we'll sort it out." });
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error — email us and we'll sort it out." });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const startFree = () => {
     if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
@@ -240,6 +280,41 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
             <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
               International cards — PayPal also accepts cards without a PayPal account
             </div>
+
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 h-px bg-terminal-border" />
+              <span className="text-[9px] text-terminal-muted">OR PAY BY PAYPAL LINK</span>
+              <div className="flex-1 h-px bg-terminal-border" />
+            </div>
+
+            {/* PayPal.me — a plain payment link, so there is no callback and
+                nothing to verify against. Access is therefore NOT granted here:
+                the claim is queued and confirmed by hand in /admin. */}
+            <a href={`${PAYPAL_ME_URL}/${PRO_PRICE_USD}`} target="_blank" rel="noreferrer"
+              onClick={() => setPaypalMeOpened(true)}
+              className="flex items-center justify-center w-full min-h-[44px] rounded border border-terminal-blue/50 text-terminal-blue text-xs font-bold hover:bg-terminal-blue/10 transition">
+              💠 PAY ${PRO_PRICE_USD} VIA PAYPAL.ME →
+            </a>
+            <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
+              Opens {PAYPAL_ME_URL.replace("https://", "")} — then tell us below so we can match the payment
+            </div>
+            {paypalMeOpened && (
+              <div className="mt-2">
+                <input
+                  value={paypalNote} onChange={e => setPaypalNote(e.target.value)}
+                  placeholder="PayPal name or transaction ID"
+                  className="w-full mb-2 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-[11px] text-slate-200 focus:border-terminal-blue outline-none"
+                />
+                <button onClick={claimPaypalMe} disabled={!!busy || !paypalNote.trim()}
+                  className="w-full min-h-[40px] rounded bg-terminal-blue/20 border border-terminal-blue/50 text-terminal-blue text-xs font-bold hover:bg-terminal-blue/30 transition disabled:opacity-40">
+                  {busy === "paypalme" ? "SENDING…" : "I'VE PAID — REQUEST ACTIVATION"}
+                </button>
+                <p className="mt-1.5 text-[9px] text-terminal-muted leading-relaxed">
+                  A PayPal.me transfer can&apos;t be checked automatically, so this one is switched on by hand
+                  after the payment is matched — unlike the buttons above, which unlock instantly.
+                </p>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 my-4">
               <div className="flex-1 h-px bg-terminal-border" />
