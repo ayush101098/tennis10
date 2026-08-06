@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Wordmark from "@/components/Wordmark";
 import SchedulePanel from "@/components/SchedulePanel";
 import BetTracker from "@/components/BetTracker";
 import PricingModal from "@/components/PricingModal";
@@ -124,8 +125,8 @@ export default function TerminalPage() {
           the account cluster out of reach. */}
       <header className="safe-top flex items-center justify-between gap-2 px-3 sm:px-4 py-1.5 border-b border-terminal-border bg-terminal-panel shrink-0">
         <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 overflow-x-auto scroll-touch">
-          <Link href="/" className="text-terminal-green font-bold text-sm hover:opacity-80 whitespace-nowrap shrink-0">
-            ◉<span className="hidden md:inline"> INTELLIGENCE TERMINAL</span>
+          <Link href="/" className="hover:opacity-80 whitespace-nowrap shrink-0">
+            <Wordmark size={15} />
           </Link>
           <button onClick={() => { setSport("tennis"); setView("centre"); }}
             className={`nav-tab ${sport === "tennis" && view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>

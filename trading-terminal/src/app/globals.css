@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Kaushan+Script&display=swap");
 
 * {
   box-sizing: border-box;
@@ -29,6 +29,20 @@ body {
      never produces page scroll. */
   overflow-x: hidden;
   min-height: 100%;
+}
+
+/* The wordmark. Brush script for the brand, monospace everywhere else — the
+   terminal's whole visual argument is that it is an instrument, so the script
+   is confined to the name itself and never leaks into UI text. Replaced by
+   /brand/wordmark.svg automatically when that file exists (see Wordmark.tsx). */
+.brand-wordmark {
+  font-family: "Kaushan Script", "Brush Script MT", cursive;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  /* the script sits high in its em box; nudge it onto the row's baseline */
+  transform: translateY(0.06em);
 }
 
 /* Terminal header tab. Same visual density as before on a mouse; on a touch

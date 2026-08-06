@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Metadata } from "next";
 import Link from "next/link";
+import Wordmark from "@/components/Wordmark";
 import { markdownToHtml } from "@/lib/markdown";
 
 export const metadata: Metadata = {
-  title: "Trading Execution Manual — Tennis Intelligence Terminal",
+  title: "Trading Execution Manual — Tennis Alpha",
   description:
     "The complete in-play tennis trading playbook: reading the edge panel, entry rules, the signal → action → size state machine, hedge math and non-negotiable risk rules.",
 };
@@ -26,9 +27,8 @@ export default function ManualPage() {
     <div className="min-h-screen bg-terminal-bg text-slate-200">
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
-        <Link href="/" className="text-terminal-green font-bold text-xs sm:text-sm hover:opacity-80">
-          ◉ <span className="hidden sm:inline">TENNIS INTELLIGENCE TERMINAL</span>
-          <span className="sm:hidden">TENNIS T.</span>
+        <Link href="/" className="hover:opacity-80">
+          <Wordmark size={16} />
         </Link>
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Link href="/" className="text-terminal-muted hover:text-slate-200">Home</Link>
@@ -53,7 +53,7 @@ export default function ManualPage() {
 
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
-        <br />© {new Date().getFullYear()} Tennis Intelligence Terminal
+        <br />© {new Date().getFullYear()} Tennis Alpha
       </footer>
     </div>
   );

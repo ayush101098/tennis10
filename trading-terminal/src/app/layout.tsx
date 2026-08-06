@@ -13,19 +13,19 @@ const DESCRIPTION =
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "Tennis Intelligence Terminal",
+  title: "Tennis Alpha",
   description: DESCRIPTION,
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
     url: SITE_URL,
-    siteName: "Tennis Intelligence Terminal",
-    title: "Tennis Intelligence Terminal",
+    siteName: "Tennis Alpha",
+    title: "Tennis Alpha",
     description: DESCRIPTION,
   },
   twitter: {
     card: "summary_large_image",
-    title: "Tennis Intelligence Terminal",
+    title: "Tennis Alpha",
     description: DESCRIPTION,
   },
 };

@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Metadata } from "next";
 import Link from "next/link";
+import Wordmark from "@/components/Wordmark";
 import { markdownToHtml } from "@/lib/markdown";
 
 export const metadata: Metadata = {
-  title: "TT Trading Guide — TT Intelligence Terminal",
+  title: "TT Trading Guide — Tennis Alpha",
   description:
     "How to trade the table-tennis terminal: reading live True P and character residuals, where factory-league edges come from, sizing, and the journal discipline.",
 };
@@ -25,9 +26,8 @@ export default function TtManualPage() {
     <div className="min-h-screen bg-terminal-bg text-slate-200">
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
-        <Link href="/tt" className="text-terminal-green font-bold text-xs sm:text-sm hover:opacity-80">
-          🏓 <span className="hidden sm:inline">TT INTELLIGENCE TERMINAL</span>
-          <span className="sm:hidden">TT TERMINAL</span>
+        <Link href="/tt" className="flex items-center gap-1.5 hover:opacity-80">
+          <span>🏓</span><Wordmark size={16} mark={false} />
         </Link>
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Link href="/manual" className="text-terminal-muted hover:text-slate-200">Tennis manual</Link>
@@ -52,7 +52,7 @@ export default function TtManualPage() {
 
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
-        <br />© {new Date().getFullYear()} TT Intelligence Terminal
+        <br />© {new Date().getFullYear()} Tennis Alpha
       </footer>
     </div>
   );

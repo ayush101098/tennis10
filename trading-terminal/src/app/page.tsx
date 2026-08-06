@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import Wordmark from "@/components/Wordmark";
 import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
@@ -65,9 +66,7 @@ export default function LandingPage() {
     <div className="min-h-screen bg-terminal-bg text-slate-200">
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
-        <span className="text-terminal-green font-bold text-xs sm:text-sm truncate">
-          ◉ <span className="hidden sm:inline">TENNIS INTELLIGENCE TERMINAL</span><span className="sm:hidden">TENNIS T.</span>
-        </span>
+        <Wordmark size={17} />
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
           {session ? (
@@ -242,7 +241,7 @@ export default function LandingPage() {
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
         Staking discipline (¼ Kelly, 5% cap, 2% edge floor) is enforced in the product for a reason.
-        <br />© {new Date().getFullYear()} Tennis Intelligence Terminal
+        <br />© {new Date().getFullYear()} Tennis Alpha
       </footer>
 
     </div>

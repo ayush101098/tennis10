@@ -119,11 +119,22 @@ async function readList(store, key) {
   return mem[key === LEADS_KEY ? "leads" : "payments"];
 }
 
+/**
+ * Persist a list. Returns true only if it reached Blobs.
+ *
+ * The memory fallback is per-container and evaporates with the container, so a
+ * silent fall-through is how a captured address disappears without trace. The
+ * caller surfaces the outcome on the response instead of assuming it worked —
+ * while the sheet is unconfigured, Blobs is the ONLY copy of the waitlist.
+ */
 async function writeList(store, key, list) {
   if (store) {
-    try { await store.setJSON(key, list); return; } catch { /* fall */ }
+    try { await store.setJSON(key, list); return true; } catch (e) {
+      console.error(`blobs write failed for ${key}: ${String((e && e.message) || e).slice(0, 160)}`);
+    }
   }
   mem[key === LEADS_KEY ? "leads" : "payments"] = list;
+  return false;
 }
 
 exports.handler = async (event) => {
@@ -216,7 +227,11 @@ exports.handler = async (event) => {
     isNew = true;
     leads.push({ email, ts: now, lastSeen: now, source, paid: !!body.txHash });
   }
-  await writeList(store, LEADS_KEY, leads);
+  const durable = await writeList(store, LEADS_KEY, leads);
+  if (!durable) {
+    // Loud, because the address is now only in a container that will vanish.
+    console.error(`LEAD NOT DURABLY STORED: ${email} (source=${source})`);
+  }
 
   // Mirror every newly captured address to the waitlist sheet. One row per
   // person: the email and when they joined. A returning visitor re-submitting
@@ -226,5 +241,5 @@ exports.handler = async (event) => {
     sheet = await mirrorToSheet({ email, joinedAt: new Date(now).toISOString() });
   }
 
-  return reply(200, { ok: true, sheet });
+  return reply(200, { ok: true, sheet, stored: durable ? "blobs" : "memory" });
 };

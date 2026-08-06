@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Wordmark from "@/components/Wordmark";
 import { fetchScheduleClient } from "@/lib/scheduleService";
 import type { ScheduleData, ScheduledMatch } from "@/lib/scheduleService";
 import { useTier } from "@/lib/auth";
@@ -38,9 +39,8 @@ export default function CalculatorPage() {
     <div className="min-h-screen bg-terminal-bg text-slate-200">
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
-        <Link href="/" className="text-terminal-green font-bold text-xs sm:text-sm hover:opacity-80">
-          ◉ <span className="hidden sm:inline">TENNIS INTELLIGENCE TERMINAL</span>
-          <span className="sm:hidden">TENNIS T.</span>
+        <Link href="/" className="hover:opacity-80">
+          <Wordmark size={16} />
         </Link>
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
