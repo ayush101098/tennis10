@@ -1,4 +1,4 @@
-# Leads → Google Sheet
+# Waitlist → Google Sheet
 
 Captured emails are mirrored into the sheet
 
@@ -34,7 +34,7 @@ moving parts.
 Verify with a real signup, or:
 
 ```bash
-curl -s -X POST https://tennispredictions.netlify.app/api/subscribe \
+curl -s -X POST https://tennisalpha.in/api/subscribe \
   -H 'Content-Type: application/json' \
   -d '{"email":"you+test@example.com","source":"manual-test"}'
 # -> {"ok":true,"sheet":"ok"}      "not configured" means the env var is missing
@@ -44,52 +44,28 @@ curl -s -X POST https://tennispredictions.netlify.app/api/subscribe \
 
 ```javascript
 const TOKEN = 'PUT-A-RANDOM-STRING-HERE';   // must match SHEETS_WEBHOOK_TOKEN
-const HEADERS = ['capturedAt', 'email', 'source', 'lastEvent', 'lastEventAt', 'paid', 'amount', 'txHash'];
 
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents || '{}');
-    if (TOKEN && body.token !== TOKEN) {
-      return out({ ok: false, reason: 'unauthorized' });
-    }
+    if (TOKEN && body.token !== TOKEN) return out({ ok: false, reason: 'unauthorized' });
+
     const email = String(body.email || '').toLowerCase().trim();
     if (!email) return out({ ok: false, reason: 'email required' });
 
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-    if (sheet.getLastRow() === 0) sheet.appendRow(HEADERS);
+    if (sheet.getLastRow() === 0) sheet.appendRow(['email', 'joinedAt']);
 
-    // Upsert, not append-or-skip. Someone who signed up as a lead weeks ago
-    // and is now about to pay must not be silently dropped — their existing
-    // row gets the payment-intent stamp instead of a duplicate being created.
+    // One row per person. Netlify already dedups, but a retry or a re-run of
+    // the backfill must not be able to double up either.
     const rows = sheet.getLastRow() - 1;
-    const emails = rows > 0
-      ? sheet.getRange(2, 2, rows, 1).getValues().map(function (r) { return String(r[0]).toLowerCase().trim(); })
+    const existing = rows > 0
+      ? sheet.getRange(2, 1, rows, 1).getValues().map(function (r) { return String(r[0]).toLowerCase().trim(); })
       : [];
-    const idx = emails.indexOf(email);
+    if (existing.indexOf(email) !== -1) return out({ ok: true, duplicate: true });
 
-    if (idx === -1) {
-      sheet.appendRow([
-        body.capturedAt || new Date().toISOString(),
-        email,
-        body.source || '',
-        body.event || '',
-        body.eventAt || '',
-        body.paid ? 'yes' : '',
-        body.amount || '',
-        body.txHash || '',
-      ]);
-      return out({ ok: true, created: true });
-    }
-
-    const row = idx + 2;                       // +1 header, +1 to 1-index
-    if (body.event) {
-      sheet.getRange(row, 4).setValue(body.event);
-      sheet.getRange(row, 5).setValue(body.eventAt || new Date().toISOString());
-    }
-    if (body.paid) sheet.getRange(row, 6).setValue('yes');
-    if (body.amount) sheet.getRange(row, 7).setValue(body.amount);
-    if (body.txHash) sheet.getRange(row, 8).setValue(body.txHash);
-    return out({ ok: true, updated: true });
+    sheet.appendRow([email, body.joinedAt || new Date().toISOString()]);
+    return out({ ok: true });
   } catch (err) {
     return out({ ok: false, reason: String(err) });
   }
@@ -101,20 +77,18 @@ function out(obj) {
 }
 ```
 
-## What lands in the sheet, and when
+## What lands in the sheet
 
-| Column | Filled by |
+Two columns, one row per person:
+
+| Column | Meaning |
 |---|---|
-| `capturedAt` | first time the address is seen, ISO timestamp |
-| `email` | the address (also the upsert key) |
-| `source` | which form — `landing-hero`, `landing-cta`, `paypal-intent`… |
-| `lastEvent` / `lastEventAt` | `paypal_intent` is stamped **before** the PayPal link is handed over |
-| `paid` / `amount` / `txHash` | on a verified crypto payment |
+| `email` | the address, lowercased — also the dedup key |
+| `joinedAt` | ISO timestamp of when they joined the waitlist |
 
-The PayPal.me link in the pricing modal is withheld until the email has been
-recorded here — a PayPal transfer arrives carrying only a display name, so an
-address banked before the money moves is the only reliable way to match a
-payment to an account.
+Every capture point feeds it: the hero form, the form at the foot of the
+landing page, and the email taken before the PayPal link is released. A
+returning visitor re-submitting the same address does not create a second row.
 
 ## Backfilling the leads captured before this existed
 

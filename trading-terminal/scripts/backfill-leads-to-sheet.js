@@ -7,13 +7,13 @@
  * Apps Script webhook. The script on the sheet side skips addresses it already
  * has, so running this twice is harmless.
  *
- *   SITE_URL=https://tennispredictions.netlify.app \
+ *   SITE_URL=https://tennisalpha.in \
  *   LEADS_ADMIN_TOKEN=... \
  *   SHEETS_WEBHOOK_URL=... SHEETS_WEBHOOK_TOKEN=... \
  *   node trading-terminal/scripts/backfill-leads-to-sheet.js
  */
 
-const SITE = (process.env.SITE_URL || "https://tennispredictions.netlify.app").replace(/\/$/, "");
+const SITE = (process.env.SITE_URL || "https://tennisalpha.in").replace(/\/$/, "");
 const ADMIN = process.env.LEADS_ADMIN_TOKEN;
 const HOOK = process.env.SHEETS_WEBHOOK_URL;
 const TOKEN = process.env.SHEETS_WEBHOOK_TOKEN || "";
@@ -34,9 +34,7 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: l.email,
-        source: l.source || "backfill",
-        paid: !!l.paid,
-        capturedAt: new Date(l.ts || Date.now()).toISOString(),
+        joinedAt: new Date(l.ts || Date.now()).toISOString(),
         token: TOKEN,
       }),
       redirect: "follow",

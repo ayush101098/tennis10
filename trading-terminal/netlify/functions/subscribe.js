@@ -59,7 +59,7 @@ function aggregateTraffic(events) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * Mirror a lead into the Google Sheet.
+ * Mirror a waitlist signup into the Google Sheet: email + timestamp, nothing else.
  *
  * Netlify Blobs stays the system of record — the sheet is a mirror, so the
  * signup must never fail because Google is slow or the script is misdeployed.
@@ -184,24 +184,12 @@ exports.handler = async (event) => {
   }
   await writeList(store, LEADS_KEY, leads);
 
-  // Mirror to the sheet. New leads always; a returning visitor re-submitting
-  // the same address does NOT append a duplicate row — but a payment, or an
-  // intent to pay, must reach the sheet even for an address already there,
-  // because that is the row the operator matches a PayPal transfer against.
-  // (named evName, not event — `event` is the Lambda handler's own argument)
-  const evName = body.event ? String(body.event).slice(0, 32) : "";
+  // Mirror every newly captured address to the waitlist sheet. One row per
+  // person: the email and when they joined. A returning visitor re-submitting
+  // the same address is already on the list and must not append a second row.
   let sheet = "skipped";
-  if (isNew || body.txHash || evName) {
-    sheet = await mirrorToSheet({
-      email,
-      source,
-      event: evName,
-      paid: !!body.txHash,
-      txHash: body.txHash ? String(body.txHash) : "",
-      amount: body.amount != null ? String(body.amount) : "",
-      capturedAt: new Date(now).toISOString(),
-      eventAt: evName ? new Date(now).toISOString() : "",
-    });
+  if (isNew) {
+    sheet = await mirrorToSheet({ email, joinedAt: new Date(now).toISOString() });
   }
 
   return reply(200, { ok: true, sheet });

@@ -115,6 +115,30 @@ def snapshot() -> list[str]:
     return written
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow redirects on a push.
+
+    urllib follows a 301 and downgrades the POST to a GET. Pointing TT_SITE_URL
+    at a host that redirects — which is exactly what the old *.netlify.app
+    address does once a custom domain is made primary — would therefore turn
+    every push into a GET of the feed, return HTTP 200, and report success while
+    uploading nothing at all. Fail loudly instead.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code,
+            f"redirected to {newurl} — point TT_SITE_URL at the final domain",
+            headers, fp,
+        )
+
+
+_OPENER = urllib.request.build_opener(
+    _NoRedirect,
+    urllib.request.HTTPSHandler(context=SSL_CTX),
+)
+
+
 def push(kind: str, payload, url: str, token: str) -> tuple[bool, str]:
     body = json.dumps({"kind": kind, "payload": payload}).encode()
     req = urllib.request.Request(
@@ -122,7 +146,7 @@ def push(kind: str, payload, url: str, token: str) -> tuple[bool, str]:
         headers={"Content-Type": "application/json", "x-tt-token": token},
     )
     try:
-        with urllib.request.urlopen(req, timeout=60, context=SSL_CTX) as r:
+        with _OPENER.open(req, timeout=60) as r:
             return r.status == 200, f"HTTP {r.status}"
     except urllib.error.HTTPError as e:
         return False, f"HTTP {e.code} {e.read()[:120].decode(errors='replace')}"
