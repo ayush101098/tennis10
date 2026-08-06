@@ -172,6 +172,36 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Video manual ──
+          youtube-nocookie so a visitor who never presses play is not handed a
+          tracking cookie; lazy so the embed costs nothing until scrolled to. */}
+      <section id="manual" className="px-4 sm:px-6 pb-14 max-w-[900px] mx-auto">
+        <h2 className="text-center text-lg font-bold text-slate-100 mb-1">Watch the manual</h2>
+        <p className="text-center text-[11px] text-terminal-muted mb-5 max-w-[560px] mx-auto leading-relaxed">
+          A live walkthrough of the terminal — reading True P, spotting an edge against the
+          book, sizing the stake and timing the hedge.
+        </p>
+        <div className="relative w-full rounded-lg overflow-hidden border border-terminal-border bg-black"
+          style={{ aspectRatio: "16 / 9" }}>
+          <iframe
+            className="absolute inset-0 w-full h-full"
+            src="https://www.youtube-nocookie.com/embed/75hhhVIWVNM?rel=0"
+            title="How to Trade Tennis Prediction Markets Like a Pro (Live Terminal Demo)"
+            loading="lazy"
+            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerPolicy="strict-origin-when-cross-origin"
+            allowFullScreen
+          />
+        </div>
+        <p className="text-center text-[10px] text-terminal-muted mt-3">
+          Prefer to read?{" "}
+          <Link href="/manual" className="text-terminal-green hover:underline">
+            The written trading manual
+          </Link>{" "}
+          covers the same ground in detail.
+        </p>
+      </section>
+
       {/* ── Get in touch ── */}
       <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
         <h2 className="text-lg font-bold text-slate-100 mb-2">Interested?</h2>
