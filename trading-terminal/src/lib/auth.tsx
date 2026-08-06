@@ -41,6 +41,7 @@ export const PRO_PRICE_USD = 100;            // monthly subscription
 // site can verify, so payments through it are confirmed by hand (see the claim
 // flow in PricingModal). The API-based PayPal button above it unlocks instantly.
 export const PAYPAL_ME_URL = "https://paypal.me/jessefuture10";
+export const PAYPAL_ID = "paypal.me/jessefuture10";
 export const SUBSCRIPTION_DAYS = 30;          // access window per payment
 export const MIN_PAYMENT_USD = 100;           // payments below this are rejected
 export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription

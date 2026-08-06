@@ -2,13 +2,11 @@
 
 import { useState } from "react";
 import {
-  PAYMENT_ADDRESS, PRO_PRICE_USD, PAYPAL_ME_URL,
+  PAYMENT_ADDRESS, PRO_PRICE_USD, PAYPAL_ME_URL, PAYPAL_ID,
   signIn, grantPro, useTier,
 } from "@/lib/auth";
-import {
-  serverVerifyPayment, startStripeCheckout,
-  startPaypal, startRazorpay, verifyRazorpay, loadRazorpayScript,
-} from "@/lib/entitlement";
+import { serverVerifyPayment } from "@/lib/entitlement";
+import QrCode from "@/components/QrCode";
 
 interface Props {
   open: boolean;
@@ -24,7 +22,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const [txHash, setTxHash] = useState("");
   // which action is in flight — distinguishes the card and crypto buttons so
   // only the one that was clicked shows a spinner
-  const [busy, setBusy] = useState<false | "card" | "paypal" | "upi" | "crypto" | "paypalme" | "intent">(false);
+  const [busy, setBusy] = useState<false | "crypto" | "paypalme" | "intent">(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // PayPal.me: the follow-up form only appears once they have actually opened
   // the link, so the modal is not cluttered for everyone else
@@ -130,79 +128,6 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     setStep("pay");
   };
 
-  /** Card: hand off to Stripe's hosted checkout. Access is granted on return,
-   *  where the server confirms the session with Stripe (see /terminal). */
-  const payByCard = async () => {
-    const e = email.trim().toLowerCase();
-    if (!/\S+@\S+\.\S+/.test(e)) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
-    setBusy("card"); setMsg(null);
-    signIn(e); refresh();   // so the returning session is already tied to this email
-    const r = await startStripeCheckout(e);
-    if (r.ok && r.url) {
-      window.location.href = r.url;
-      return;               // leaving the page; keep the button disabled
-    }
-    setMsg({ ok: false, text: r.reason });
-    setBusy(false);
-  };
-
-  /** PayPal — international cards, including guest checkout with no PayPal account. */
-  const payByPaypal = async () => {
-    const e = email.trim().toLowerCase();
-    if (!/\S+@\S+\.\S+/.test(e)) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
-    setBusy("paypal"); setMsg(null);
-    signIn(e); refresh();
-    const r = await startPaypal(e);
-    if (r.ok && r.url) { window.location.href = r.url; return; }
-    setMsg({ ok: false, text: r.reason });
-    setBusy(false);
-  };
-
-  /** Razorpay — UPI, netbanking, Indian cards and wallets, via their modal. */
-  const payByUpi = async () => {
-    const e = email.trim().toLowerCase();
-    if (!/\S+@\S+\.\S+/.test(e)) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
-    setBusy("upi"); setMsg(null);
-    const order = await startRazorpay(e);
-    if (!order.ok || !order.orderId || !order.keyId) {
-      setMsg({ ok: false, text: order.reason || "Could not start the payment." });
-      setBusy(false); return;
-    }
-    if (!(await loadRazorpayScript())) {
-      setMsg({ ok: false, text: "Couldn't load the payment window. Check your connection." });
-      setBusy(false); return;
-    }
-    signIn(e); refresh();
-    type RzpResp = { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string };
-    const Rzp = (window as unknown as { Razorpay: new (o: Record<string, unknown>) => { open: () => void } }).Razorpay;
-    const rzp = new Rzp({
-      key: order.keyId,
-      order_id: order.orderId,
-      amount: order.amount,
-      currency: order.currency,
-      name: "Tennis Intelligence Terminal",
-      description: `Pro — 30 days`,
-      prefill: { email: e },
-      theme: { color: "#22c55e" },
-      // Money has already moved by this point, so verify server-side and unlock.
-      handler: async (resp: RzpResp) => {
-        setMsg({ ok: true, text: "Payment received — verifying…" });
-        const v = await verifyRazorpay(e, resp);
-        if (v.ok && v.paidUntil) {
-          grantPro(`razorpay:${resp.razorpay_payment_id}`, v.paidUntil);
-          refresh();
-          setMsg({ ok: true, text: `${v.reason} Full terminal unlocked — welcome.` });
-          setTimeout(() => { onDone?.(); onClose(); }, 1400);
-        } else {
-          setMsg({ ok: false, text: v.reason });
-        }
-        setBusy(false);
-      },
-      modal: { ondismiss: () => { setBusy(false); } },
-    });
-    rzp.open();
-  };
-
   const verify = async () => {
     setBusy("crypto");
     setMsg(null);
@@ -290,35 +215,12 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
             <button onClick={() => setStep("plans")} className="text-[10px] text-terminal-muted hover:text-slate-300 mb-3">← back to plans</button>
 
             <div className="text-sm font-bold text-slate-100 mb-1">Subscribe — ${PRO_PRICE_USD}/month</div>
-            <div className="text-[10px] text-terminal-muted mb-3">Pick whatever is easiest where you are.</div>
-
-            {/* ── India: UPI / netbanking / Indian cards ── */}
-            <button onClick={payByUpi} disabled={!!busy}
-              className="w-full py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition disabled:opacity-40">
-              {busy === "upi" ? "OPENING PAYMENT WINDOW…" : "🇮🇳 UPI / NETBANKING / CARD (INDIA)"}
-            </button>
-            <div className="mt-1.5 mb-3 text-[9px] text-terminal-muted text-center">
-              GPay · PhonePe · Paytm · UPI · netbanking · Indian cards — via Razorpay
+            <div className="text-[10px] text-terminal-muted mb-4">
+              Two ways to pay — scan the code or copy the address.
             </div>
-
-            {/* ── International cards ── */}
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={payByPaypal} disabled={!!busy}
-                className="py-2.5 rounded border border-terminal-cyan/50 text-terminal-cyan text-xs font-bold hover:bg-terminal-cyan/10 transition disabled:opacity-40">
-                {busy === "paypal" ? "OPENING…" : "🌍 PAYPAL / CARD"}
-              </button>
-              <button onClick={payByCard} disabled={!!busy}
-                className="py-2.5 rounded border border-terminal-border text-slate-200 text-xs font-bold hover:bg-terminal-bg transition disabled:opacity-40">
-                {busy === "card" ? "OPENING…" : "💳 CARD (STRIPE)"}
-              </button>
-            </div>
-            <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
-              International cards — PayPal also accepts cards without a PayPal account
-            </div>
-
-            <div className="flex items-center gap-3 my-4">
+            <div className="flex items-center gap-3 mb-3">
               <div className="flex-1 h-px bg-terminal-border" />
-              <span className="text-[9px] text-terminal-muted">OR PAY BY PAYPAL LINK</span>
+              <span className="text-[9px] text-terminal-muted">💠 PAYPAL</span>
               <div className="flex-1 h-px bg-terminal-border" />
             </div>
 
@@ -350,7 +252,21 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                   💠 OPEN PAYPAL — PAY ${PRO_PRICE_USD} →
                 </a>
                 <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
-                  {email} recorded ✓ — opens {PAYPAL_ME_URL.replace("https://", "")}
+                  {email} recorded ✓
+                </div>
+                <div className="mt-3 flex flex-col items-center gap-2">
+                  <QrCode value={`${PAYPAL_ME_URL}/${PRO_PRICE_USD}`} size={124}
+                    label={`Scan to pay $${PRO_PRICE_USD}`} />
+                  <div className="flex items-center gap-2 w-full">
+                    <code className="flex-1 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-[11px] text-terminal-blue break-all select-all text-center">
+                      {PAYPAL_ID}
+                    </code>
+                    <button
+                      onClick={() => { navigator.clipboard?.writeText(PAYPAL_ID); setMsg({ ok: true, text: "PayPal ID copied." }); }}
+                      className="shrink-0 min-h-[36px] text-[10px] px-2 rounded border border-terminal-border text-slate-300 hover:bg-terminal-bg">
+                      COPY
+                    </button>
+                  </div>
                 </div>
               </>
             )}
@@ -381,6 +297,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
             <ol className="text-[11px] text-slate-300 space-y-2 mb-4 list-decimal list-inside">
               <li>Send <b>at least ${PRO_PRICE_USD} in ETH / USDC / USDT / DAI</b> (Ethereum mainnet) to:</li>
             </ol>
+            <div className="flex justify-center mb-3">
+              <QrCode value={PAYMENT_ADDRESS} size={124} label="Scan with your wallet" />
+            </div>
             <div className="flex items-center gap-2 mb-4">
               <code className="flex-1 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-[11px] text-terminal-cyan break-all select-all">
                 {PAYMENT_ADDRESS}
