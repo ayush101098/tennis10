@@ -10,17 +10,79 @@
   padding: 0;
 }
 
+html {
+  /* iOS inflates text when a page is rotated to landscape unless this is set */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html,
 body {
   background: #0a0e17;
   color: #e2e8f0;
   font-family: "JetBrains Mono", "Fira Code", monospace;
+  /* grey flash on every tap in iOS/Android WebViews */
+  -webkit-tap-highlight-color: transparent;
   /* Allow the page to scroll (landing page grows past the viewport); block
      only horizontal overflow so nothing spills sideways on mobile. The
      terminal route self-constrains with h-screen + overflow-hidden, so it
      never produces page scroll. */
   overflow-x: hidden;
   min-height: 100%;
+}
+
+/* Terminal header tab. Same visual density as before on a mouse; on a touch
+   screen it grows to the 44px target Apple and Google both ask for, without
+   changing the header's height (the row is already ~44px tall). */
+.nav-tab {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+}
+@media (pointer: coarse) {
+  .nav-tab {
+    min-height: 40px;
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+  }
+}
+
+/* ── touch devices ──────────────────────────────────────────────────────
+   iOS Safari zooms the whole page in whenever a focused field's text is
+   under 16px, and never zooms back out — so every input is 16px on a coarse
+   pointer regardless of how dense the surrounding UI is. Momentum scrolling
+   is enabled explicitly for older iOS WebViews. */
+@media (pointer: coarse) {
+  /* !important because Tailwind's text-xs/text-sm utilities are class-level
+     and would otherwise win on specificity — and a zoomed-in viewport that
+     never zooms back is worse than an oversized field. */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Notch / home-indicator insets. Applied to the app shell's edges so content
+   never sits under the status bar or the iOS gesture bar. */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.safe-x {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* ── scrollbar ── */

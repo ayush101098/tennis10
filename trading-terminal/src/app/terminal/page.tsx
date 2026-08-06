@@ -114,29 +114,37 @@ export default function TerminalPage() {
   useEffect(() => { if (expired) setPricingOpen(true); }, [expired]);
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden">
-      {/* ── Header Bar ── */}
-      <header className="flex items-center justify-between px-4 py-1.5 border-b border-terminal-border bg-terminal-panel shrink-0">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="text-terminal-green font-bold text-sm hover:opacity-80">◉ INTELLIGENCE TERMINAL</Link>
+    // 100dvh, not 100vh: on iOS the URL bar is counted in vh, so a vh-sized
+    // shell is always taller than the visible area and the bottom row hides
+    // under the browser chrome. h-screen stays as the fallback for old engines.
+    <div className="h-screen [height:100dvh] w-full flex flex-col overflow-hidden safe-x">
+      {/* ── Header Bar ──
+          The row scrolls sideways rather than wrapping: at 375px the nav used
+          to break "TABLE TENNIS" and "BET TRACKER" onto second lines and crush
+          the account cluster out of reach. */}
+      <header className="safe-top flex items-center justify-between gap-2 px-3 sm:px-4 py-1.5 border-b border-terminal-border bg-terminal-panel shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 overflow-x-auto scroll-touch">
+          <Link href="/" className="text-terminal-green font-bold text-sm hover:opacity-80 whitespace-nowrap shrink-0">
+            ◉<span className="hidden md:inline"> INTELLIGENCE TERMINAL</span>
+          </Link>
           <button onClick={() => { setSport("tennis"); setView("centre"); }}
-            className={`text-[10px] font-bold px-2 py-0.5 rounded ${sport === "tennis" && view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>
-            🎾 TENNIS
+            className={`nav-tab ${sport === "tennis" && view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>
+            🎾<span className="hidden xs:inline"> TENNIS</span>
           </button>
           <button onClick={() => { setSport("tt"); setView("centre"); }}
-            className={`text-[10px] font-bold px-2 py-0.5 rounded ${sport === "tt" && view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>
-            🏓 TABLE TENNIS
+            className={`nav-tab ${sport === "tt" && view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>
+            🏓<span className="hidden xs:inline"> TABLE TENNIS</span>
           </button>
           <button onClick={() => setView("tracker")}
-            className={`text-[10px] font-bold px-2 py-0.5 rounded ${view === "tracker" ? "text-terminal-cyan bg-terminal-cyan/10" : "text-terminal-muted hover:text-slate-300"}`}>
-            📒 BET TRACKER
+            className={`nav-tab ${view === "tracker" ? "text-terminal-cyan bg-terminal-cyan/10" : "text-terminal-muted hover:text-slate-300"}`}>
+            📒<span className="hidden xs:inline"> BET TRACKER</span>
           </button>
           <Link href={sport === "tt" ? "/tt/manual" : "/manual"}
-            className="text-[10px] font-bold px-2 py-0.5 rounded text-terminal-muted hover:text-slate-300">
-            📘 MANUAL
+            className="nav-tab text-terminal-muted hover:text-slate-300">
+            📘<span className="hidden xs:inline"> MANUAL</span>
           </Link>
         </div>
-        <div className="flex items-center gap-3 text-[10px]">
+        <div className="flex items-center gap-2 sm:gap-3 text-[10px] shrink-0">
           {/* Capacity note. States the cap only — no seats-remaining counter,
               since we do not enforce a live count and inventing one would be
               manufactured scarcity. */}
@@ -164,17 +172,17 @@ export default function TerminalPage() {
               </span>
               {!paid && (
                 <button onClick={() => setPricingOpen(true)}
-                  className="font-bold px-2 py-0.5 rounded bg-terminal-green text-black hover:opacity-90">
+                  className="inline-flex items-center min-h-[36px] font-bold px-2.5 rounded bg-terminal-green text-black hover:opacity-90">
                   GO PRO
                 </button>
               )}
-              <button onClick={() => { signOut(); refresh(); }} className="text-terminal-muted hover:text-slate-300">
+              <button onClick={() => { signOut(); refresh(); }} className="inline-flex items-center min-h-[36px] px-1 text-terminal-muted hover:text-slate-300">
                 sign out
               </button>
             </>
           ) : (
             <button onClick={() => setPricingOpen(true)}
-              className="font-bold px-2 py-0.5 rounded border border-terminal-green/50 text-terminal-green hover:bg-terminal-green/10">
+              className="inline-flex items-center min-h-[36px] font-bold px-2.5 rounded border border-terminal-green/50 text-terminal-green hover:bg-terminal-green/10">
               SIGN IN
             </button>
           )}

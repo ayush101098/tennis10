@@ -34,7 +34,7 @@ export default function ManualPage() {
           <Link href="/" className="text-terminal-muted hover:text-slate-200">Home</Link>
           <Link
             href="/terminal"
-            className="font-bold px-3 py-1.5 rounded bg-terminal-green text-black hover:opacity-90"
+            className="inline-flex items-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90"
           >
             LAUNCH TERMINAL →
           </Link>

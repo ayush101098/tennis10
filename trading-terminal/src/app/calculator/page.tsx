@@ -44,7 +44,7 @@ export default function CalculatorPage() {
         </Link>
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
-          <Link href="/terminal" className="font-bold px-3 py-1.5 rounded bg-terminal-green text-black hover:opacity-90">
+          <Link href="/terminal" className="inline-flex items-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
             LAUNCH TERMINAL →
           </Link>
         </div>

@@ -33,7 +33,7 @@ export default function TtManualPage() {
           <Link href="/manual" className="text-terminal-muted hover:text-slate-200">Tennis manual</Link>
           <Link
             href="/tt"
-            className="font-bold px-3 py-1.5 rounded bg-terminal-green text-black hover:opacity-90"
+            className="inline-flex items-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90"
           >
             LAUNCH TT TERMINAL →
           </Link>

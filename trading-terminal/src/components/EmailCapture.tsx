@@ -48,12 +48,12 @@ export default function EmailCapture({ source = "landing", cta = "Get early acce
         value={email}
         onChange={(e) => { setEmail(e.target.value); if (state === "error") setState("idle"); }}
         placeholder="you@email.com"
-        className="flex-1 px-3 py-2.5 rounded bg-terminal-panel border border-terminal-border text-sm text-slate-100 placeholder:text-terminal-muted focus:outline-none focus:ring-2 focus:ring-terminal-green/60"
+        className="flex-1 min-h-[44px] px-3 py-2.5 rounded bg-terminal-panel border border-terminal-border text-sm text-slate-100 placeholder:text-terminal-muted focus:outline-none focus:ring-2 focus:ring-terminal-green/60"
       />
       <button
         type="submit"
         disabled={state === "loading"}
-        className="px-5 py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 disabled:opacity-60 whitespace-nowrap"
+        className="min-h-[44px] px-5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 disabled:opacity-60 whitespace-nowrap"
       >
         {state === "loading" ? "Adding…" : cta}
       </button>

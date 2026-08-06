@@ -3,6 +3,9 @@ module.exports = {
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      // Small phones (iPhone SE / mini) sit below this; labels collapse to
+      // their icon under it so the terminal nav never wraps.
+      screens: { xs: "400px" },
       colors: {
         terminal: {
           bg: "#0a0e17",
