@@ -184,17 +184,23 @@ exports.handler = async (event) => {
   }
   await writeList(store, LEADS_KEY, leads);
 
-  // Mirror new leads (and any payment) to the sheet. A returning visitor
-  // re-submitting the same address must not append a duplicate row.
+  // Mirror to the sheet. New leads always; a returning visitor re-submitting
+  // the same address does NOT append a duplicate row — but a payment, or an
+  // intent to pay, must reach the sheet even for an address already there,
+  // because that is the row the operator matches a PayPal transfer against.
+  // (named evName, not event — `event` is the Lambda handler's own argument)
+  const evName = body.event ? String(body.event).slice(0, 32) : "";
   let sheet = "skipped";
-  if (isNew || body.txHash) {
+  if (isNew || body.txHash || evName) {
     sheet = await mirrorToSheet({
       email,
       source,
+      event: evName,
       paid: !!body.txHash,
       txHash: body.txHash ? String(body.txHash) : "",
       amount: body.amount != null ? String(body.amount) : "",
       capturedAt: new Date(now).toISOString(),
+      eventAt: evName ? new Date(now).toISOString() : "",
     });
   }
 

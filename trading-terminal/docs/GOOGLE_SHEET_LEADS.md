@@ -44,48 +44,77 @@ curl -s -X POST https://tennispredictions.netlify.app/api/subscribe \
 
 ```javascript
 const TOKEN = 'PUT-A-RANDOM-STRING-HERE';   // must match SHEETS_WEBHOOK_TOKEN
-const HEADERS = ['capturedAt', 'email', 'source', 'paid', 'amount', 'txHash'];
+const HEADERS = ['capturedAt', 'email', 'source', 'lastEvent', 'lastEventAt', 'paid', 'amount', 'txHash'];
 
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents || '{}');
     if (TOKEN && body.token !== TOKEN) {
-      return ContentService.createTextOutput(JSON.stringify({ ok: false, reason: 'unauthorized' }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return out({ ok: false, reason: 'unauthorized' });
     }
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    const email = String(body.email || '').toLowerCase().trim();
+    if (!email) return out({ ok: false, reason: 'email required' });
 
-    // Write the header row once, so a fresh sheet is self-describing.
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
     if (sheet.getLastRow() === 0) sheet.appendRow(HEADERS);
 
-    // Idempotent: the same address never gets a second row. Netlify already
-    // dedups, but a retry or a manual backfill must not double up either.
-    const emails = sheet.getLastRow() > 1
-      ? sheet.getRange(2, 2, sheet.getLastRow() - 1, 1).getValues().map(r => String(r[0]).toLowerCase())
+    // Upsert, not append-or-skip. Someone who signed up as a lead weeks ago
+    // and is now about to pay must not be silently dropped — their existing
+    // row gets the payment-intent stamp instead of a duplicate being created.
+    const rows = sheet.getLastRow() - 1;
+    const emails = rows > 0
+      ? sheet.getRange(2, 2, rows, 1).getValues().map(function (r) { return String(r[0]).toLowerCase().trim(); })
       : [];
-    const email = String(body.email || '').toLowerCase();
-    if (!email) throw new Error('email required');
-    if (emails.indexOf(email) !== -1) {
-      return ContentService.createTextOutput(JSON.stringify({ ok: true, duplicate: true }))
-        .setMimeType(ContentService.MimeType.JSON);
+    const idx = emails.indexOf(email);
+
+    if (idx === -1) {
+      sheet.appendRow([
+        body.capturedAt || new Date().toISOString(),
+        email,
+        body.source || '',
+        body.event || '',
+        body.eventAt || '',
+        body.paid ? 'yes' : '',
+        body.amount || '',
+        body.txHash || '',
+      ]);
+      return out({ ok: true, created: true });
     }
 
-    sheet.appendRow([
-      body.capturedAt || new Date().toISOString(),
-      email,
-      body.source || '',
-      body.paid ? 'yes' : '',
-      body.amount || '',
-      body.txHash || '',
-    ]);
-    return ContentService.createTextOutput(JSON.stringify({ ok: true }))
-      .setMimeType(ContentService.MimeType.JSON);
+    const row = idx + 2;                       // +1 header, +1 to 1-index
+    if (body.event) {
+      sheet.getRange(row, 4).setValue(body.event);
+      sheet.getRange(row, 5).setValue(body.eventAt || new Date().toISOString());
+    }
+    if (body.paid) sheet.getRange(row, 6).setValue('yes');
+    if (body.amount) sheet.getRange(row, 7).setValue(body.amount);
+    if (body.txHash) sheet.getRange(row, 8).setValue(body.txHash);
+    return out({ ok: true, updated: true });
   } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ ok: false, reason: String(err) }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return out({ ok: false, reason: String(err) });
   }
 }
+
+function out(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
 ```
+
+## What lands in the sheet, and when
+
+| Column | Filled by |
+|---|---|
+| `capturedAt` | first time the address is seen, ISO timestamp |
+| `email` | the address (also the upsert key) |
+| `source` | which form — `landing-hero`, `landing-cta`, `paypal-intent`… |
+| `lastEvent` / `lastEventAt` | `paypal_intent` is stamped **before** the PayPal link is handed over |
+| `paid` / `amount` / `txHash` | on a verified crypto payment |
+
+The PayPal.me link in the pricing modal is withheld until the email has been
+recorded here — a PayPal transfer arrives carrying only a display name, so an
+address banked before the money moves is the only reliable way to match a
+payment to an account.
 
 ## Backfilling the leads captured before this existed
 

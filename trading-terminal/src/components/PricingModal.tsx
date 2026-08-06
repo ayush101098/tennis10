@@ -24,12 +24,14 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const [txHash, setTxHash] = useState("");
   // which action is in flight — distinguishes the card and crypto buttons so
   // only the one that was clicked shows a spinner
-  const [busy, setBusy] = useState<false | "card" | "paypal" | "upi" | "crypto" | "paypalme">(false);
+  const [busy, setBusy] = useState<false | "card" | "paypal" | "upi" | "crypto" | "paypalme" | "intent">(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // PayPal.me: the follow-up form only appears once they have actually opened
   // the link, so the modal is not cluttered for everyone else
   const [paypalMeOpened, setPaypalMeOpened] = useState(false);
   const [paypalNote, setPaypalNote] = useState("");
+  // email banked before the PayPal link is handed over
+  const [intentSaved, setIntentSaved] = useState(false);
 
   if (!open) return null;
 
@@ -43,6 +45,39 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
    * The claim lands in the account database as pending and is switched on by
    * hand from /admin once the payment is matched in PayPal.
    */
+  /**
+   * Bank the email before handing over the PayPal link.
+   *
+   * PayPal.me transfers arrive carrying only a display name, so without an
+   * address captured up front there is nothing to match a payment against.
+   * This writes the lead (and mirrors it to the sheet with a timestamp), then
+   * releases the link.
+   */
+  const savePaypalIntent = async () => {
+    if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
+    setBusy("intent"); setMsg(null);
+    try {
+      const res = await fetch("/api/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, source: "paypal-intent", event: "paypal_intent" }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        signIn(email);
+        refresh();
+        setIntentSaved(true);
+        setMsg({ ok: true, text: "Email recorded — the PayPal link is ready below." });
+      } else {
+        setMsg({ ok: false, text: data.error || "Could not record that email. Check it and try again." });
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error — try again." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const claimPaypalMe = async () => {
     if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
     setBusy("paypalme"); setMsg(null);
@@ -289,15 +324,36 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
 
             {/* PayPal.me — a plain payment link, so there is no callback and
                 nothing to verify against. Access is therefore NOT granted here:
-                the claim is queued and confirmed by hand in /admin. */}
-            <a href={`${PAYPAL_ME_URL}/${PRO_PRICE_USD}`} target="_blank" rel="noreferrer"
-              onClick={() => setPaypalMeOpened(true)}
-              className="flex items-center justify-center w-full min-h-[44px] rounded border border-terminal-blue/50 text-terminal-blue text-xs font-bold hover:bg-terminal-blue/10 transition">
-              💠 PAY ${PRO_PRICE_USD} VIA PAYPAL.ME →
-            </a>
-            <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
-              Opens {PAYPAL_ME_URL.replace("https://", "")} — then tell us below so we can match the payment
-            </div>
+                the claim is queued and confirmed by hand in /admin.
+
+                The link is withheld until the email is captured. A PayPal.me
+                transfer arrives with only a PayPal display name attached, so an
+                address recorded BEFORE the money moves is the only reliable way
+                to match a payment to an account. */}
+            {!intentSaved ? (
+              <>
+                <button onClick={savePaypalIntent} disabled={!!busy || !validEmail}
+                  className="flex items-center justify-center w-full min-h-[44px] rounded border border-terminal-blue/50 text-terminal-blue text-xs font-bold hover:bg-terminal-blue/10 transition disabled:opacity-40">
+                  {busy === "intent" ? "CHECKING…" : `💠 PAY $${PRO_PRICE_USD} VIA PAYPAL →`}
+                </button>
+                <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
+                  {validEmail
+                    ? "We record your email first, so your payment can be matched to your account"
+                    : "Enter your email above first — it is how your payment gets matched to your account"}
+                </div>
+              </>
+            ) : (
+              <>
+                <a href={`${PAYPAL_ME_URL}/${PRO_PRICE_USD}`} target="_blank" rel="noreferrer"
+                  onClick={() => setPaypalMeOpened(true)}
+                  className="flex items-center justify-center w-full min-h-[44px] rounded bg-terminal-blue/20 border border-terminal-blue/50 text-terminal-blue text-xs font-bold hover:bg-terminal-blue/30 transition">
+                  💠 OPEN PAYPAL — PAY ${PRO_PRICE_USD} →
+                </a>
+                <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
+                  {email} recorded ✓ — opens {PAYPAL_ME_URL.replace("https://", "")}
+                </div>
+              </>
+            )}
             {paypalMeOpened && (
               <div className="mt-2">
                 <input
