@@ -6,7 +6,6 @@ import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
-import ModelMetrics from "@/components/ModelMetrics";
 import { useTier } from "@/lib/auth";
 
 /**
@@ -172,9 +171,6 @@ export default function LandingPage() {
           <Feature n="04" title="HEDGE" body="Trend-break, adverse-move and deuce-loss triggers tell you when to hedge a live position — protecting profit beats chasing it." />
         </div>
       </section>
-
-      {/* ── Held-out performance ── */}
-      <ModelMetrics />
 
       {/* ── Get in touch ── */}
       <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
