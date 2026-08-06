@@ -1,6 +1,7 @@
 /**
  * Client-side tennis schedule service.
- * Fetches ATP / WTA matches from ESPN API (CORS-enabled, no backend).
+ * Fetches ATP / WTA matches from the ESPN API through a same-origin proxy
+ * (ESPN 403s browser-shaped requests — see /api/espn).
  * Filters by actual match date, computes Elo-based probabilities.
  */
 
@@ -171,7 +172,12 @@ function lookupRank(nameMap: RankMap, displayName: string): number {
 
 // ─── ESPN ────────────────────────────────────────────────────────────────────
 
-const ESPN = "https://site.api.espn.com/apis/site/v2/sports/tennis";
+// Same-origin proxy, NOT site.api.espn.com directly. ESPN answers
+// browser-shaped requests with 403, and a 403 carries no CORS headers, so the
+// direct fetch rejected and every tour silently returned "no matches" — an
+// empty board in production for anonymous visitors and subscribers alike.
+// Served by netlify/functions/espn-proxy.js in production, src/app/api/espn in dev.
+const ESPN = "/api/espn";
 
 function detectSurface(event: Record<string, unknown>): string {
   const v = (event.venue as Record<string, unknown>)?.surface as string || "";

@@ -21,6 +21,15 @@
   status = 200
   force = true
 
+# ESPN scoreboard. ESPN now 403s browser-shaped requests and a 403 carries no
+# CORS headers, so the direct browser fetch failed and the board rendered empty
+# for everyone. Proxied server-side instead. See netlify/functions/espn-proxy.js
+[[redirects]]
+  from = "/api/espn/*"
+  to = "/.netlify/functions/espn-proxy/:splat"
+  status = 200
+  force = true
+
 # Live-presence counter (the static export strips the /api/presence route)
 [[redirects]]
   from = "/api/presence"
