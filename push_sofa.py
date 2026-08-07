@@ -84,9 +84,35 @@ def paths_for(days: int = 2) -> list[str]:
     out = ["sport/tennis/events/live"]
     for i in range(days):
         d = (today + _dt.timedelta(days=i)).isoformat()
-        out.append(f"sport/tennis/scheduled-events/{d}")
+        # sport/tennis/scheduled-events/<date> was dropped upstream — it 404s
+        # every time, so it is no longer requested. Coverage comes from the
+        # per-category endpoints below.
         out += [f"category/{c}/scheduled-events/{d}" for c in CATEGORIES]
         out.append(f"sport/tennis/odds/1/{d}")
+    return out
+
+
+# Per-event detail the terminal asks for on every LIVE match. Without these
+# pushed, the board renders matches and scores but every in-play request 503s:
+# no live odds, so no live edge, and no point-by-point, so no momentum.
+LIVE_EVENT_PATHS = (
+    "event/{id}/odds/1/all",
+    "event/{id}/point-by-point",
+    "event/{id}/statistics",
+)
+
+
+def live_event_paths(limit: int = 40) -> list[str]:
+    """Paths for the events currently in play, straight from the live feed."""
+    payload, err = fetch_local("sport/tennis/events/live")
+    if not payload:
+        return []
+    out = []
+    for evt in (payload.get("events") or [])[:limit]:
+        eid = evt.get("id")
+        if not eid:
+            continue
+        out += [t.format(id=eid) for t in LIVE_EVENT_PATHS]
     return out
 
 
@@ -132,7 +158,8 @@ def _count(payload) -> str:
 
 def cycle(endpoint: str, token: str, days: int, verbose: bool) -> tuple[int, int]:
     ok_n = fail_n = 0
-    for path in paths_for(days):
+    # Scheduled/odds first, then per-event detail for whatever is in play now.
+    for path in paths_for(days) + live_event_paths():
         payload, err = fetch_local(path)
         if payload is None:
             # SofaScore legitimately 404s some category/date combos — not an error
