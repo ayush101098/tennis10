@@ -8,6 +8,7 @@ import {
 import { serverVerifyPayment } from "@/lib/entitlement";
 import QrCode from "@/components/QrCode";
 import { PLANS, planById, type Plan } from "@/lib/plans";
+import { X_URL, TELEGRAM_URL } from "@/lib/brand";
 
 interface Props {
   open: boolean;
@@ -32,6 +33,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   // email banked before the PayPal link is handed over
   const [intentSaved, setIntentSaved] = useState(false);
   const [planId, setPlanId] = useState<Plan["id"]>("month");
+  // Set once the claim is filed, so the DM step stays on screen instead of
+  // being a message the customer scrolls past.
+  const [claimed, setClaimed] = useState(false);
   const plan = planById(planId);
 
   if (!open) return null;
@@ -95,7 +99,8 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
       if (data.ok) {
         signIn(email);
         refresh();
-        setMsg({ ok: true, text: "Got it — we'll match the payment and switch your access on. You'll keep this email as your login." });
+        setClaimed(true);
+        setMsg(null);
         setPaypalNote("");
       } else {
         setMsg({ ok: false, text: data.reason || "Could not record that. Email us and we'll sort it out." });
@@ -290,7 +295,34 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 </div>
               </>
             )}
-            {paypalMeOpened && (
+            {claimed ? (
+              /* Payment filed. A PayPal.me transfer arrives with only a display
+                 name attached, so the fastest way to be switched on is for the
+                 customer to say who they are — hence the DM step, made a real
+                 button rather than an instruction to find us somehow. */
+              <div className="mt-3 rounded border border-terminal-green/40 bg-terminal-green/[0.07] p-3">
+                <div className="text-[11px] font-bold text-terminal-green mb-1">
+                  ✓ Payment recorded for {email}
+                </div>
+                <p className="text-[10px] text-slate-300 leading-relaxed mb-2">
+                  Last step — <b>DM us on X</b> with the name you paid under. PayPal only tells us a
+                  display name, so this is what lets us match your payment and switch your access on.
+                </p>
+                <a href={X_URL} target="_blank" rel="noreferrer"
+                  className="flex items-center justify-center gap-2 w-full min-h-[44px] rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition">
+                  DM @future_jesse ON X →
+                </a>
+                {TELEGRAM_URL && (
+                  <a href={TELEGRAM_URL} target="_blank" rel="noreferrer"
+                    className="flex items-center justify-center gap-2 w-full min-h-[38px] mt-1.5 rounded border border-terminal-border text-[11px] font-bold text-slate-300 hover:bg-terminal-bg transition">
+                    or message us on Telegram
+                  </a>
+                )}
+                <p className="mt-2 text-[9px] text-terminal-muted">
+                  Keep using {email} to sign in — access appears on this account once confirmed.
+                </p>
+              </div>
+            ) : paypalMeOpened && (
               <div className="mt-2">
                 <input
                   value={paypalNote} onChange={e => setPaypalNote(e.target.value)}
@@ -303,7 +335,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 </button>
                 <p className="mt-1.5 text-[9px] text-terminal-muted leading-relaxed">
                   A PayPal.me transfer can&apos;t be checked automatically, so this one is switched on by hand
-                  after the payment is matched — unlike the buttons above, which unlock instantly.
+                  after you confirm it — unlike a card payment, which unlocks instantly.
                 </p>
               </div>
             )}
