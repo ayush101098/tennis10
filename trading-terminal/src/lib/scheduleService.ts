@@ -835,6 +835,25 @@ export function probToOdds(p: number): number {
   return p > 0 ? Math.round((1 / p) * 100) / 100 : 99;
 }
 
+/**
+ * Staking discipline, as advertised on the homepage: "¼ Kelly, 5% cap, 2% edge
+ * floor". These were marketing copy only — nothing enforced them at the point
+ * where a trade is recommended, so a 0.3% edge produced a green "RECOMMENDED /
+ * TAKE THIS TRADE". Exported so every surface tests the same numbers.
+ */
+export const EDGE_FLOOR = 0.02;        // below this, there is no bet
+export const MAX_BANKROLL_FRACTION = 0.05;  // hard cap on any single stake
+
+/** ¼-Kelly stake in dollars, capped at MAX_BANKROLL_FRACTION of bankroll. */
+export function quarterKellyStake(bankroll: number, kelly: number): number {
+  return Math.round(Math.min(bankroll * kelly * 0.25, bankroll * MAX_BANKROLL_FRACTION));
+}
+
+/** True when an edge clears the floor AND the stake survives it. */
+export function qualifies(edge: number, kelly: number): boolean {
+  return edge >= EDGE_FLOOR && kelly > 0;
+}
+
 export function kellyFraction(trueProb: number, odds: number): number {
   const b = odds - 1;
   if (b <= 0) return 0;

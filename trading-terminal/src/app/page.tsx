@@ -152,7 +152,7 @@ export default function LandingPage() {
         {/* Stat chips */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-2 text-[10px]">
           <Chip label={`${matches.length || "—"} matches today`} />
-          <Chip label={`${liveCount} live now`} tone="green" pulse={liveCount > 0} />
+          <Chip label={`${liveCount} matches live now`} tone="green" pulse={liveCount > 0} />
           <Chip label={`${tours.length || "—"} tours incl. ITF`} />
           <Chip label="41,750-match neural network" />
           <Chip label="Markov live engine" />

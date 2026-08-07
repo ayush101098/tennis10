@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { fetchScheduleClient, refreshLiveMatches, probToOdds, kellyFraction } from "@/lib/scheduleService";
+import { fetchScheduleClient, refreshLiveMatches, probToOdds, kellyFraction,
+  qualifies, quarterKellyStake, EDGE_FLOOR } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
 import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
@@ -146,7 +147,7 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
         {tours.map(t => <Pill key={t} active={tourFilter === t} onClick={() => setTourFilter(t)}>{t}</Pill>)}
         <span className="text-terminal-border mx-0.5">│</span>
         <Pill active={statusFilter === "ALL"} onClick={() => setStatusFilter("ALL")}>ALL ({raw.length})</Pill>
-        {counts.live ? <Pill active={statusFilter === "live"} onClick={() => setStatusFilter("live")} color="green">🔴 LIVE ({counts.live})</Pill> : null}
+        {counts.live ? <Pill active={statusFilter === "live"} onClick={() => setStatusFilter("live")} color="green">🔴 LIVE MATCHES ({counts.live})</Pill> : null}
         {counts.scheduled ? <Pill active={statusFilter === "scheduled"} onClick={() => setStatusFilter("scheduled")}>📋 SCHED ({counts.scheduled})</Pill> : null}
         {counts.finished ? <Pill active={statusFilter === "finished"} onClick={() => setStatusFilter("finished")} color="muted">✓ DONE ({counts.finished})</Pill> : null}
       </div>
@@ -297,8 +298,14 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
   const edge2 = p2Prob - imp2;
   const kelly1 = kellyFraction(p1Prob, odds1);
   const kelly2 = kellyFraction(p2Prob, odds2);
-  const stake1 = Math.round(bankroll * kelly1 * 0.25); // quarter Kelly
-  const stake2 = Math.round(bankroll * kelly2 * 0.25);
+  const stake1 = quarterKellyStake(bankroll, kelly1); // ¼ Kelly, 5% cap
+  const stake2 = quarterKellyStake(bankroll, kelly2);
+  // Which side to recommend: only a side that clears the floor is eligible, and
+  // between two eligible sides the larger Kelly wins. Picking on Kelly alone
+  // could recommend a side whose edge is under the floor.
+  const q1 = qualifies(edge1, kelly1);
+  const q2 = qualifies(edge2, kelly2);
+  const pickP1 = q1 && (!q2 || kelly1 >= kelly2);
   const vig = imp1 + imp2 - 1;
 
   const isFav1 = p1Prob >= p2Prob;
@@ -434,22 +441,36 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
           <KV label="¼ Kelly P2" value={`$${stake2}`} color={stake2 > 0 ? "green" : "muted"} />
         </div>
 
-        {(kelly1 > 0 || kelly2 > 0) && (
+        {/* "No edge, no bet" is the product's stated discipline, so the CTA
+            must test the 2% floor — not merely a positive Kelly, which is true
+            of any edge above zero and produced a green RECOMMENDED on a 0.3%
+            edge. Below the floor the panel says so plainly. */}
+        {!(q1 || q2) ? (
+          <div className="mt-2 p-2 rounded border border-terminal-border bg-terminal-panel/40">
+            <div className="text-[10px] font-bold text-terminal-muted">
+              ⊘ NO QUALIFYING EDGE
+            </div>
+            <div className="text-[9px] text-terminal-muted leading-relaxed mt-0.5">
+              Best edge {edgeFmt(Math.max(edge1, edge2))} is under the {Math.round(EDGE_FLOOR * 100)}% floor —
+              sitting this one out preserves bankroll.
+            </div>
+          </div>
+        ) : (
           <div className={`mt-2 p-2 rounded border ${
-            kelly1 > kelly2
+            pickP1
               ? "border-terminal-green/40 bg-terminal-green/5"
               : "border-terminal-cyan/40 bg-terminal-cyan/5"
           }`}>
             <div className="text-[10px] font-bold text-terminal-green">
-              💎 RECOMMENDED: {kelly1 > kelly2 ? m.player1 : m.player2} @ {kelly1 > kelly2 ? odds1.toFixed(2) : odds2.toFixed(2)}
+              💎 RECOMMENDED: {pickP1 ? m.player1 : m.player2} @ {pickP1 ? odds1.toFixed(2) : odds2.toFixed(2)}
             </div>
             <div className="text-[9px] text-terminal-muted">
-              Stake ${kelly1 > kelly2 ? stake1 : stake2} (¼ Kelly) · Edge {edgeFmt(kelly1 > kelly2 ? edge1 : edge2)} · EV ${
-                ((kelly1 > kelly2 ? edge1 : edge2) * (kelly1 > kelly2 ? stake1 : stake2) * (kelly1 > kelly2 ? odds1 : odds2)).toFixed(0)
+              Stake ${pickP1 ? stake1 : stake2} (¼ Kelly) · Edge {edgeFmt(pickP1 ? edge1 : edge2)} · EV ${
+                ((pickP1 ? edge1 : edge2) * (pickP1 ? stake1 : stake2) * (pickP1 ? odds1 : odds2)).toFixed(0)
               }
             </div>
             <button
-              onClick={() => setTicket({ match: m, fixture: pmFixture, initialMarket: "match", initialPick: kelly1 > kelly2 ? m.player1 : m.player2 })}
+              onClick={() => setTicket({ match: m, fixture: pmFixture, initialMarket: "match", initialPick: pickP1 ? m.player1 : m.player2 })}
               className="mt-1.5 w-full py-1.5 rounded bg-terminal-green text-black text-[10px] font-bold hover:opacity-90">
               ⚡ TAKE THIS TRADE
             </button>

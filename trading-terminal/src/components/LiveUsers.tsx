@@ -51,8 +51,12 @@ export default function LiveUsers() {
         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-terminal-green opacity-75" />
         <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-terminal-green" />
       </span>
+      {/* "viewing", not "live": this is a count of PEOPLE, and it sat inches
+          from "LIVE (3)" — a count of live MATCHES — which read as the same
+          number disagreeing with itself. Different quantities, so they now say
+          which is which. */}
       <span className="font-mono font-bold">{count}</span>
-      <span className="text-terminal-muted">live</span>
+      <span className="text-terminal-muted">viewing</span>
     </span>
   );
 }
