@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import { LEGAL_NAME } from "@/lib/brand";
 import { markdownToHtml } from "@/lib/markdown";
 
 export const metadata: Metadata = {
@@ -56,7 +57,7 @@ export default function ManualPage() {
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
         <div className="mt-3 flex items-center justify-center"><Socials variant="footer" /></div>
-        <div className="mt-2">© {new Date().getFullYear()} Tennis Alpha</div>
+        <div className="mt-2">© {new Date().getFullYear()} {LEGAL_NAME}</div>
       </footer>
     </div>
   );

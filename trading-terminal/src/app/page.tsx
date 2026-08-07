@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import { LEGAL_NAME } from "@/lib/brand";
 import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
@@ -261,7 +262,7 @@ export default function LandingPage() {
         <div className="mt-3 flex items-center justify-center">
           <Socials variant="footer" />
         </div>
-        <div className="mt-2">© {new Date().getFullYear()} Tennis Alpha</div>
+        <div className="mt-2">© {new Date().getFullYear()} {LEGAL_NAME}</div>
       </footer>
 
     </div>

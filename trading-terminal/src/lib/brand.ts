@@ -3,9 +3,10 @@
 export const X_URL = "https://x.com/future_jesse";
 
 /**
- * Telegram invite. EMPTY until the real link is supplied — Socials renders the
- * Telegram button only when this is set, so a placeholder can never ship as a
- * dead link. Paste the t.me/... URL here and it appears in the nav and footer
- * of every page at once.
+ * Telegram invite. Socials renders the button only when this is non-empty, so
+ * clearing it removes Telegram everywhere rather than leaving a dead link.
  */
-export const TELEGRAM_URL = "";
+export const TELEGRAM_URL = "https://t.me/+n2KRYAFVyBhhZDA9";
+
+/** Legal entity shown in the footer copyright line. */
+export const LEGAL_NAME = "Nexxore Labs";
