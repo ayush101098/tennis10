@@ -36,9 +36,7 @@ export const ADMIN_EMAILS = new Set([
   "mateimo012@gmail.com",
 ]);
 export const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
-import { daysForAmount } from "./plans";
-
-export const PRO_PRICE_USD = 99;             // monthly tier (see lib/plans.ts)
+export const PRO_PRICE_USD = 100;            // monthly subscription
 // PayPal.me is a plain payment link — it produces no callback and nothing the
 // site can verify, so payments through it are confirmed by hand (see the claim
 // flow in PricingModal). The API-based PayPal button above it unlocks instantly.
@@ -276,7 +274,7 @@ export async function verifyPaymentTx(txHash: string): Promise<VerifyResult> {
       // Block timestamp -> 30-day access window. Reject stale (re-used) txs.
       const block = await rpc<{ timestamp: string }>(url, "eth_getBlockByNumber", [tx.blockNumber, false]);
       const blockMs = block ? Number(BigInt(block.timestamp)) * 1000 : Date.now();
-      const paidUntil = blockMs + (daysForAmount(usd || 0) || SUBSCRIPTION_DAYS) * 86400000;
+      const paidUntil = blockMs + SUBSCRIPTION_DAYS * 86400000;
       if (paidUntil <= Date.now()) {
         return { ok: false, reason: "That payment is more than 30 days old — the subscription has lapsed. Send a new monthly payment." };
       }
