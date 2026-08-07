@@ -9,7 +9,8 @@ import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
-import { useTier } from "@/lib/auth";
+import { useTier, claimPublicAnalysis, getPublicAnalysisId, PRO_PRICE_USD } from "@/lib/auth";
+import PricingModal from "@/components/PricingModal";
 
 /**
  * Landing page — the public storefront.
@@ -62,9 +63,29 @@ export default function LandingPage() {
   const liveCount = matches.filter(m => m.status === "live").length;
   const tours = useMemo(() => Array.from(new Set(matches.map(m => m.tour))), [matches]);
 
-  // Everyone analyses freely on the landing page — the subscription ask lives
-  // in the terminal (after the free preview window), never here.
-  const onPick = useCallback((m: ScheduledMatch) => setSelected(m), []);
+  // One free analysis per day for everyone who has not paid. The quota helpers
+  // existed but were called from nowhere, so the landing page handed out
+  // unlimited analysis while the pricing card advertised "one free match
+  // analysis a day" — the copy and the product disagreed. Subscribers and
+  // admins are never gated.
+  const [pricingOpen, setPricingOpen] = useState(false);
+  const [lockedMatch, setLockedMatch] = useState<ScheduledMatch | null>(null);
+  const [freeSlotId, setFreeSlotId] = useState<string | null>(null);
+
+  useEffect(() => { setFreeSlotId(getPublicAnalysisId()); }, []);
+
+  const onPick = useCallback((m: ScheduledMatch) => {
+    if (isPro || session?.isAdmin) { setSelected(m); return; }
+    if (claimPublicAnalysis(m.id)) {
+      setFreeSlotId(m.id);
+      setSelected(m);
+      setLockedMatch(null);
+      return;
+    }
+    // Their one slot is already spent on a different match.
+    setLockedMatch(m);
+    setSelected(null);
+  }, [isPro, session?.isAdmin]);
 
   return (
     <div className="min-h-screen bg-terminal-bg text-slate-200">
@@ -144,7 +165,8 @@ export default function LandingPage() {
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 sm:px-4 py-2 border-b border-terminal-border bg-terminal-panel/60">
             <span className="text-[11px] font-bold text-terminal-yellow tracking-wider">📅 TODAY — LIVE &amp; UPCOMING</span>
             <span className="hidden xs:block text-[10px] text-terminal-muted">
-              click any match to analyse — no account needed
+              {isPro ? "every match unlocked — analyse anything"
+                : "one free analysis a day — no account needed"}
             </span>
           </div>
           {/* On mobile: list caps at ~55vh (scrolls), analysis flows in the
@@ -156,7 +178,7 @@ export default function LandingPage() {
               {!data && <div className="p-8 text-center text-terminal-muted text-xs animate-pulse">Loading live schedule…</div>}
               {matches.slice(0, 120).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
-                  freeSlot={false}
+                  freeSlot={freeSlotId === m.id}
                   showProb
                   onClick={() => onPick(m)} />
               ))}
@@ -176,7 +198,32 @@ export default function LandingPage() {
             </div>
             {/* Analysis pane */}
             <div className="md:overflow-y-auto bg-terminal-bg min-h-[360px]">
-              {selected ? (
+              {lockedMatch ? (
+                <div className="h-full flex flex-col items-center justify-center gap-2 text-center p-8">
+                  <div className="text-2xl">🔒</div>
+                  <div className="text-[12px] font-bold text-slate-200">
+                    You&apos;ve used today&apos;s free analysis
+                  </div>
+                  <div className="text-[10px] text-terminal-muted max-w-[300px] leading-relaxed">
+                    Free accounts get one full match analysis a day. Pro opens every match —
+                    live True P, edge against the book, ¼-Kelly stakes and hedge timing.
+                  </div>
+                  <button onClick={() => setPricingOpen(true)}
+                    className="mt-2 inline-flex items-center justify-center min-h-[44px] px-5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
+                    UNLOCK EVERY MATCH — ${PRO_PRICE_USD}/MONTH
+                  </button>
+                  {freeSlotId && (
+                    <button
+                      onClick={() => {
+                        const m = matches.find(x => x.id === freeSlotId);
+                        if (m) { setSelected(m); setLockedMatch(null); }
+                      }}
+                      className="text-[10px] text-terminal-muted hover:text-slate-300 underline">
+                      back to today&apos;s pick
+                    </button>
+                  )}
+                </div>
+              ) : selected ? (
                 <EdgePanel match={selected} tier="pro" />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center gap-2 text-center p-8">
@@ -254,6 +301,8 @@ export default function LandingPage() {
           <Socials variant="footer" />
         </div>
       </section>
+
+      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
 
       {/* ── Footer ── */}
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
