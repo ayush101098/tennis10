@@ -103,6 +103,13 @@ export interface ScheduleData {
   today_date: string;
   tomorrow_date: string;
   fetched_at: number;
+  /**
+   * True when EVERY upstream source failed, as opposed to answering with an
+   * empty day. Without this an outage is indistinguishable from a quiet
+   * Tuesday: both render "no matches", so a total data failure looked like
+   * normal operation and went unnoticed while the board sat empty.
+   */
+  sourcesDown?: boolean;
 }
 
 // ─── Rankings lookup (loaded once from /rankings.json) ───────────────────────
@@ -707,20 +714,34 @@ const SOFA_SCHED_TTL = 12_000;
 // of re-fetching (and re-parsing) the full day's schedule every single tick.
 const SOFA_SCHED_LIVE_TTL = 4_000;
 
-/** Fetch a single SofaScore scheduled endpoint, return raw events array */
-async function fetchSofaEndpoint(url: string): Promise<unknown[]> {
+/**
+ * Fetch one SofaScore scheduled endpoint.
+ *
+ * `ok` distinguishes "the source answered and the day is empty" from "the
+ * source never answered" — the caller needs that to tell an outage from a
+ * quiet day. Returning [] for both is what made the outage silent.
+ */
+async function fetchSofaEndpoint(url: string): Promise<{ events: unknown[]; ok: boolean }> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45_000); // 45s timeout
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
-    if (!res.ok) return [];
+    if (!res.ok) return { events: [], ok: false };
     const json = await res.json();
-    return json.events || [];
+    return { events: json.events || [], ok: true };
   } catch {
-    return [];
+    return { events: [], ok: false };
   }
 }
+
+/**
+ * Whether the last SofaScore scheduled fetch got an answer from ANY category.
+ * Module-scoped rather than threaded through the return type because
+ * fetchSofaScheduled is cached and called from several places; the flag is only
+ * ever read immediately after, when the ScheduleData is assembled.
+ */
+let sofaSourcesOk = true;
 
 async function fetchSofaScheduled(
   targetDate: string,
@@ -732,23 +753,23 @@ async function fetchSofaScheduled(
   if (cached && Date.now() - cached.ts < ttl) return cached.data;
 
   try {
-    // Fetch the generic endpoint (best-effort — often 404s) plus every
-    // per-category endpoint in parallel. The category feeds are what actually
-    // carry ATP/WTA/Challenger/ITF now that the generic one is unreliable.
+    // Per-category endpoints only. The sport-level generic endpoint was
+    // dropped upstream — it 404s every time, so keeping it meant a guaranteed
+    // failing request on every poll of every open tab, for nothing.
     const catKeys = Object.keys(SOFA_CAT_URLS);
-    const results = await Promise.all([
-      fetchSofaEndpoint(`${SOFA_SCHEDULED}/${targetDate}`),
-      ...catKeys.map(k => fetchSofaEndpoint(`${SOFA_CAT_URLS[k]}/${targetDate}`)),
-      fetchSofaDailyOdds(targetDate),
-    ]);
-    const genericEvents = results[0] as unknown[];
-    const catEvents = results.slice(1, 1 + catKeys.length) as unknown[][];
-    const dailyOdds = results[results.length - 1] as Map<number, OddsPair>;
+    const catResults = await Promise.all(
+      catKeys.map(k => fetchSofaEndpoint(`${SOFA_CAT_URLS[k]}/${targetDate}`)),
+    );
+    const dailyOdds = await fetchSofaDailyOdds(targetDate);
+
+    // Every category failing means the feed is down, not that tennis stopped.
+    sofaSourcesOk = catResults.some(r => r.ok);
+    const catEvents = catResults.map(r => r.events);
 
     // Merge all events, deduplicate by SofaScore event ID
     const seen = new Set<number>();
     const allEvents: unknown[] = [];
-    for (const evt of [genericEvents, ...catEvents].flat()) {
+    for (const evt of catEvents.flat()) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const id = (evt as any).id as number;
       if (id && !seen.has(id)) {
@@ -772,7 +793,7 @@ async function fetchSofaScheduled(
     }
     _sofaSchedCache[targetDate] = { data: matches, ts: Date.now() };
     const catCounts = catKeys.map((k, i) => `${k}=${catEvents[i].length}`).join(", ");
-    console.log(`[sofascore] ${targetDate}: ${matches.length} singles (generic=${genericEvents.length}, ${catCounts}, deduped from ${allEvents.length})`);
+    console.log(`[sofascore] ${targetDate}: ${matches.length} singles (${catCounts}, deduped from ${allEvents.length})`);
     return matches;
   } catch (e) {
     console.warn("[sofascore] scheduled fetch failed", e);
@@ -887,7 +908,13 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
   // ── Betting intelligence pass: live True P + edge + Kelly for EVERY match ──
   for (const m of [...today, ...tomorrow]) attachIntelligence(m);
 
-  const result: ScheduleData = { today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr, fetched_at: Date.now() };
+  // Sources are "down" only when nothing answered AND we have nothing to show.
+  // A day that genuinely has no matches must not be reported as an outage.
+  const sourcesDown = !sofaSourcesOk && today.length === 0 && tomorrow.length === 0;
+  const result: ScheduleData = {
+    today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr,
+    fetched_at: Date.now(), sourcesDown,
+  };
   _scheduleCache = { data: result, ts: Date.now() };
   return result;
 }

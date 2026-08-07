@@ -184,7 +184,17 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
             </div>
           ))}
           {!loading && matches.length === 0 && (
-            <div className="text-terminal-muted text-xs text-center py-8">No matches for {day}. Try changing filters.</div>
+            data?.sourcesDown ? (
+              // Distinguish an outage from a quiet day — see ScheduleData.sourcesDown.
+              <div className="text-xs text-center py-8">
+                <div className="text-terminal-yellow font-bold mb-1">⚠ Live data temporarily unavailable</div>
+                <div className="text-terminal-muted">
+                  The match feed isn&apos;t responding. This is on our side, not yours — it reconnects on its own.
+                </div>
+              </div>
+            ) : (
+              <div className="text-terminal-muted text-xs text-center py-8">No matches for {day}. Try changing filters.</div>
+            )
           )}
         </div>
 

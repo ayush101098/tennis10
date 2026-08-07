@@ -158,7 +158,17 @@ export default function LandingPage() {
                   onClick={() => onPick(m)} />
               ))}
               {data && matches.length === 0 && (
-                <div className="p-8 text-center text-terminal-muted text-xs">No more matches today — check back tomorrow.</div>
+                data.sourcesDown ? (
+                  // An outage must never masquerade as a quiet day — saying
+                  // "no matches" when the feed is down teaches people the
+                  // product is empty rather than that it is briefly unwell.
+                  <div className="p-8 text-center text-xs">
+                    <div className="text-terminal-yellow font-bold mb-1">⚠ Live data temporarily unavailable</div>
+                    <div className="text-terminal-muted">The match feed isn&apos;t responding. This is on our side — it reconnects on its own.</div>
+                  </div>
+                ) : (
+                  <div className="p-8 text-center text-terminal-muted text-xs">No more matches today — check back tomorrow.</div>
+                )
               )}
             </div>
             {/* Analysis pane */}
