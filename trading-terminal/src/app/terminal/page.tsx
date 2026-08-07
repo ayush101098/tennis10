@@ -8,7 +8,8 @@ import BetTracker from "@/components/BetTracker";
 import PricingModal from "@/components/PricingModal";
 import LiveUsers from "@/components/LiveUsers";
 import { TtMatchCentre, TtBetTracker } from "@/components/TtPanel";
-import { useTier, signIn, signOut, subActive, grantPro, PRO_PRICE_USD } from "@/lib/auth";
+import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
+import { planById } from "@/lib/plans";
 import { confirmStripeSession, capturePaypal } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
@@ -228,11 +229,11 @@ export default function TerminalPage() {
             <div className="text-[11px] text-terminal-muted max-w-[420px]">
               You&apos;ve had a minute with the full terminal — live True P for
               tennis and table tennis, edge boards, trade tickets and both bet journals. Keep it running
-              with Pro: <b className="text-slate-200">${PRO_PRICE_USD}/month</b>, unlimited access.
+              from <b className="text-slate-200">${planById("day").usd} for a day</b> to ${planById("year").usd} for the year.
             </div>
             <button onClick={() => setPricingOpen(true)}
               className="mt-2 px-5 py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-              GO PRO — ${PRO_PRICE_USD}/MONTH
+              GO PRO — FROM ${planById("day").usd}
             </button>
           </div>
         )}

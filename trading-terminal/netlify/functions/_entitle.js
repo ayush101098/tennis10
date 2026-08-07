@@ -15,7 +15,8 @@
 
 const { store: sharedStore } = require("./_blobs");
 
-const SUBSCRIPTION_DAYS = 30;
+const { daysForAmount } = require("./_plans");
+const SUBSCRIPTION_DAYS = 30;   // fallback for legacy rows with no amount
 const DAY = 86400000;
 
 function blankAccount(email, now) {
@@ -23,7 +24,10 @@ function blankAccount(email, now) {
 }
 
 function recompute(a) {
-  const fromPayments = a.payments.reduce((m, p) => Math.max(m, p.ts + SUBSCRIPTION_DAYS * DAY), 0);
+  const fromPayments = a.payments.reduce((m, p) => {
+    const days = p.amountUsd ? daysForAmount(p.amountUsd) : SUBSCRIPTION_DAYS;
+    return Math.max(m, p.ts + days * DAY);
+  }, 0);
   const fromGrants = a.grants.reduce((m, g) => Math.max(m, g.until), 0);
   return Math.max(fromPayments, fromGrants);
 }
@@ -37,7 +41,8 @@ function recompute(a) {
  */
 async function grantPaid({ email, ref, amountUsd, from, ts }) {
   const paidAt = Number(ts) || Date.now();
-  const paidUntil = paidAt + SUBSCRIPTION_DAYS * DAY;
+  const days = daysForAmount(Number(amountUsd) || 0) || SUBSCRIPTION_DAYS;
+  const paidUntil = paidAt + days * DAY;
   try {
     const s = sharedStore("accounts");
     if (!s) return { paidUntil, warning: "blob store unavailable" };

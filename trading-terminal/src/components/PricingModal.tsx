@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import {
-  PAYMENT_ADDRESS, PRO_PRICE_USD, PAYPAL_ME_URL, PAYPAL_ID,
+  PAYMENT_ADDRESS, PAYPAL_ME_URL, PAYPAL_ID,
   signIn, grantPro, useTier,
 } from "@/lib/auth";
 import { serverVerifyPayment } from "@/lib/entitlement";
 import QrCode from "@/components/QrCode";
+import { PLANS, planById, type Plan } from "@/lib/plans";
 
 interface Props {
   open: boolean;
@@ -30,6 +31,8 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const [paypalNote, setPaypalNote] = useState("");
   // email banked before the PayPal link is handed over
   const [intentSaved, setIntentSaved] = useState(false);
+  const [planId, setPlanId] = useState<Plan["id"]>("month");
+  const plan = planById(planId);
 
   if (!open) return null;
 
@@ -85,7 +88,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email, action: "claim", method: "paypal.me",
-          note: paypalNote.trim(), amountUsd: PRO_PRICE_USD,
+          note: paypalNote.trim(), amountUsd: plan.usd, planId: plan.id,
         }),
       });
       const data = await res.json();
@@ -110,7 +113,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     refresh();
     setMsg({ ok: true, text: s.isAdmin ? "Welcome back, admin — full access enabled."
       : s.tier === "pro" ? "Subscription active — full terminal unlocked."
-      : `Account created. Subscribe for $${PRO_PRICE_USD}/month to open the terminal.` });
+      : `Account created. Pick a plan below to open the terminal.` });
     if (s.isAdmin || s.tier === "pro") { onDone?.(); onClose(); }
     else onDone?.();
   };
@@ -189,7 +192,24 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               <div className="border border-terminal-green/50 bg-terminal-green/5 rounded-lg p-4 flex flex-col relative">
                 <div className="absolute -top-2 right-3 text-[9px] font-bold bg-terminal-green text-black px-2 py-0.5 rounded">FULL TERMINAL</div>
                 <div className="text-terminal-green font-bold text-sm mb-1">PRO</div>
-                <div className="text-2xl font-bold text-slate-100 mb-3">${PRO_PRICE_USD}<span className="text-xs text-terminal-muted font-normal"> / month</span></div>
+                <div className="text-2xl font-bold text-slate-100 mb-1">${plan.usd}
+                  <span className="text-xs text-terminal-muted font-normal"> / {plan.id === "day" ? "day" : plan.id === "year" ? "year" : "month"}</span>
+                </div>
+                {/* Tier chooser. Selecting here sets the amount every payment
+                    route below asks for. */}
+                <div className="grid grid-cols-3 gap-1 mb-2">
+                  {PLANS.map(pl => (
+                    <button key={pl.id} onClick={() => setPlanId(pl.id)}
+                      className={`min-h-[38px] rounded text-[10px] font-bold border transition ${
+                        planId === pl.id
+                          ? "border-terminal-green bg-terminal-green/15 text-terminal-green"
+                          : "border-terminal-border text-terminal-muted hover:text-slate-300"}`}>
+                      <span className="block">{pl.label}</span>
+                      <span className="block text-[9px] font-normal">${pl.usd}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[9px] text-terminal-muted mb-2 min-h-[24px]">{plan.blurb}</p>
                 <ul className="text-[11px] text-slate-300 space-y-1.5 flex-1">
                   <li>✓ <b>Unlimited bets</b> — no trial cap</li>
                   <li>✓ <b>Live True P</b> — score-conditioned Markov engine</li>
@@ -201,7 +221,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 </ul>
                 <button onClick={startPro}
                   className="mt-3 w-full py-2 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition">
-                  SUBSCRIBE — ${PRO_PRICE_USD}/mo
+                  {plan.id === "day" ? `GET 24H — $${plan.usd}` : `SUBSCRIBE — $${plan.usd}`}
                 </button>
               </div>
             </div>
@@ -214,7 +234,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
           <div className="p-5">
             <button onClick={() => setStep("plans")} className="text-[10px] text-terminal-muted hover:text-slate-300 mb-3">← back to plans</button>
 
-            <div className="text-sm font-bold text-slate-100 mb-1">Subscribe — ${PRO_PRICE_USD}/month</div>
+            <div className="text-sm font-bold text-slate-100 mb-1">{plan.label} — ${plan.usd}</div>
             <div className="text-[10px] text-terminal-muted mb-4">
               Two ways to pay — scan the code or copy the address.
             </div>
@@ -236,7 +256,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               <>
                 <button onClick={savePaypalIntent} disabled={!!busy || !validEmail}
                   className="flex items-center justify-center w-full min-h-[44px] rounded border border-terminal-blue/50 text-terminal-blue text-xs font-bold hover:bg-terminal-blue/10 transition disabled:opacity-40">
-                  {busy === "intent" ? "CHECKING…" : `💠 PAY $${PRO_PRICE_USD} VIA PAYPAL →`}
+                  {busy === "intent" ? "CHECKING…" : `💠 PAY $${plan.usd} VIA PAYPAL →`}
                 </button>
                 <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
                   {validEmail
@@ -246,17 +266,17 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               </>
             ) : (
               <>
-                <a href={`${PAYPAL_ME_URL}/${PRO_PRICE_USD}`} target="_blank" rel="noreferrer"
+                <a href={`${PAYPAL_ME_URL}/${plan.usd}`} target="_blank" rel="noreferrer"
                   onClick={() => setPaypalMeOpened(true)}
                   className="flex items-center justify-center w-full min-h-[44px] rounded bg-terminal-blue/20 border border-terminal-blue/50 text-terminal-blue text-xs font-bold hover:bg-terminal-blue/30 transition">
-                  💠 OPEN PAYPAL — PAY ${PRO_PRICE_USD} →
+                  💠 OPEN PAYPAL — PAY ${plan.usd} →
                 </a>
                 <div className="mt-1.5 text-[9px] text-terminal-muted text-center">
                   {email} recorded ✓
                 </div>
                 <div className="mt-3 flex flex-col items-center gap-2">
-                  <QrCode value={`${PAYPAL_ME_URL}/${PRO_PRICE_USD}`} size={124}
-                    label={`Scan to pay $${PRO_PRICE_USD}`} />
+                  <QrCode value={`${PAYPAL_ME_URL}/${plan.usd}`} size={124}
+                    label={`Scan to pay $${plan.usd}`} />
                   <div className="flex items-center gap-2 w-full">
                     <code className="flex-1 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-[11px] text-terminal-blue break-all select-all text-center">
                       {PAYPAL_ID}
@@ -295,7 +315,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
             </div>
 
             <ol className="text-[11px] text-slate-300 space-y-2 mb-4 list-decimal list-inside">
-              <li>Send <b>at least ${PRO_PRICE_USD} in ETH / USDC / USDT / DAI</b> (Ethereum mainnet) to:</li>
+              <li>Send <b>at least ${plan.usd} in ETH / USDC / USDT / DAI</b> (Ethereum mainnet) to:</li>
             </ol>
             <div className="flex justify-center mb-3">
               <QrCode value={PAYMENT_ADDRESS} size={124} label="Scan with your wallet" />
@@ -325,8 +345,10 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
             )}
             <div className="mt-4 text-[9px] text-terminal-muted leading-relaxed">
               Verification checks the transaction on Ethereum mainnet: it must be confirmed, pay the address above,
-              be worth at least <b>${PRO_PRICE_USD}</b>, and be from the last 30 days. Access runs 30 days from the
-              payment, then renews on your next monthly payment. Tied to the email you entered ({email || "—"}).
+              and be worth at least <b>${plan.usd}</b>. <b>The amount you send decides the plan</b> — $
+              {PLANS.map(p => `${p.usd} = ${p.label.toLowerCase()}`).join(", $")} — so sending more upgrades you
+              automatically. Access runs from the payment, not from when you verify. Tied to the email you
+              entered ({email || "—"}).
             </div>
           </div>
         )}

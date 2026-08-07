@@ -24,8 +24,12 @@
 const { store: sharedStore } = require("./_blobs");
 
 const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
-const MIN_PAYMENT_USD = 100;
-const SUBSCRIPTION_DAYS = 30;
+const {
+  MIN_PAYMENT_USD, daysForAmount, planNameForAmount,
+} = require("./_plans");
+// Tolerance on the floor: a crypto payer cannot hit an exact cent, and an ETH
+// transfer priced a moment earlier lands a little under. 0.5% or 50c.
+const AMOUNT_TOLERANCE = (usd) => Math.max(0.5, usd * 0.005);
 const RPCS = [
   "https://ethereum-rpc.publicnode.com",
   "https://1rpc.io/eth",
@@ -100,16 +104,23 @@ async function verifyOnChain(txHash) {
         return { ok: false, reason: "That transaction does not pay the access address." };
       }
 
-      if (usd + 0.5 < MIN_PAYMENT_USD) {
-        return { ok: false, reason: `Payment is ~$${usd.toFixed(2)} ${kind} — the subscription is $${MIN_PAYMENT_USD}/month.` };
+      // The amount selects the tier — nothing on-chain carries a plan id.
+      const credited = usd + AMOUNT_TOLERANCE(usd);
+      if (credited < MIN_PAYMENT_USD) {
+        return { ok: false, reason: `Payment is ~$${usd.toFixed(2)} ${kind} — the smallest plan is $${MIN_PAYMENT_USD} (day pass).` };
       }
+      const days = daysForAmount(credited);
       const block = await rpc(url, "eth_getBlockByNumber", [tx.blockNumber, false]);
       const blockMs = block ? Number(BigInt(block.timestamp)) * 1000 : Date.now();
-      const paidUntil = blockMs + SUBSCRIPTION_DAYS * 86400000;
+      const paidUntil = blockMs + days * 86400000;
       if (paidUntil <= Date.now()) {
-        return { ok: false, reason: "That payment is more than 30 days old — send a new monthly payment." };
+        return { ok: false, reason: `That ${planNameForAmount(credited).toLowerCase()} has already expired — send a new payment.` };
       }
-      return { ok: true, reason: `Verified $${usd.toFixed(2)} ${kind}.`, paidUntil, amountUsd: usd, from };
+      return {
+        ok: true,
+        reason: `Verified $${usd.toFixed(2)} ${kind} — ${planNameForAmount(credited)}.`,
+        paidUntil, amountUsd: usd, from, days,
+      };
     } catch (e) {
       lastErr = e; // try next RPC
     }
@@ -192,13 +203,13 @@ exports.handler = async (event) => {
 
   // Mirror into the unified account database (the roster the admin reads).
   // ts MUST be the on-chain block time, not now: the account DB derives payment
-  // expiry as ts + 30d, so stamping it with the verification time would let
-  // someone pay, sit on the receipt for 29 days, then verify and collect ~59
-  // days of access. v.paidUntil is blockMs + 30d, so subtract that back out.
+  // expiry from ts, so stamping it with the verification time would let someone
+  // pay, sit on the receipt, then verify and collect a second window.
+  // v.paidUntil is blockMs + the tier's days, so subtract those back out.
   try {
         const accounts = sharedStore("accounts");
     const db = (await accounts.get("byEmail", { type: "json" })) || {};
-    const blockMs = v.paidUntil - SUBSCRIPTION_DAYS * 86400000;
+    const blockMs = v.paidUntil - (v.days || 30) * 86400000;
     const now = Date.now();
     if (!db[email]) {
       db[email] = { email, firstSeen: now, lastLogin: now, loginCount: 0, paidUntil: 0, payments: [], grants: [] };

@@ -14,6 +14,7 @@
  */
 
 const { store: sharedStore } = require("./_blobs");
+const { daysForAmount } = require("./_plans");
 
 const STORE = "accounts";
 const KEY = "byEmail";
@@ -40,7 +41,13 @@ function blank(email, now) {
 }
 
 function recompute(a) {
-  const fromPayments = a.payments.reduce((m, p) => Math.max(m, p.ts + 30 * DAY), 0);
+  // Window follows the amount paid — a $7 day pass must not buy 30 days, and a
+  // $999 lifetime must not expire in a month. Legacy rows with no amount keep
+  // the old 30-day assumption so nobody who already paid loses access.
+  const fromPayments = a.payments.reduce((m, p) => {
+    const days = p.amountUsd ? daysForAmount(p.amountUsd) : 30;
+    return Math.max(m, p.ts + days * DAY);
+  }, 0);
   const fromGrants = a.grants.reduce((m, g) => Math.max(m, g.until), 0);
   return Math.max(fromPayments, fromGrants);
 }
@@ -173,7 +180,8 @@ exports.handler = async (event) => {
     if (!token || String(body.adminToken || "") !== token) {
       return reply(401, { ok: false, reason: "unauthorized" });
     }
-    const days = Math.max(1, Math.min(3650, Number(body.days) || 30));
+    // 36500 so a lifetime comp is expressible, not silently clipped to 10 years
+    const days = Math.max(1, Math.min(36500, Number(body.days) || 30));
     if (!db[email]) db[email] = blank(email, now);
     db[email].grants.push({
       until: now + days * DAY,

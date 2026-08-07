@@ -9,7 +9,8 @@ import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
-import { useTier, claimPublicAnalysis, getPublicAnalysisId, PRO_PRICE_USD } from "@/lib/auth";
+import { useTier, claimPublicAnalysis, getPublicAnalysisId } from "@/lib/auth";
+import { planById } from "@/lib/plans";
 import PricingModal from "@/components/PricingModal";
 
 /**
@@ -210,7 +211,7 @@ export default function LandingPage() {
                   </div>
                   <button onClick={() => setPricingOpen(true)}
                     className="mt-2 inline-flex items-center justify-center min-h-[44px] px-5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-                    UNLOCK EVERY MATCH — ${PRO_PRICE_USD}/MONTH
+                    UNLOCK EVERY MATCH — FROM ${planById("day").usd}
                   </button>
                   {freeSlotId && (
                     <button
