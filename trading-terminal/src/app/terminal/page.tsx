@@ -21,7 +21,7 @@ import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnec
  * non-subscribers get the pro-subscription ask. Paid/admin: never gated.
  */
 
-const FREE_PREVIEW_SECONDS = 180;
+const FREE_PREVIEW_SECONDS = 60;
 const DWELL_KEY = "tt_dwell_v1";
 
 type Sport = "tennis" | "tt";
@@ -226,7 +226,7 @@ export default function TerminalPage() {
             <div className="text-3xl">⏱</div>
             <div className="text-sm font-bold text-slate-100">Your free preview is up</div>
             <div className="text-[11px] text-terminal-muted max-w-[420px]">
-              You&apos;ve had {FREE_PREVIEW_SECONDS / 60} minutes with the full terminal — live True P for
+              You&apos;ve had a minute with the full terminal — live True P for
               tennis and table tennis, edge boards, trade tickets and both bet journals. Keep it running
               with Pro: <b className="text-slate-200">${PRO_PRICE_USD}/month</b>, unlimited access.
             </div>

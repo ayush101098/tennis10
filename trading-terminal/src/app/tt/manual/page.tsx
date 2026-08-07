@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Metadata } from "next";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
+import Socials from "@/components/Socials";
 import { markdownToHtml } from "@/lib/markdown";
 
 export const metadata: Metadata = {
@@ -30,6 +31,7 @@ export default function TtManualPage() {
           <span>🏓</span><Wordmark size={16} mark={false} />
         </Link>
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
+          <Socials />
           <Link href="/manual" className="text-terminal-muted hover:text-slate-200">Tennis manual</Link>
           <Link
             href="/tt"
@@ -52,7 +54,8 @@ export default function TtManualPage() {
 
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
-        <br />© {new Date().getFullYear()} Tennis Alpha
+        <div className="mt-3 flex items-center justify-center"><Socials variant="footer" /></div>
+        <div className="mt-2">© {new Date().getFullYear()} Tennis Alpha</div>
       </footer>
     </div>
   );

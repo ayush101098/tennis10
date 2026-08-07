@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
+import Socials from "@/components/Socials";
 import { fetchScheduleClient } from "@/lib/scheduleService";
 import type { ScheduleData, ScheduledMatch } from "@/lib/scheduleService";
 import { useTier } from "@/lib/auth";
@@ -43,6 +44,7 @@ export default function CalculatorPage() {
           <Wordmark size={16} />
         </Link>
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
+          <Socials />
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
           <Link href="/terminal" className="inline-flex items-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
             LAUNCH TERMINAL →

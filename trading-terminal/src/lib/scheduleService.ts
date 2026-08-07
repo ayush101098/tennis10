@@ -818,7 +818,17 @@ export function kellyFraction(trueProb: number, odds: number): number {
 let _scheduleCache: { data: ScheduleData; ts: number } | null = null;
 const SCHEDULE_CACHE_TTL = 20_000; // 20s TTL for schedule data
 
-export async function fetchScheduleClient(): Promise<ScheduleData> {
+/**
+ * @param onPartial Called with today's matches as soon as today's sources are
+ *   in, before tomorrow's fetch and before the live-odds round trip. The board
+ *   used to wait for all six feeds AND the per-event live-odds pass before it
+ *   painted anything, so rows appeared ~3.8s in when today's data had been
+ *   ready at ~1.5s. Rendering is progressive now; the full result still
+ *   resolves and replaces it.
+ */
+export async function fetchScheduleClient(
+  onPartial?: (partial: ScheduleData) => void,
+): Promise<ScheduleData> {
   // Return cached data if fresh enough
   if (_scheduleCache && Date.now() - _scheduleCache.ts < SCHEDULE_CACHE_TTL) {
     return _scheduleCache.data;
@@ -834,14 +844,19 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
   const [rankMap, nnModel] = await Promise.all([loadRankings(), loadNNModel()]);
   _nnModel = nnModel;
 
-  const [at, wt, ato, wto, sofaToday, sofaTomorrow] = await Promise.all([
+  // Today and tomorrow are fired together — but only today is awaited before
+  // the first paint. Tomorrow is nobody's first impression.
+  const todayFeeds = Promise.all([
     fetchESPN("atp", todayStr, rankMap),
     fetchESPN("wta", todayStr, rankMap),
+    fetchSofaScheduled(todayStr, rankMap),
+  ]);
+  const tomorrowFeeds = Promise.all([
     fetchESPN("atp", tomorrowStr, rankMap),
     fetchESPN("wta", tomorrowStr, rankMap),
-    fetchSofaScheduled(todayStr, rankMap),
     fetchSofaScheduled(tomorrowStr, rankMap),
   ]);
+  const [at, wt, sofaToday] = await todayFeeds;
 
   const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 };
   const sort = (a: ScheduledMatch, b: ScheduledMatch) => {
@@ -900,12 +915,26 @@ export async function fetchScheduleClient(): Promise<ScheduleData> {
   };
 
   const today = dedup(byId([...at, ...wt]), sofaToday).sort(sort);
+
+  // First paint. attachIntelligence is synchronous, so the rows carry True P,
+  // edge and stake immediately — what is still missing is only the in-play
+  // odds refresh, which arrives below.
+  for (const m of today) attachIntelligence(m);
+  if (onPartial) {
+    onPartial({
+      today, tomorrow: [], today_date: todayStr, tomorrow_date: tomorrowStr,
+      fetched_at: Date.now(), sourcesDown: false,
+    });
+  }
+
+  const [ato, wto, sofaTomorrow] = await tomorrowFeeds;
   const tomorrow = dedup(byId([...ato, ...wto]), sofaTomorrow).sort(sort);
 
   // ── In-play odds for live matches (throttled; per-event cache absorbs polls) ──
   await attachLiveOdds(today.filter(m => m.status === "live" && m.liveScore?.sofaId));
 
   // ── Betting intelligence pass: live True P + edge + Kelly for EVERY match ──
+  // Today is re-run because attachLiveOdds has since changed its odds.
   for (const m of [...today, ...tomorrow]) attachIntelligence(m);
 
   // Sources are "down" only when nothing answered AND we have nothing to show.

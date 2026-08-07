@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
+import Socials from "@/components/Socials";
 import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
 import { useTier } from "@/lib/auth";
-
-const X_URL = "https://x.com/future_jesse";
 
 /**
  * Landing page — the public storefront.
@@ -30,7 +29,9 @@ export default function LandingPage() {
     // Full schedule rebuild (ESPN + SofaScore + rankings + odds for ~450
     // matches) is expensive — 45s is often enough since the match LIST
     // rarely changes mid-cycle; live scores are kept fresh separately below.
-    const load = () => fetchScheduleClient().then(setData).catch(() => {});
+    // setData twice on purpose: today's rows as soon as they land, then the
+    // complete result. Waiting for both days plus live odds cost ~2s of blank board.
+    const load = () => fetchScheduleClient(setData).then(setData).catch(() => {});
     load();
     const iv = setInterval(load, 45_000);
     return () => clearInterval(iv);
@@ -70,6 +71,7 @@ export default function LandingPage() {
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
         <Wordmark size={17} />
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
+          <Socials />
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
           {session ? (
             <>
@@ -247,14 +249,8 @@ export default function LandingPage() {
             jessefuture10@gmail.com
           </a>
         </p>
-        {/* Socials. rel="noreferrer" on an outbound link so the destination is
-            not handed the referring URL, and 44px tall for a thumb. */}
-        <div className="mt-4 flex items-center justify-center gap-2">
-          <a href={X_URL} target="_blank" rel="noreferrer"
-            aria-label="Tennis Alpha on X"
-            className="inline-flex items-center gap-2 min-h-[44px] px-4 rounded border border-terminal-border text-[11px] font-bold text-slate-300 hover:bg-terminal-panel hover:text-slate-100 transition">
-            <XIcon /> @future_jesse
-          </a>
+        <div className="mt-4 flex items-center justify-center">
+          <Socials variant="footer" />
         </div>
       </section>
 
@@ -262,12 +258,10 @@ export default function LandingPage() {
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
         Staking discipline (¼ Kelly, 5% cap, 2% edge floor) is enforced in the product for a reason.
-        <br />
-        <a href={X_URL} target="_blank" rel="noreferrer"
-          className="inline-flex items-center gap-1.5 mt-2 text-terminal-muted hover:text-slate-300">
-          <XIcon /> @future_jesse
-        </a>
-        <br />© {new Date().getFullYear()} Tennis Alpha
+        <div className="mt-3 flex items-center justify-center">
+          <Socials variant="footer" />
+        </div>
+        <div className="mt-2">© {new Date().getFullYear()} Tennis Alpha</div>
       </footer>
 
     </div>
@@ -275,15 +269,6 @@ export default function LandingPage() {
 }
 
 /* ── Sub-components ── */
-
-/** The X logo, inline so no request leaves the page for a 16px glyph. */
-function XIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
-      <path d="M18.9 2H22l-7.4 8.5L23 22h-6.8l-5.3-7-6.1 7H1.7l7.9-9.1L1 2h7l4.8 6.4L18.9 2Zm-1.2 18h1.9L7.4 3.9H5.4L17.7 20Z" />
-    </svg>
-  );
-}
 
 function Chip({ label, tone, pulse }: { label: string; tone?: "green"; pulse?: boolean }) {
   return (

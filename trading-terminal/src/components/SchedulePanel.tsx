@@ -40,7 +40,12 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
     refreshingRef.current = true;
     setLoading(true);
     try {
-      const result = await fetchScheduleClient();
+      // Paint today's rows the moment they land, then swap in the full result
+      // (tomorrow + refreshed in-play odds) when it resolves.
+      const result = await fetchScheduleClient(partial => {
+        setData(partial);
+        setLoading(false);
+      });
       console.log("[SchedulePanel] loaded:", result?.today?.length, "today,", result?.tomorrow?.length, "tomorrow");
       setData(result);
     } catch (err) {
