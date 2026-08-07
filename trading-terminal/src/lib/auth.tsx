@@ -36,7 +36,9 @@ export const ADMIN_EMAILS = new Set([
   "mateimo012@gmail.com",
 ]);
 export const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
-export const PRO_PRICE_USD = 100;            // monthly subscription
+import { daysForAmount } from "./plans";
+
+export const PRO_PRICE_USD = 99;             // monthly tier (see lib/plans.ts)
 // PayPal.me is a plain payment link — it produces no callback and nothing the
 // site can verify, so payments through it are confirmed by hand (see the claim
 // flow in PricingModal). The API-based PayPal button above it unlocks instantly.
@@ -72,6 +74,11 @@ export const TIME_GRANTS: Record<string, number> = {
   // Lapses back to free on its own; shorten the expiry (or set it to 1) to end
   // it sooner — a past expiry actively downgrades an existing pro session.
   "blokhin.ia.9801@gmail.com": 1788739199000,
+  // PAID customer, 2026-08-07 — one month of full access → 2026-09-07 23:59Z.
+  // This entry makes it effective on any browser immediately; it should also be
+  // recorded in the account DB (payments[] via /admin) so revenue is accounted
+  // for rather than looking like a comp.
+  "nsanity937@gmail.com": 1788825599000,
 };
 
 /** Grant expiry for an email if one is currently ACTIVE, else null. */
@@ -269,7 +276,7 @@ export async function verifyPaymentTx(txHash: string): Promise<VerifyResult> {
       // Block timestamp -> 30-day access window. Reject stale (re-used) txs.
       const block = await rpc<{ timestamp: string }>(url, "eth_getBlockByNumber", [tx.blockNumber, false]);
       const blockMs = block ? Number(BigInt(block.timestamp)) * 1000 : Date.now();
-      const paidUntil = blockMs + SUBSCRIPTION_DAYS * 86400000;
+      const paidUntil = blockMs + (daysForAmount(usd || 0) || SUBSCRIPTION_DAYS) * 86400000;
       if (paidUntil <= Date.now()) {
         return { ok: false, reason: "That payment is more than 30 days old — the subscription has lapsed. Send a new monthly payment." };
       }
