@@ -129,8 +129,18 @@ function useTtFeed() {
     const load = async () => {
       let data: TtFeed | null = null;
       try {
-        const res = await fetch("/api/tt", { cache: "no-store" });
-        data = await res.json();
+        // Adopt the head-inline prefetch on the first poll (see Prefetch.tsx),
+        // which is already in flight before this component exists.
+        const store = (window as unknown as { __ttPrefetch?: Record<string, Promise<unknown>> }).__ttPrefetch;
+        const warmed = store?.["/api/tt"];
+        if (warmed) {
+          delete store!["/api/tt"];
+          data = (await warmed) as TtFeed | null;
+        }
+        if (!data) {
+          const res = await fetch("/api/tt", { cache: "no-store" });
+          data = await res.json();
+        }
       } catch {
         data = null;
       }

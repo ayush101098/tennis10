@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { TierProvider } from "@/lib/auth";
 import Analytics from "@/components/Analytics";
+import Prefetch from "@/components/Prefetch";
 import PageviewTracker from "@/components/PageviewTracker";
 
 // The canonical home. Set NEXT_PUBLIC_SITE_URL in the Netlify env to move it
@@ -37,6 +38,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        {/* Starts the board's requests before the bundle is parsed — without
+            this nothing is asked for until React hydrates, ~1.2s in. */}
+        <Prefetch />
+        <link rel="preload" as="fetch" href="/rankings.json" crossOrigin="anonymous" />
+      </head>
       <body className="bg-terminal-bg text-slate-200 font-mono">
         <Analytics />
         <PageviewTracker />

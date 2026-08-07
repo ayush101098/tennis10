@@ -678,7 +678,11 @@ async function fetchSofaDailyOdds(targetDate: string): Promise<Map<number, OddsP
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45_000);
-    const res = await fetch(`/api/sofa/sport/tennis/odds/1/${targetDate}`, { signal: controller.signal });
+    const oddsUrl = `/api/sofa/sport/tennis/odds/1/${targetDate}`;
+    const warmed = takePrefetched(oddsUrl);
+    const res = warmed
+      ? new Response(JSON.stringify((await warmed) ?? {}), { status: 200 })
+      : await fetch(oddsUrl, { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return cached?.data ?? map;
     const json = await res.json();
@@ -714,6 +718,23 @@ const SOFA_SCHED_TTL = 12_000;
 // of re-fetching (and re-parsing) the full day's schedule every single tick.
 const SOFA_SCHED_LIVE_TTL = 4_000;
 
+
+/**
+ * Adopt a request the head-inline prefetch already started (Prefetch.tsx).
+ *
+ * Returns null when nothing was warmed for this URL, so the caller falls back
+ * to a normal fetch. Each warmed promise is consumed once — a later poll must
+ * hit the network rather than replaying a minutes-old body.
+ */
+function takePrefetched(url: string): Promise<unknown> | null {
+  if (typeof window === "undefined") return null;
+  const store = (window as unknown as { __ttPrefetch?: Record<string, Promise<unknown>> }).__ttPrefetch;
+  const hit = store?.[url];
+  if (!hit) return null;
+  delete store[url];
+  return hit;
+}
+
 /**
  * Fetch one SofaScore scheduled endpoint.
  *
@@ -722,6 +743,13 @@ const SOFA_SCHED_LIVE_TTL = 4_000;
  * quiet day. Returning [] for both is what made the outage silent.
  */
 async function fetchSofaEndpoint(url: string): Promise<{ events: unknown[]; ok: boolean }> {
+  const warmed = takePrefetched(url);
+  if (warmed) {
+    const json = (await warmed) as { events?: unknown[] } | null;
+    // null means the warm-up itself failed; fall through to a real request
+    // rather than reporting the source as down on its behalf.
+    if (json) return { events: json.events || [], ok: true };
+  }
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45_000); // 45s timeout
