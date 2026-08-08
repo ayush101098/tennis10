@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import { BreadcrumbLd, FaqLd } from "@/components/JsonLd";
 import { LEGAL_NAME } from "@/lib/brand";
 import { markdownToHtml } from "@/lib/markdown";
 
@@ -11,6 +12,10 @@ export const metadata: Metadata = {
   title: "Trading Execution Manual — Tennis Alpha",
   description:
     "The complete in-play tennis trading playbook: reading the edge panel, entry rules, the signal → action → size state machine, hedge math and non-negotiable risk rules.",
+  // Explicit: without this the root layout's canonical:"/" is inherited and the
+  // page declares itself a duplicate of the homepage.
+  alternates: { canonical: "/manual" },
+  openGraph: { title: "Tennis Trading Execution Manual", url: "/manual" },
 };
 
 /**
@@ -27,6 +32,31 @@ export default function ManualPage() {
 
   return (
     <div className="min-h-screen bg-terminal-bg text-slate-200">
+      <BreadcrumbLd trail={[{ name: "Trading Manual", path: "/manual" }]} />
+      {/* Answers drawn from what the product actually does — every claim here
+          is one the manual itself makes and the code enforces. */}
+      <FaqLd qa={[
+        {
+          q: "How is the tennis win probability calculated?",
+          a: "A neural network trained on 41,750 professional matches sets the pre-match prior from ranking, form, surface and head-to-head. Once play starts, a score-conditioned Markov engine re-prices the match from the live score — game, set and point state — so the probability reflects where the match actually stands rather than where it started.",
+        },
+        {
+          q: "What is edge in tennis betting?",
+          a: "Edge is the model's true probability minus the bookmaker's implied probability after the vig is removed. De-vigging matters: raw bookmaker prices sum to more than 100%, so comparing against them overstates your edge on every single bet.",
+        },
+        {
+          q: "How much should I stake on a tennis bet?",
+          a: "Tennis Alpha uses quarter Kelly, capped at 5% of bankroll, with a hard 2% edge floor. Below that floor no bet is recommended at all — an edge smaller than the model's own error is not an edge.",
+        },
+        {
+          q: "When should you hedge a live tennis position?",
+          a: "On trend break, adverse move, or a deuce-game loss against the position. The terminal flags these as they happen; the discipline is to protect a profit rather than chase a bigger one.",
+        },
+        {
+          q: "Which tours does Tennis Alpha cover?",
+          a: "ATP, WTA, Challenger, W125 and ITF — men's and women's — every match day, including the lower tours where bookmaker pricing is loosest.",
+        },
+      ]} />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
         <Link href="/" className="hover:opacity-80">

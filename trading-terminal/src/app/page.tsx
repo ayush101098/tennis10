@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import { SoftwareApplicationLd } from "@/components/JsonLd";
 import { LEGAL_NAME } from "@/lib/brand";
 import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
@@ -90,6 +91,7 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-terminal-bg text-slate-200">
+      <SoftwareApplicationLd />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
         <Wordmark size={17} />

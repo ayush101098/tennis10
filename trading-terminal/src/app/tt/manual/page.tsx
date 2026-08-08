@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import { BreadcrumbLd } from "@/components/JsonLd";
 import { LEGAL_NAME } from "@/lib/brand";
 import { markdownToHtml } from "@/lib/markdown";
 
@@ -11,6 +12,8 @@ export const metadata: Metadata = {
   title: "TT Trading Guide — Tennis Alpha",
   description:
     "How to trade the table-tennis terminal: reading live True P and character residuals, where factory-league edges come from, sizing, and the journal discipline.",
+  alternates: { canonical: "/tt/manual" },
+  openGraph: { title: "Table Tennis Trading Guide", url: "/tt/manual" },
 };
 
 /**
@@ -26,6 +29,7 @@ export default function TtManualPage() {
 
   return (
     <div className="min-h-screen bg-terminal-bg text-slate-200">
+      <BreadcrumbLd trail={[{ name: "Table Tennis Guide", path: "/tt/manual" }]} />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
         <Link href="/tt" className="flex items-center gap-1.5 hover:opacity-80">

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import { BreadcrumbLd } from "@/components/JsonLd";
 import { fetchScheduleClient } from "@/lib/scheduleService";
 import type { ScheduleData, ScheduledMatch } from "@/lib/scheduleService";
 import { useTier } from "@/lib/auth";
@@ -38,6 +39,7 @@ export default function CalculatorPage() {
 
   return (
     <div className="min-h-screen bg-terminal-bg text-slate-200">
+      <BreadcrumbLd trail={[{ name: "Kelly Calculator", path: "/calculator" }]} />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
         <Link href="/" className="hover:opacity-80">
