@@ -14,6 +14,15 @@
 [functions]
   directory = "netlify/functions"
 
+# The OG card is emitted by the export as an extensionless file, which Netlify
+# serves as text/plain — X, Telegram and Slack all reject that and show no
+# preview at all. Declare the real type.
+[[headers]]
+  for = "/opengraph-image"
+  [headers.values]
+    Content-Type = "image/png"
+    Cache-Control = "public, max-age=86400"
+
 # Route SofaScore API requests through the serverless function
 [[redirects]]
   from = "/api/sofa/*"

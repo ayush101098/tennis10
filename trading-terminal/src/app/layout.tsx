@@ -14,7 +14,9 @@ const DESCRIPTION =
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "Tennis Alpha",
+  // The home title carries the query intent, not just the brand — "Tennis
+  // Alpha" alone matches nothing anyone searches for.
+  title: "Tennis Alpha — Live Win Probability & Betting Edge for Every Tennis Match",
   description: DESCRIPTION,
   alternates: { canonical: "/" },
   openGraph: {
