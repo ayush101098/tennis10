@@ -10,6 +10,8 @@
  * The NN averages both player orientations so P(p1) + P(p2) === 1 exactly.
  */
 
+import { apiUrl } from "./scheduleService";
+
 interface NNLayer { W: number[][]; b: number[] }
 
 interface NNModelFile {
@@ -27,7 +29,7 @@ export function loadNNModel(): Promise<NNModelFile | null> {
   if (_modelPromise) return _modelPromise;
   _modelPromise = (async () => {
     try {
-      const res = await fetch("/nn_model.json");
+      const res = await fetch(apiUrl("/nn_model.json"));
       if (!res.ok) return null;
       const model: NNModelFile = await res.json();
       console.log(`[nn] model loaded — ${model.meta?.trained_on ?? "unknown"} (oos brier ${model.meta?.oos_2024?.brier})`);

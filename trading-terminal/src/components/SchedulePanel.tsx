@@ -11,7 +11,36 @@ import TradeTicket, { type TicketTarget } from "@/components/TradeTicket";
 import { usePolymarket } from "@/hooks/usePolymarket";
 import { fixtureKey } from "@/lib/polymarket";
 
-export type PanelTier = "public" | "free" | "pro";
+export type PanelTier = "public" | "free" | "pro" | "preview";
+
+/**
+ * Blur a pro-only block instead of hiding it.
+ *
+ * Hiding the signals told a visitor nothing about what they were missing;
+ * showing the shape of the answer behind frosted glass is the actual pitch.
+ * `inert` + pointer-events:none so nothing behind the blur is readable by
+ * copy/paste, screen reader or devtools-free inspection — the numbers are
+ * still in the DOM, which is a deliberate trade: this is a teaser, not a
+ * security boundary, and the paid product is the live re-pricing feed.
+ */
+function Locked({ on, onUpgrade, children }: {
+  on: boolean; onUpgrade?: () => void; children: React.ReactNode;
+}) {
+  if (!on) return <>{children}</>;
+  return (
+    <div className="relative">
+      <div className="pointer-events-none select-none blur-[5px] opacity-70" aria-hidden="true">
+        {children}
+      </div>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <button onClick={onUpgrade}
+          className="px-3 py-1.5 rounded bg-terminal-green text-black text-[10px] font-bold shadow-lg hover:opacity-90 transition">
+          🔒 UNLOCK SIGNALS
+        </button>
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   onSelectMatch?: (match: ScheduledMatch) => void;
@@ -267,6 +296,9 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
   match: ScheduledMatch; tier?: PanelTier; onUpgrade?: () => void;
 }) {
   const pro = tier === "pro";
+  // "preview" renders the whole panel and frosts the actionable half.
+  const preview = tier === "preview";
+  const showPro = pro || preview;
   const bookOdds = m.liveScore?.bookmakerOdds || m.prematchOdds;
   const liveTrueP = m.liveScore?.trueProbabilities;
   // ── True P: prefer the live, score-conditioned, tour-aware Markov number;
@@ -372,12 +404,12 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
         <div className="text-[9px] text-terminal-muted mt-1 text-center">
           Method: {probSource} · Fair odds: {probToOdds(p1Prob).toFixed(2)} / {probToOdds(p2Prob).toFixed(2)}
           {bookOdds && <span className="text-terminal-yellow"> · Book: {bookOdds.p1.toFixed(2)} / {bookOdds.p2.toFixed(2)}</span>}
-          {m.p1_rank > 0 && m.p2_rank > 0 && ` · Rank #{m.p1_rank} vs #${m.p2_rank}`}
+          {m.p1_rank > 0 && m.p2_rank > 0 && ` · Rank #${m.p1_rank} vs #${m.p2_rank}`}
         </div>
       </Section>
 
       {/* ═══ PRO-ONLY: edge, Kelly, live signals ═══ */}
-      {!pro && (
+      {!showPro && (
         <div className="border border-terminal-green/30 bg-terminal-green/5 rounded p-3 text-center space-y-1.5">
           <div className="text-sm">🔒</div>
           <div className="text-[10px] font-bold text-terminal-green">EDGE vs BOOKMAKER · KELLY STAKES · LIVE SIGNALS · HEDGE TIMING</div>
@@ -390,7 +422,8 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
       )}
 
       {/* Odds input + edge calculator */}
-      {pro && (
+      {showPro && (
+      <Locked on={preview} onUpgrade={onUpgrade}>
       <Section title="BOOKMAKER ODDS & EDGE">
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div>
@@ -416,18 +449,22 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
           <KV label="Margin" value={`${(vig * 100).toFixed(1)}%`} />
         </div>
       </Section>
+      </Locked>
       )}
 
       {/* Value bet signals */}
-      {pro && (
+      {showPro && (
+      <Locked on={preview} onUpgrade={onUpgrade}>
       <Section title="VALUE BET SIGNALS">
         <ValueSignal label={`${m.player1} ML`} edge={edge1} odds={odds1} prob={p1Prob} />
         <ValueSignal label={`${m.player2} ML`} edge={edge2} odds={odds2} prob={p2Prob} />
       </Section>
+      </Locked>
       )}
 
       {/* Kelly staking */}
-      {pro && (
+      {showPro && (
+      <Locked on={preview} onUpgrade={onUpgrade}>
       <Section title="KELLY STAKING">
         <div className="mb-2">
           <label className="text-[9px] text-terminal-muted block mb-0.5">Bankroll ($)</label>
@@ -477,6 +514,7 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
           </div>
         )}
       </Section>
+      </Locked>
       )}
 
       {/* Match context */}

@@ -141,7 +141,7 @@ function loadRankings(): Promise<RankMap> {
   _rankingsPromise = (async () => {
     const map: RankMap = new Map();
     try {
-      const res = await fetch("/rankings.json");
+      const res = await fetch(apiUrl("/rankings.json"));
       if (!res.ok) return map;
       const data: RankingsFile = await res.json();
       for (const [name, entry] of Object.entries(data.atp)) {
@@ -178,6 +178,21 @@ function lookupRank(nameMap: RankMap, displayName: string): number {
 }
 
 // ─── ESPN ────────────────────────────────────────────────────────────────────
+
+/**
+ * Base for every API call this module makes.
+ *
+ * Empty in the browser, where relative URLs resolve against the page. A build
+ * script has no origin to resolve against, so it sets an absolute base and gets
+ * the identical code path — the alternative was reimplementing the SofaScore
+ * mapping and the probability model in a second language, which would drift
+ * from this one the first time either changed.
+ */
+let API_BASE = "";
+export function setApiBase(base: string): void {
+  API_BASE = base.replace(/\/$/, "");
+}
+export const apiUrl = (path: string): string => `${API_BASE}${path}`;
 
 // Same-origin proxy, NOT site.api.espn.com directly. ESPN answers
 // browser-shaped requests with 403, and a 403 carries no CORS headers, so the
@@ -222,7 +237,7 @@ async function fetchESPN(
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout
-    const res = await fetch(`${ESPN}/${tour}/scoreboard?dates=${espnDate}`, { signal: controller.signal });
+    const res = await fetch(apiUrl(`${ESPN}/${tour}/scoreboard?dates=${espnDate}`), { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return [];
     const data = await res.json();
@@ -682,7 +697,7 @@ async function fetchSofaDailyOdds(targetDate: string): Promise<Map<number, OddsP
     const warmed = takePrefetched(oddsUrl);
     const res = warmed
       ? new Response(JSON.stringify((await warmed) ?? {}), { status: 200 })
-      : await fetch(oddsUrl, { signal: controller.signal });
+      : await fetch(apiUrl(oddsUrl), { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return cached?.data ?? map;
     const json = await res.json();
@@ -753,7 +768,7 @@ async function fetchSofaEndpoint(url: string): Promise<{ events: unknown[]; ok: 
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45_000); // 45s timeout
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(apiUrl(url), { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return { events: [], ok: false };
     const json = await res.json();
@@ -1224,7 +1239,7 @@ async function fetchGameLog(sofaId: number, sofaHomeIsP1: boolean) {
   const hit = _pbpCache.get(sofaId);
   if (hit && Date.now() - hit.ts < PBP_TTL) return hit.games;
   try {
-    const res = await fetch(`/api/sofa/event/${sofaId}/point-by-point`);
+    const res = await fetch(apiUrl(`/api/sofa/event/${sofaId}/point-by-point`));
     if (!res.ok) return hit?.games ?? [];
     const json = await res.json();
     const games = parseGameLog(json, sofaHomeIsP1);
@@ -1271,7 +1286,7 @@ async function fetchSofaLive(): Promise<SofaLiveEvent[]> {
 /** Fetch match statistics from SofaScore */
 export async function fetchSofaStats(sofaId: number): Promise<LiveMatchStats | null> {
   try {
-    const res = await fetch(`/api/sofa/event/${sofaId}/statistics`);
+    const res = await fetch(apiUrl(`/api/sofa/event/${sofaId}/statistics`));
     if (!res.ok) return null;
     const json = await res.json();
     // Statistics are grouped by period — use "ALL" or the last group
@@ -1351,7 +1366,7 @@ async function fetchSofaOdds(sofaId: number): Promise<OddsPair | null> {
   const cached = _sofaEventOddsCache.get(sofaId);
   if (cached && Date.now() - cached.ts < SOFA_EVENT_ODDS_TTL) return cached.data;
   try {
-    const res = await fetch(`/api/sofa/event/${sofaId}/odds/1/all`);
+    const res = await fetch(apiUrl(`/api/sofa/event/${sofaId}/odds/1/all`));
     if (!res.ok) return null;
     const json = await res.json();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
