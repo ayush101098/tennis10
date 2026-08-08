@@ -3,6 +3,7 @@ import "./globals.css";
 import { TierProvider } from "@/lib/auth";
 import Analytics from "@/components/Analytics";
 import Prefetch from "@/components/Prefetch";
+import { GOOGLE_SITE_VERIFICATION, BING_SITE_VERIFICATION } from "@/lib/brand";
 import PageviewTracker from "@/components/PageviewTracker";
 
 // The canonical home. Set NEXT_PUBLIC_SITE_URL in the Netlify env to move it
@@ -25,6 +26,11 @@ export const metadata: Metadata = {
     siteName: "Tennis Alpha",
     title: "Tennis Alpha",
     description: DESCRIPTION,
+  },
+  // Only emitted once a token is set — see lib/brand.ts.
+  verification: {
+    ...(GOOGLE_SITE_VERIFICATION ? { google: GOOGLE_SITE_VERIFICATION } : {}),
+    ...(BING_SITE_VERIFICATION ? { other: { "msvalidate.01": BING_SITE_VERIFICATION } } : {}),
   },
   twitter: {
     card: "summary_large_image",
