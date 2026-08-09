@@ -8,7 +8,7 @@ import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
 import { SoftwareApplicationLd } from "@/components/JsonLd";
 import { LEGAL_NAME } from "@/lib/brand";
-import { fetchScheduleClient, refreshLiveMatches } from "@/lib/scheduleService";
+import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
@@ -60,7 +60,11 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
     const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 } as const;
     return [...data.today]
       .filter(m => m.status === "live" || m.status === "scheduled")
-      .sort((a, b) => (order[a.status] - order[b.status]) || (a.start_timestamp - b.start_timestamp));
+      // live, then tour tier, then time — see tourRank
+      .sort((a, b) =>
+        (order[a.status] - order[b.status]) ||
+        (tourRank(a.tour) - tourRank(b.tour)) ||
+        (a.start_timestamp - b.start_timestamp));
   }, [data]);
 
   const liveCount = matches.filter(m => m.status === "live").length;
@@ -170,7 +174,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
               {!data && initialMatches.length === 0 && (
                 <div className="p-8 text-center text-terminal-muted text-xs animate-pulse">Loading live schedule…</div>
               )}
-              {matches.slice(0, 120).map(m => (
+              {matches.slice(0, 250).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
                   freeSlot={false}
                   showProb

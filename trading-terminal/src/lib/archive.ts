@@ -57,19 +57,30 @@ export async function matchesForDay(day: string): Promise<ArchivedMatch[]> {
   }
 }
 
+/** Tour tier, duplicated from scheduleService — this module must stay
+ *  server-only and importing the client module here would drag it along. */
+function tier(tour: string): number {
+  const t = (tour || "").toUpperCase();
+  if (t.startsWith("ATP") || t.startsWith("WTA")) return 0;
+  if (t.includes("CHALLENGER") || t.includes("W125")) return 1;
+  return 2;
+}
+
 /**
  * The board's opening state, rendered into the HTML at build time.
  *
- * Ordered the way the live board orders it so hydration replaces like with
- * like. Finished matches are dropped: a static build can be hours old and
- * listing yesterday's completed matches as "today" would be wrong on the page
- * and wrong in the index.
+ * Ordered the way the live board orders it — tour tier before start time — so
+ * hydration replaces like with like AND the indexed markup leads with the
+ * matches people actually search for, rather than whichever ITF W15 happens to
+ * start earliest. Finished matches are dropped: a static build can be hours
+ * old, and listing completed matches as "today" would be wrong on the page and
+ * wrong in the index.
  */
-export async function todaysBoard(limit = 60): Promise<ArchivedMatch[]> {
+export async function todaysBoard(limit = 80): Promise<ArchivedMatch[]> {
   const day = localDate();
   const all = await matchesForDay(day);
   return all
     .filter(m => m.status !== "finished" && m.status !== "cancelled")
-    .sort((a, b) => a.startTs - b.startTs)
+    .sort((a, b) => tier(a.tour) - tier(b.tour) || a.startTs - b.startTs)
     .slice(0, limit);
 }

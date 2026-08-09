@@ -869,6 +869,22 @@ export function qualifies(edge: number, kelly: number): boolean {
   return edge >= EDGE_FLOOR && kelly > 0;
 }
 
+/**
+ * Billing order for the board: which matches a reader wants to see first.
+ *
+ * Sorting purely by start time buried the tour-level matches. On a normal day
+ * ITF and Challenger outnumber ATP/WTA roughly forty to one, and the ATP
+ * evening sessions start late — so on a list capped at 120 rows, the Masters
+ * fixtures everyone came for fell past the cut entirely while eight ITF W15
+ * matches sat at the top. Live always wins; after that, tour tier; then time.
+ */
+export function tourRank(tour: string): number {
+  const t = (tour || "").toUpperCase();
+  if (t.startsWith("ATP") || t.startsWith("WTA")) return 0;
+  if (t.includes("CHALLENGER") || t.includes("W125")) return 1;
+  return 2;   // ITF and anything unrecognised
+}
+
 export function kellyFraction(trueProb: number, odds: number): number {
   const b = odds - 1;
   if (b <= 0) return 0;
