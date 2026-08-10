@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth";
 import { serverVerifyPayment } from "@/lib/entitlement";
 import QrCode from "@/components/QrCode";
+import GoogleSignIn, { GOOGLE_ENABLED } from "@/components/GoogleSignIn";
 import { PLANS, planById, type Plan } from "@/lib/plans";
 import { TRIAL_DAYS } from "@/lib/auth";
 import { X_URL, TELEGRAM_URL } from "@/lib/brand";
@@ -50,9 +51,17 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     if (!open) return;
     const onChanged = () => {
       if (!subActive(loadSession())) return;
-      setMsg({ ok: true, text: `Free trial active — ${TRIAL_DAYS} days of the full terminal.` });
+      setMsg({ ok: true, text: "Access granted — opening the terminal…" });
       refresh();
-      setTimeout(() => { onDone?.(); onClose(); }, 1600);
+      setTimeout(() => {
+        onDone?.();
+        onClose();
+        // Straight into the product. Signing up on the landing page and being
+        // left on the landing page is where most people give up.
+        if (typeof window !== "undefined" && !window.location.pathname.startsWith("/terminal")) {
+          window.location.href = "/terminal";
+        }
+      }, 1200);
     };
     window.addEventListener("tt-session-changed", onChanged);
     return () => window.removeEventListener("tt-session-changed", onChanged);
@@ -132,9 +141,12 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     }
   };
 
-  const startFree = () => {
-    if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
-    const s = signIn(email);
+  /**
+   * Start a session from a proven or typed email. Shared by both paths so the
+   * Google flow and the email flow cannot drift apart.
+   */
+  const beginSession = (addr: string) => {
+    const s = signIn(addr);
     refresh();
     // The trial is granted server-side, so at this instant the tier is still
     // "free" — the session upgrades a beat later when recordLogin's response
@@ -144,6 +156,11 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
       : `Account created — starting your ${TRIAL_DAYS}-day free trial…` });
     if (s.isAdmin || s.tier === "pro") { onDone?.(); onClose(); }
     else onDone?.();
+  };
+
+  const startFree = () => {
+    if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
+    beginSession(email);
   };
 
   const startPro = () => {
@@ -189,13 +206,37 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
 
         {step === "plans" ? (
           <div className="p-5">
-            {/* Email */}
+            {/* ── Sign in ──
+                Google first because it is one tap and the address is proven;
+                email stays because a Google account is not a requirement to
+                buy something. Both land in the same place. */}
+            {GOOGLE_ENABLED && (
+              <div className="mb-4">
+                <GoogleSignIn
+                  onEmail={(addr) => beginSession(addr)}
+                  onError={(reason) => setMsg({ ok: false, text: reason })}
+                />
+                <div className="flex items-center gap-3 mt-3">
+                  <div className="flex-1 h-px bg-terminal-border" />
+                  <span className="text-[9px] text-terminal-muted">OR USE EMAIL</span>
+                  <div className="flex-1 h-px bg-terminal-border" />
+                </div>
+              </div>
+            )}
+
             <label className="block text-[11px] text-terminal-muted mb-1">Your email</label>
             <input
               type="email" value={email} onChange={e => setEmail(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && validEmail) startFree(); }}
               placeholder="you@example.com"
-              className="w-full mb-4 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-sm text-slate-200 focus:border-terminal-cyan outline-none"
+              className="w-full mb-2 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-sm text-slate-200 focus:border-terminal-cyan outline-none"
             />
+            {/* The trial is the primary action — a plan chooser is the wrong
+                first ask for someone who has not seen the product work. */}
+            <button onClick={startFree} disabled={!validEmail}
+              className="w-full min-h-[44px] mb-4 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 disabled:opacity-40 transition">
+              START MY {TRIAL_DAYS}-DAY FREE TRIAL →
+            </button>
 
             {/* Plans */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

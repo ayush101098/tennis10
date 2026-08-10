@@ -67,6 +67,14 @@
   status = 200
   force = true
 
+# Google Sign-In: verifies the ID token server-side (a client-side check would
+# be worthless — anyone can post any email).
+[[redirects]]
+  from = "/api/google-auth"
+  to = "/.netlify/functions/google-auth"
+  status = 200
+  force = true
+
 # Account database — logins, payments and grants in one store
 [[redirects]]
   from = "/api/account"
