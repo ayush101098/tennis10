@@ -26,7 +26,19 @@ JOBS=(
   "tt-live|$REPO|$PYTHON -m tabletennis.live"
   "tt-push|$REPO|$PYTHON -m tabletennis.push"
   "tt-refresh|$REPO|$PYTHON -m tabletennis.refresh"
+  # Not a daemon: a periodic job (see INTERVALS below). Keeps the match archive
+  # — the source for the server-rendered board — from going stale.
+  "archive|$REPO|/bin/bash $REPO/deploy/launchd/refresh-archive.sh"
 )
+
+# Jobs that run on a timer instead of staying resident, in seconds. A case
+# rather than an associative array: macOS still ships bash 3.2, which has none.
+interval_for() {
+  case "$1" in
+    archive) echo 10800 ;;    # every 3h
+    *)       echo "" ;;
+  esac
+}
 
 uninstall() {
   for job in "${JOBS[@]}"; do
@@ -54,6 +66,15 @@ for job in "${JOBS[@]}"; do
   for tok in $cmd; do args="$args
     <string>$tok</string>"; done
 
+  # A resident daemon is kept alive; a periodic job runs on an interval and is
+  # expected to exit. KeepAlive on a job that exits would spin it forever.
+  every="$(interval_for "$name")"
+  if [ -n "$every" ]; then
+    SCHEDULE="  <key>StartInterval</key><integer>$every</integer>"
+  else
+    SCHEDULE="  <key>KeepAlive</key><true/>"
+  fi
+
   cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,7 +87,7 @@ for job in "${JOBS[@]}"; do
   <key>WorkingDirectory</key><string>$workdir</string>
   <!-- come back after a reboot, and after a crash -->
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+$SCHEDULE
   <!-- do not hammer on a tight crash loop -->
   <key>ThrottleInterval</key><integer>30</integer>
   <key>StandardOutPath</key><string>$LOGS/$name.log</string>
