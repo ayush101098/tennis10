@@ -135,11 +135,15 @@ export function loadSession(): Session | null {
 }
 
 function saveSession(s: Session | null): void {
+  // Once the seat is gone, nothing may write a session back except a fresh
+  // sign-in (which clears the flag first).
+  if (s && seatLost) return;
   if (s) localStorage.setItem(LS_KEY, JSON.stringify(s));
   else localStorage.removeItem(LS_KEY);
 }
 
 export function signIn(email: string): Session {
+  seatLost = false;   // signing in claims the seat for this device
   const e = normEmail(email);
   const isAdmin = ADMIN_EMAILS.has(e);
   const prev = loadSession();
@@ -158,12 +162,56 @@ export function signIn(email: string): Session {
   saveSession(s);
   // Remembered separately so a redirect-based payment return (PayPal) can still
   // identify the payer even if the session was cleared while they were away.
-  try { localStorage.setItem("tt_last_email", e); } catch { /* non-critical */ }
+  try {
+    localStorage.setItem("tt_last_email", e);
+    // A fresh sign-in resolves any previous eviction notice.
+    localStorage.removeItem("tt_evicted");
+  } catch { /* non-critical */ }
   // Record the login in the account database (fire-and-forget: sign-in must
   // never block on it). Without this, logins existed only in this browser's
   // localStorage and there was no way to see who was actually using the app.
   recordLogin(e);
   return s;
+}
+
+/* ── one email, one device ─────────────────────────────────────────────────
+ *
+ * A subscription is per person, not per address book. The seat is bound to a
+ * device id generated here and held server-side; signing in somewhere else
+ * takes the seat and the previous device is signed out on its next check.
+ *
+ * Last-device-wins rather than refusing the new one: someone who changes phone
+ * or clears their browser must not be locked out of what they paid for. The
+ * deterrent against sharing is that the two devices evict each other, not a
+ * wall the paying customer hits first.
+ *
+ * This is enforcement, not security — the id lives in localStorage and can be
+ * copied. It stops casual password-sharing, which is what it is for.
+ */
+const DEVICE_KEY = "tt_device_v1";
+
+/**
+ * Set the moment this device is found to have lost the seat.
+ *
+ * syncEntitlement() runs concurrently on load and ends by writing the session
+ * back; without this flag it resurrected the session milliseconds after the
+ * device check signed it out, and the eviction silently did nothing. Any
+ * explicit sign-in clears it.
+ */
+let seatLost = false;
+
+export function deviceId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      localStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
 }
 
 /** Tell the account DB this email just signed in. Never throws. */
@@ -172,10 +220,30 @@ export function recordLogin(email: string, source?: string): void {
     void fetch("/api/account", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: normEmail(email), source }),
+      body: JSON.stringify({ email: normEmail(email), source, deviceId: deviceId() }),
       keepalive: true,
     }).catch(() => {});
   } catch { /* never block sign-in */ }
+}
+
+/**
+ * Does this device still hold the seat for this email?
+ *
+ * Returns true on any network or server failure — an outage must not sign
+ * paying customers out. Only an explicit `deviceOk: false` evicts.
+ */
+export async function deviceStillValid(email: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `/api/account?email=${encodeURIComponent(normEmail(email))}&deviceId=${encodeURIComponent(deviceId())}`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return true;
+    const data = await res.json();
+    return data.deviceOk !== false;
+  } catch {
+    return true;
+  }
 }
 
 export function signOut(): void {
@@ -401,10 +469,32 @@ export function TierProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const refresh = () => setSession(loadSession());
   useEffect(() => {
-    setSession(loadSession());
+    const s0 = loadSession();
+    setSession(s0);
     // Server is authoritative — reconcile on load so a spoofed localStorage
     // entitlement is corrected before the terminal renders as unlocked.
     syncEntitlement().then((s) => s && setSession(s)).catch(() => {});
+
+    // One email, one device. Checked on load and every 2 minutes, so a seat
+    // taken elsewhere ends this session rather than running both in parallel.
+    // Only an explicit rejection signs anyone out — see deviceStillValid.
+    let stop = false;
+    const check = async () => {
+      const cur = loadSession();
+      if (!cur?.email || stop) return;
+      if (await deviceStillValid(cur.email)) return;
+      seatLost = true;
+      signOut();
+      if (!stop) {
+        setSession(null);
+        try {
+          localStorage.setItem("tt_evicted", "1");
+        } catch { /* the banner is a nicety, the sign-out is the point */ }
+      }
+    };
+    check();
+    const iv = setInterval(check, 120_000);
+    return () => { stop = true; clearInterval(iv); };
   }, []);
   const tier: Tier = session ? session.tier : "public";
   return <TierContext.Provider value={{ session, tier, refresh }}>{children}</TierContext.Provider>;

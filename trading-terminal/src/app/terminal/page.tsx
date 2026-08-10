@@ -67,6 +67,15 @@ export default function TerminalPage() {
   // The server asks Stripe directly, so this does not wait on the webhook —
   // a customer who has just paid must never land back on a paywall.
   const [checkoutMsg, setCheckoutMsg] = useState<string | null>(null);
+  // Set by TierProvider when this device lost the seat to another sign-in.
+  // Being silently signed out reads like a bug; say what happened.
+  const [evicted, setEvicted] = useState(false);
+  useEffect(() => {
+    const read = () => { try { if (localStorage.getItem("tt_evicted")) setEvicted(true); } catch {} };
+    read();
+    const iv = setInterval(read, 5000);
+    return () => clearInterval(iv);
+  }, []);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get("checkout") !== "success") return;
@@ -190,6 +199,17 @@ export default function TerminalPage() {
           )}
         </div>
       </header>
+
+      {evicted && (
+        <div className="px-4 py-1.5 text-[11px] font-bold text-center bg-terminal-yellow/15 text-terminal-yellow border-b border-terminal-yellow/40 shrink-0">
+          Signed out — this account was opened on another device. One subscription covers one device.
+          <button
+            onClick={() => { try { localStorage.removeItem("tt_evicted"); } catch {} setEvicted(false); setPricingOpen(true); }}
+            className="ml-2 underline hover:opacity-80">
+            sign back in
+          </button>
+        </div>
+      )}
 
       {checkoutMsg && (
         <div className="px-4 py-1.5 text-[11px] font-bold text-center bg-terminal-green/15 text-terminal-green border-b border-terminal-green/40 shrink-0">

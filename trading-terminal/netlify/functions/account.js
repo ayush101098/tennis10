@@ -130,6 +130,8 @@ function summarize(db, now) {
     totalPaidUsd: a.payments.reduce((s, p) => s + (p.amountUsd || 0), 0),
     payments: a.payments.length,
     grants: a.grants.length,
+    // repeated device changes on a paid account = a shared password
+    deviceChanges: a.deviceChanges || 0,
     // unverified claims awaiting manual confirmation
     pending: (a.claims || []).filter((c) => c.status === "pending"),
   }));
@@ -156,8 +158,13 @@ exports.handler = async (event) => {
     const db = await load(s);
     if (email) {
       if (!EMAIL_RE.test(email)) return reply(400, { error: "email required" });
-      const paidUntil = (db[email] || {}).paidUntil || 0;
-      return reply(200, { active: paidUntil > now, paidUntil });
+      const acct = db[email] || {};
+      const paidUntil = acct.paidUntil || 0;
+      const deviceId = String((event.queryStringParameters || {}).deviceId || "").slice(0, 64);
+      // deviceOk is true when no device is bound yet, so an account that
+      // predates this feature is never locked out of its own seat.
+      const deviceOk = !deviceId || !acct.deviceId || acct.deviceId === deviceId;
+      return reply(200, { active: paidUntil > now, paidUntil, deviceOk });
     }
     const token = process.env.LEADS_ADMIN_TOKEN;
     const hdr = event.headers["x-admin-token"] || event.headers["X-Admin-Token"];
@@ -233,8 +240,26 @@ exports.handler = async (event) => {
     return reply(200, { ok: true, email, paidUntil: db[email].paidUntil });
   }
 
-  // login
+  // ── login, and the single-device binding ──
+  //
+  // One email, one device. Enforced LAST-DEVICE-WINS rather than by refusing
+  // the new one: a customer who changes phone, clears storage or opens a
+  // private window must never be locked out of something they paid for, and a
+  // hard refusal turns every such case into a support ticket. Signing in
+  // elsewhere silently evicts the previous device instead — the shared-password
+  // case becomes two people fighting over one session, which is the deterrent.
   if (!db[email]) db[email] = blank(email, now);
+  const deviceId = String(body.deviceId || "").slice(0, 64);
+  let evicted = false;
+  if (deviceId) {
+    if (db[email].deviceId && db[email].deviceId !== deviceId) {
+      evicted = true;
+      db[email].deviceChangedAt = now;
+      db[email].deviceChanges = (db[email].deviceChanges || 0) + 1;
+    }
+    db[email].deviceId = deviceId;
+    db[email].deviceSeenAt = now;
+  }
   db[email].lastLogin = now;
   db[email].loginCount += 1;
   if (body.source && !db[email].source) db[email].source = String(body.source);
@@ -244,5 +269,7 @@ exports.handler = async (event) => {
     ok: true, email,
     active: db[email].paidUntil > now,
     paidUntil: db[email].paidUntil,
+    // true when this sign-in took the seat from another device
+    evicted,
   });
 };
