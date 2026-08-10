@@ -128,23 +128,6 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           <TrialBanner onStart={() => setPricingOpen(true)} />
         </div>
 
-        {/* Capture, in the hero — most visitors never reach the foot of the
-            page, so the one at the bottom was collecting from a small slice of
-            traffic. This is the same component and the same endpoint. */}
-        <div className="mt-7 max-w-md mx-auto">
-          <div className="rounded-lg border border-terminal-green/30 bg-terminal-green/[0.06] p-3.5">
-            <p className="text-[11px] font-bold text-slate-100 mb-2">
-              Get early access — and the signals worth acting on
-            </p>
-            <div className="flex justify-center">
-              <EmailCapture source="landing-hero" cta="Keep me posted" />
-            </div>
-            <p className="text-[9px] text-terminal-muted mt-2">
-              Your address, nothing else. Unsubscribe whenever.
-            </p>
-          </div>
-        </div>
-
         {/* Stat chips */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-2 text-[10px]">
           <Chip label={`${matches.length || "—"} matches today`} />
