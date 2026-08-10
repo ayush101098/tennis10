@@ -6,6 +6,7 @@ import Wordmark from "@/components/Wordmark";
 import SchedulePanel from "@/components/SchedulePanel";
 import BetTracker from "@/components/BetTracker";
 import PricingModal from "@/components/PricingModal";
+import TrialBanner from "@/components/TrialBanner";
 import LiveUsers from "@/components/LiveUsers";
 import { TtMatchCentre, TtBetTracker } from "@/components/TtPanel";
 import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
@@ -210,6 +211,14 @@ export default function TerminalPage() {
           </button>
         </div>
       )}
+
+      {/* Rendered unconditionally: TrialBanner decides for itself — offer,
+          countdown, or nothing for a real subscriber. Gating it on !paid hid
+          the countdown from the trial users it exists for, since a trial IS
+          paid access as far as the tier logic is concerned. */}
+      <div className="px-3 py-2 border-b border-terminal-border shrink-0 empty:hidden">
+        <TrialBanner onStart={() => setPricingOpen(true)} />
+      </div>
 
       {checkoutMsg && (
         <div className="px-4 py-1.5 text-[11px] font-bold text-center bg-terminal-green/15 text-terminal-green border-b border-terminal-green/40 shrink-0">

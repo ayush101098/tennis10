@@ -44,6 +44,7 @@ export const PAYPAL_ME_URL = "https://paypal.me/jessefuture10";
 export const PAYPAL_ID = "paypal.me/jessefuture10";
 export const SUBSCRIPTION_DAYS = 30;          // access window per payment
 export const MIN_PAYMENT_USD = 100;           // payments below this are rejected
+export const TRIAL_DAYS = 2;                  // free trial granted on first sign-up
 export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription
 
 // Stablecoins we can price 1:1 for the payment-amount guardrail (mainnet).
@@ -214,15 +215,35 @@ export function deviceId(): string {
   }
 }
 
-/** Tell the account DB this email just signed in. Never throws. */
+/**
+ * Tell the account DB this email just signed in. Never throws.
+ *
+ * The response carries any trial the server just granted, so a new account
+ * becomes pro immediately rather than on the next page load — a signup that
+ * says "2 days free" and then shows a locked terminal is the worst possible
+ * first impression.
+ */
 export function recordLogin(email: string, source?: string): void {
   try {
     void fetch("/api/account", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: normEmail(email), source, deviceId: deviceId() }),
-      keepalive: true,
-    }).catch(() => {});
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!data?.paidUntil) return;
+        const cur = loadSession();
+        if (!cur || normEmail(cur.email) !== normEmail(email)) return;
+        const up: Session = { ...cur, paidUntil: data.paidUntil };
+        up.tier = subActive(up) ? "pro" : "free";
+        saveSession(up);
+        if (data.trialGranted) {
+          try { localStorage.setItem("tt_trial_started", String(Date.now())); } catch { /* cosmetic */ }
+        }
+        window.dispatchEvent(new Event("tt-session-changed"));
+      })
+      .catch(() => {});
   } catch { /* never block sign-in */ }
 }
 
@@ -494,7 +515,17 @@ export function TierProvider({ children }: { children: ReactNode }) {
     };
     check();
     const iv = setInterval(check, 120_000);
-    return () => { stop = true; clearInterval(iv); };
+
+    // recordLogin fires this once the server has answered — that is when a
+    // freshly granted trial becomes visible.
+    const onChanged = () => setSession(loadSession());
+    window.addEventListener("tt-session-changed", onChanged);
+
+    return () => {
+      stop = true;
+      clearInterval(iv);
+      window.removeEventListener("tt-session-changed", onChanged);
+    };
   }, []);
   const tier: Tier = session ? session.tier : "public";
   return <TierContext.Provider value={{ session, tier, refresh }}>{children}</TierContext.Provider>;

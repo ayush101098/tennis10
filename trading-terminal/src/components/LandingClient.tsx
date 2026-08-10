@@ -6,6 +6,7 @@ import SsrMatchList from "@/components/SsrMatchList";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import TrialBanner from "@/components/TrialBanner";
 import { SoftwareApplicationLd } from "@/components/JsonLd";
 import { LEGAL_NAME } from "@/lib/brand";
 import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/scheduleService";
@@ -123,6 +124,10 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
             SEE TODAY&apos;S MATCHES ↓
           </a>
         </div>
+        <div className="mt-6 max-w-[560px] mx-auto">
+          <TrialBanner onStart={() => setPricingOpen(true)} />
+        </div>
+
         {/* Capture, in the hero — most visitors never reach the foot of the
             page, so the one at the bottom was collecting from a small slice of
             traffic. This is the same component and the same endpoint. */}

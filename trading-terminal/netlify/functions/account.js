@@ -18,6 +18,8 @@ const { daysForAmount } = require("./_plans");
 
 const STORE = "accounts";
 const KEY = "byEmail";
+const TRIALS_KEY = "trialsByDevice";   // deviceId -> { email, ts }
+const TRIAL_DAYS = 2;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAY = 86400000;
 
@@ -132,6 +134,7 @@ function summarize(db, now) {
     grants: a.grants.length,
     // repeated device changes on a paid account = a shared password
     deviceChanges: a.deviceChanges || 0,
+    onTrial: !!a.trialStartedAt && a.payments.length === 0 && a.paidUntil > now,
     // unverified claims awaiting manual confirmation
     pending: (a.claims || []).filter((c) => c.status === "pending"),
   }));
@@ -240,6 +243,36 @@ exports.handler = async (event) => {
     return reply(200, { ok: true, email, paidUntil: db[email].paidUntil });
   }
 
+  // ── free trial ──
+  //
+  // Two days of full access, granted once on the first sign-in of a new
+  // account. Recorded as an ordinary grant so expiry, /admin and the tier
+  // logic all treat it like any other — nothing downstream needs to know a
+  // trial is special.
+  //
+  // Gated on the DEVICE, not just the email: an email costs nothing to invent,
+  // so email-only gating is an unlimited free product. One device, one trial,
+  // ever. Someone determined can still clear storage — this is the same
+  // deterrent trade-off as the single-device seat, not a wall.
+  async function maybeGrantTrial(acct, device) {
+    if (acct.trialStartedAt) return false;            // already had one
+    if (acct.payments.length || acct.grants.length) return false;  // paying or comped
+    if (!device) return false;                        // no device id, no trial
+    let trials = {};
+    try { trials = (await s.get(TRIALS_KEY, { type: "json" })) || {}; } catch { /* fall through */ }
+    if (trials[device]) return false;                 // this device already used its trial
+    acct.trialStartedAt = now;
+    acct.grants.push({
+      until: now + TRIAL_DAYS * DAY,
+      reason: `${TRIAL_DAYS}-day free trial`,
+      by: "system",
+      ts: now,
+    });
+    trials[device] = { email: acct.email, ts: now };
+    try { await s.setJSON(TRIALS_KEY, trials); } catch { /* best effort */ }
+    return true;
+  }
+
   // ── login, and the single-device binding ──
   //
   // One email, one device. Enforced LAST-DEVICE-WINS rather than by refusing
@@ -263,6 +296,9 @@ exports.handler = async (event) => {
   db[email].lastLogin = now;
   db[email].loginCount += 1;
   if (body.source && !db[email].source) db[email].source = String(body.source);
+
+  const trialGranted = s ? await maybeGrantTrial(db[email], deviceId) : false;
+
   db[email].paidUntil = recompute(db[email]);
   await save(s, db);
   return reply(200, {
@@ -271,5 +307,8 @@ exports.handler = async (event) => {
     paidUntil: db[email].paidUntil,
     // true when this sign-in took the seat from another device
     evicted,
+    trialGranted,
+    trialDays: TRIAL_DAYS,
+    onTrial: !!db[email].trialStartedAt && !db[email].payments.length,
   });
 };

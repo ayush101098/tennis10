@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   PAYMENT_ADDRESS, PAYPAL_ME_URL, PAYPAL_ID,
-  signIn, grantPro, useTier,
+  signIn, grantPro, useTier, subActive, loadSession,
 } from "@/lib/auth";
 import { serverVerifyPayment } from "@/lib/entitlement";
 import QrCode from "@/components/QrCode";
 import { PLANS, planById, type Plan } from "@/lib/plans";
+import { TRIAL_DAYS } from "@/lib/auth";
 import { X_URL, TELEGRAM_URL } from "@/lib/brand";
 
 interface Props {
@@ -37,6 +38,25 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   // being a message the customer scrolls past.
   const [claimed, setClaimed] = useState(false);
   const plan = planById(planId);
+
+  /**
+   * Close once the trial (or a subscription) actually unlocks.
+   *
+   * recordLogin fires tt-session-changed when the server answers; leaving the
+   * modal up after that would show a plan chooser to someone who already has
+   * full access.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const onChanged = () => {
+      if (!subActive(loadSession())) return;
+      setMsg({ ok: true, text: `Free trial active — ${TRIAL_DAYS} days of the full terminal.` });
+      refresh();
+      setTimeout(() => { onDone?.(); onClose(); }, 1600);
+    };
+    window.addEventListener("tt-session-changed", onChanged);
+    return () => window.removeEventListener("tt-session-changed", onChanged);
+  }, [open, onClose, onDone, refresh]);
 
   if (!open) return null;
 
@@ -116,9 +136,12 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
     const s = signIn(email);
     refresh();
+    // The trial is granted server-side, so at this instant the tier is still
+    // "free" — the session upgrades a beat later when recordLogin's response
+    // lands. Promise the trial now and let the effect below close the modal.
     setMsg({ ok: true, text: s.isAdmin ? "Welcome back, admin — full access enabled."
       : s.tier === "pro" ? "Subscription active — full terminal unlocked."
-      : `Account created. Pick a plan below to open the terminal.` });
+      : `Account created — starting your ${TRIAL_DAYS}-day free trial…` });
     if (s.isAdmin || s.tier === "pro") { onDone?.(); onClose(); }
     else onDone?.();
   };
@@ -179,7 +202,10 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               {/* FREE ACCOUNT (no terminal) */}
               <div className="border border-terminal-border rounded-lg p-4 flex flex-col">
                 <div className="text-slate-200 font-bold text-sm mb-1">FREE ACCOUNT</div>
-                <div className="text-2xl font-bold text-slate-100 mb-3">$0</div>
+                <div className="text-2xl font-bold text-slate-100 mb-1">$0</div>
+                <div className="text-[10px] font-bold text-terminal-green mb-2">
+                  includes {TRIAL_DAYS} days of full access, free
+                </div>
                 <ul className="text-[11px] text-slate-300 space-y-1.5 flex-1">
                   <li>✓ Live scores &amp; schedules — ATP · WTA · Challenger · ITF</li>
                   <li>✓ One free match analysis a day on the home page</li>
@@ -189,7 +215,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 </ul>
                 <button onClick={startFree}
                   className="mt-3 w-full py-2 rounded border border-terminal-border text-slate-200 text-xs font-bold hover:bg-terminal-bg transition">
-                  CREATE FREE ACCOUNT
+                  START MY FREE TRIAL
                 </button>
               </div>
 
