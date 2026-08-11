@@ -3,3 +3,5 @@ analytics.local.json
 entitlements.local.json
 # customer emails, payment tx hashes and grants — never commit
 accounts.local.json
+.vercel
+.env*

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
+import GrowthProjection from "@/components/GrowthProjection";
 import { BreadcrumbLd } from "@/components/JsonLd";
 import { fetchScheduleClient } from "@/lib/scheduleService";
 import type { ScheduleData, ScheduledMatch } from "@/lib/scheduleService";
@@ -126,6 +127,8 @@ export default function CalculatorPage() {
 
         {/* ── Edge → stake quick reference for this portfolio ── */}
         <section className="mt-8">
+          <div className="mb-6"><GrowthProjection /></div>
+
           <h2 className="text-sm font-bold text-slate-100 mb-2">Edge → stake, for {money(portfolio)}</h2>
           <EdgeReference portfolio={portfolio} />
         </section>
