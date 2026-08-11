@@ -10,9 +10,11 @@ Four processes:
 |---|---|
 | `sofa_proxy.py` | :3001 — the TLS-impersonating SofaScore proxy everything else reads |
 | `push_sofa.py` | tennis schedules, odds and per-event live data → `/api/sofa` |
-| `tabletennis.live` | 8s in-play poller → `live_predictions.json` |
-| `tabletennis.push` | uploads TT artifacts → `/api/tt` |
-| `tabletennis.refresh` | re-ingests and re-predicts the TT slate every 3h |
+| `refresh-archive.sh` | match archive → the server-rendered board (every 3h) |
+
+Table tennis was unwired from the terminal on 2026-08-11; its three daemons
+(`tabletennis.live`, `.push`, `.refresh`) were removed with it. Re-add them to
+`JOBS` in install.sh to bring the sport back.
 
 Until now these were started by hand and did not survive a reboot.
 

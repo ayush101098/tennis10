@@ -23,9 +23,9 @@ PYTHON="$(command -v python3)"
 JOBS=(
   "sofa-proxy|$REPO|$PYTHON sofa_proxy.py"
   "push-sofa|$REPO|$PYTHON push_sofa.py"
-  "tt-live|$REPO|$PYTHON -m tabletennis.live"
-  "tt-push|$REPO|$PYTHON -m tabletennis.push"
-  "tt-refresh|$REPO|$PYTHON -m tabletennis.refresh"
+  # Table-tennis feeds removed 2026-08-11 — the sport is unwired from the
+  # terminal, so its three daemons were polling and pushing for nobody.
+  # Restore by re-adding: tt-live, tt-push, tt-refresh.
   # Not a daemon: a periodic job (see INTERVALS below). Keeps the match archive
   # — the source for the server-rendered board — from going stale.
   "archive|$REPO|/bin/bash $REPO/deploy/launchd/refresh-archive.sh"

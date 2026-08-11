@@ -9,14 +9,18 @@ import PricingModal from "@/components/PricingModal";
 import TrialBanner from "@/components/TrialBanner";
 import { DonatePrompt } from "@/components/Donate";
 import LiveUsers from "@/components/LiveUsers";
-import { TtMatchCentre, TtBetTracker } from "@/components/TtPanel";
 import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
 import { planById } from "@/lib/plans";
 import { confirmStripeSession, capturePaypal } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
 /**
- * The unified terminal — 🎾 tennis and 🏓 table tennis in one shell.
+ * The trading terminal.
+ *
+ * Table tennis was removed 2026-08-11: it polled /api/tt every 8s for every
+ * open tab and needed three of the five feed daemons, for a sport this product
+ * does not currently sell. TtPanel and the /tt routes are left in the tree so
+ * it can be restored by re-adding the tab — nothing was deleted, only unwired.
  *
  * Access model: everyone gets the FULL terminal immediately, no paywall on
  * entry. A cumulative dwell meter (localStorage, ticks only while the tab is
@@ -27,7 +31,6 @@ import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnec
 const FREE_PREVIEW_SECONDS = 60;
 const DWELL_KEY = "tt_dwell_v1";
 
-type Sport = "tennis" | "tt";
 type View = "centre" | "tracker";
 
 /** Seconds of free preview remaining; null = unlimited (subscriber/admin). */
@@ -50,7 +53,6 @@ function useDwellGate(paid: boolean): number | null {
 
 export default function TerminalPage() {
   const { session, refresh } = useTier();
-  const [sport, setSport] = useState<Sport>("tennis");
   const [view, setView] = useState<View>("centre");
   const [pricingOpen, setPricingOpen] = useState(false);
   const paid = subActive(session);
@@ -58,12 +60,6 @@ export default function TerminalPage() {
 
   const remaining = useDwellGate(paid);
   const expired = remaining === 0;
-
-  // deep links: /terminal?tab=tt (read once — useSearchParams needs a Suspense
-  // boundary under static export, window.location does not)
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("tab") === "tt") setSport("tt");
-  }, []);
 
   // Return from Stripe Checkout: confirm the session server-side and unlock.
   // The server asks Stripe directly, so this does not wait on the webhook —
@@ -133,26 +129,22 @@ export default function TerminalPage() {
     <div className="h-screen [height:100dvh] w-full flex flex-col overflow-hidden safe-x">
       {/* ── Header Bar ──
           The row scrolls sideways rather than wrapping: at 375px the nav used
-          to break "TABLE TENNIS" and "BET TRACKER" onto second lines and crush
+          to break "BET TRACKER" onto a second line and crush
           the account cluster out of reach. */}
       <header className="safe-top flex items-center justify-between gap-2 px-3 sm:px-4 py-1.5 border-b border-terminal-border bg-terminal-panel shrink-0">
         <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 overflow-x-auto scroll-touch">
           <Link href="/" className="hover:opacity-80 whitespace-nowrap shrink-0">
             <Wordmark size={15} />
           </Link>
-          <button onClick={() => { setSport("tennis"); setView("centre"); }}
-            className={`nav-tab ${sport === "tennis" && view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>
+          <button onClick={() => setView("centre")}
+            className={`nav-tab ${view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>
             🎾<span className="hidden xs:inline"> TENNIS</span>
-          </button>
-          <button onClick={() => { setSport("tt"); setView("centre"); }}
-            className={`nav-tab ${sport === "tt" && view === "centre" ? "text-terminal-yellow bg-terminal-yellow/10" : "text-terminal-muted hover:text-slate-300"}`}>
-            🏓<span className="hidden xs:inline"> TABLE TENNIS</span>
           </button>
           <button onClick={() => setView("tracker")}
             className={`nav-tab ${view === "tracker" ? "text-terminal-cyan bg-terminal-cyan/10" : "text-terminal-muted hover:text-slate-300"}`}>
             📒<span className="hidden xs:inline"> BET TRACKER</span>
           </button>
-          <Link href={sport === "tt" ? "/tt/manual" : "/manual"}
+          <Link href="/manual"
             className="nav-tab text-terminal-muted hover:text-slate-300">
             📘<span className="hidden xs:inline"> MANUAL</span>
           </Link>
@@ -230,23 +222,7 @@ export default function TerminalPage() {
       {/* ── Body ── */}
       <div className="flex-1 min-h-0 relative">
         {view === "tracker" ? (
-          <div className="h-full flex flex-col">
-            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-terminal-border shrink-0 text-[10px]">
-              <button onClick={() => setSport("tennis")}
-                className={`px-2 py-0.5 rounded font-bold ${sport === "tennis" ? "bg-terminal-green/20 text-terminal-green" : "text-terminal-muted hover:text-slate-300"}`}>
-                🎾 TENNIS BETS
-              </button>
-              <button onClick={() => setSport("tt")}
-                className={`px-2 py-0.5 rounded font-bold ${sport === "tt" ? "bg-terminal-green/20 text-terminal-green" : "text-terminal-muted hover:text-slate-300"}`}>
-                🏓 TT BETS
-              </button>
-            </div>
-            <div className="flex-1 min-h-0">
-              {sport === "tt" ? <TtBetTracker email={email} /> : <BetTracker />}
-            </div>
-          </div>
-        ) : sport === "tt" ? (
-          <TtMatchCentre email={email} />
+          <BetTracker />
         ) : (
           <SchedulePanel tier="pro" onUpgrade={() => setPricingOpen(true)} />
         )}
@@ -258,7 +234,7 @@ export default function TerminalPage() {
             <div className="text-sm font-bold text-slate-100">Your free preview is up</div>
             <div className="text-[11px] text-terminal-muted max-w-[420px]">
               You&apos;ve had a minute with the full terminal — live True P for
-              tennis and table tennis, edge boards, trade tickets and both bet journals. Keep it running
+              tennis, the edge board, trade tickets and the bet journal. Keep it running
               from <b className="text-slate-200">${planById("day").usd} for a day</b> to ${planById("year").usd} for the year.
             </div>
             <button onClick={() => setPricingOpen(true)}

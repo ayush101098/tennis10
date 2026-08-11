@@ -8,6 +8,8 @@
  * the requests the terminal is about to make. The service then adopts the
  * in-flight promise instead of issuing a second one.
  *
+ * /api/tt is no longer warmed — table tennis was unwired from the terminal.
+ *
  * It must stay a plain inline string: a React component would arrive with the
  * very bundle whose latency this exists to hide.
  *
@@ -30,7 +32,6 @@ const SCRIPT = `
       return "/api/sofa/category/" + c + "/scheduled-events/" + day;
     });
     urls.push("/api/sofa/sport/tennis/odds/1/" + day);
-    urls.push("/api/tt");
     var store = {};
     urls.forEach(function (u) {
       // Kept as a promise, not a value: the consumer awaits whatever state this
