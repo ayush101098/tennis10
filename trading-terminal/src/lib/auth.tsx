@@ -224,6 +224,17 @@ export function deviceId(): string {
  * first impression.
  */
 export function recordLogin(email: string, source?: string): void {
+  // Also capture it as a LEAD. Sign-ups previously landed only in the accounts
+  // store, so anyone who signed up — including every Google sign-in and every
+  // trial — was missing from the leads list and from the Google Sheet mirror,
+  // which reads /api/subscribe. Two stores, two purposes: accounts answers
+  // "who has access", leads answers "who gave us their address".
+  try {
+    void import("./subscribe")
+      .then(m => m.captureLead(normEmail(email), source || "signup"))
+      .catch(() => {});
+  } catch { /* never block sign-in */ }
+
   try {
     void fetch("/api/account", {
       method: "POST",

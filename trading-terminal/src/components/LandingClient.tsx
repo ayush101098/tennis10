@@ -7,6 +7,7 @@ import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
 import TrialBanner from "@/components/TrialBanner";
+import { DonateLink, DonatePrompt } from "@/components/Donate";
 import { SoftwareApplicationLd } from "@/components/JsonLd";
 import { LEGAL_NAME } from "@/lib/brand";
 import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/scheduleService";
@@ -265,13 +266,15 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       </section>
 
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
+      <DonatePrompt />
 
       {/* ── Footer ── */}
       <footer className="px-6 py-6 border-t border-terminal-border text-center text-[9px] text-terminal-muted leading-relaxed">
         Model outputs are calibrated probabilities, not guarantees. Sports betting involves risk — bet only what you can afford to lose.
         Staking discipline (¼ Kelly, 5% cap, 2% edge floor) is enforced in the product for a reason.
-        <div className="mt-3 flex items-center justify-center">
+        <div className="mt-3 flex items-center justify-center gap-4">
           <Socials variant="footer" />
+          <DonateLink />
         </div>
         <div className="mt-2">© {new Date().getFullYear()} {LEGAL_NAME}</div>
       </footer>

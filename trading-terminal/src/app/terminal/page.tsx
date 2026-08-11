@@ -7,6 +7,7 @@ import SchedulePanel from "@/components/SchedulePanel";
 import BetTracker from "@/components/BetTracker";
 import PricingModal from "@/components/PricingModal";
 import TrialBanner from "@/components/TrialBanner";
+import { DonatePrompt } from "@/components/Donate";
 import LiveUsers from "@/components/LiveUsers";
 import { TtMatchCentre, TtBetTracker } from "@/components/TtPanel";
 import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
@@ -269,6 +270,7 @@ export default function TerminalPage() {
       </div>
 
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} onDone={refresh} />
+      <DonatePrompt />
     </div>
   );
 }
