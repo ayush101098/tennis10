@@ -9,7 +9,7 @@ import { serverVerifyPayment } from "@/lib/entitlement";
 import QrCode from "@/components/QrCode";
 import GoogleSignIn, { GOOGLE_ENABLED } from "@/components/GoogleSignIn";
 import { PLANS, planById, type Plan } from "@/lib/plans";
-import { TRIAL_DAYS } from "@/lib/auth";
+import { TRIAL_LABEL, TRIAL_LENGTH } from "@/lib/auth";
 import { X_URL, TELEGRAM_URL } from "@/lib/brand";
 
 interface Props {
@@ -153,7 +153,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     // lands. Promise the trial now and let the effect below close the modal.
     setMsg({ ok: true, text: s.isAdmin ? "Welcome back, admin — full access enabled."
       : s.tier === "pro" ? "Subscription active — full terminal unlocked."
-      : `Account created — starting your ${TRIAL_DAYS}-day free trial…` });
+      : `Account created — starting your ${TRIAL_LABEL} free trial…` });
     if (s.isAdmin || s.tier === "pro") { onDone?.(); onClose(); }
     else onDone?.();
   };
@@ -235,7 +235,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 first ask for someone who has not seen the product work. */}
             <button onClick={startFree} disabled={!validEmail}
               className="w-full min-h-[44px] mb-4 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 disabled:opacity-40 transition">
-              START MY {TRIAL_DAYS}-DAY FREE TRIAL →
+              GET {TRIAL_LENGTH.toUpperCase()} FREE ACCESS →
             </button>
 
             {/* Plans */}
@@ -245,7 +245,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 <div className="text-slate-200 font-bold text-sm mb-1">FREE ACCOUNT</div>
                 <div className="text-2xl font-bold text-slate-100 mb-1">$0</div>
                 <div className="text-[10px] font-bold text-terminal-green mb-2">
-                  includes {TRIAL_DAYS} days of full access, free
+                  includes {TRIAL_LENGTH} of full access, free
                 </div>
                 <ul className="text-[11px] text-slate-300 space-y-1.5 flex-1">
                   <li>✓ Live scores &amp; schedules — ATP · WTA · Challenger · ITF</li>

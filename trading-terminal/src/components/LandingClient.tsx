@@ -22,7 +22,7 @@ import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/schedul
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
-import { useTier, TRIAL_DAYS } from "@/lib/auth";
+import { useTier, TRIAL_LABEL } from "@/lib/auth";
 import PricingModal from "@/components/PricingModal";
 
 /**
@@ -196,7 +196,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
                     +{matches.length - FREE_MATCH_LIMIT} more matches today
                   </div>
                   <div className="text-[10px] text-terminal-muted mt-0.5">
-                    Start your {TRIAL_DAYS}-day free trial to open the full board and the terminal
+                    Start your {TRIAL_LABEL} free trial to open the full board and the terminal
                   </div>
                 </button>
               )}

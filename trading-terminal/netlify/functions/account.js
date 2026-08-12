@@ -19,7 +19,7 @@ const { daysForAmount } = require("./_plans");
 const STORE = "accounts";
 const KEY = "byEmail";
 const TRIALS_KEY = "trialsByDevice";   // deviceId -> { email, ts }
-const TRIAL_DAYS = 2;
+const TRIAL_DAYS = 1;   // 24 hours of the full terminal on first sign-up
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAY = 86400000;
 
@@ -264,7 +264,7 @@ exports.handler = async (event) => {
     acct.trialStartedAt = now;
     acct.grants.push({
       until: now + TRIAL_DAYS * DAY,
-      reason: `${TRIAL_DAYS}-day free trial`,
+      reason: `${TRIAL_DAYS * 24}-hour free trial`,
       by: "system",
       ts: now,
     });

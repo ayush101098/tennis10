@@ -62,7 +62,7 @@ export default function ManualPage() {
         },
         {
           q: "What does Tennis Alpha cost, and is there a free trial?",
-          a: "$19 for a day pass, $99 monthly, $999 yearly, with no auto-charging — access lapses unless you pay again. Every new account starts with 2 days of the full terminal free, with no card required.",
+          a: "$19 for a day pass, $99 monthly, $999 yearly, with no auto-charging — access lapses unless you pay again. Every new account starts with 24 hours of the full terminal free, with no card required.",
         },
         {
           q: "Can I use one account on several devices?",

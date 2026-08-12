@@ -44,7 +44,14 @@ export const PAYPAL_ME_URL = "https://paypal.me/jessefuture10";
 export const PAYPAL_ID = "paypal.me/jessefuture10";
 export const SUBSCRIPTION_DAYS = 30;          // access window per payment
 export const MIN_PAYMENT_USD = 100;           // payments below this are rejected
-export const TRIAL_DAYS = 2;                  // free trial granted on first sign-up
+export const TRIAL_DAYS = 1;                  // free trial granted on first sign-up
+/**
+ * How the trial is described everywhere. A one-day trial reads as "24 hours",
+ * not "1 day" — and deriving it means the copy cannot drift from the length the
+ * server actually grants (netlify/functions/account.js is the authority).
+ */
+export const TRIAL_LABEL = TRIAL_DAYS === 1 ? "24-hour" : `${TRIAL_DAYS}-day`;
+export const TRIAL_LENGTH = TRIAL_DAYS === 1 ? "24 hours" : `${TRIAL_DAYS} days`;
 export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription
 
 // Stablecoins we can price 1:1 for the payment-amount guardrail (mainnet).
@@ -220,7 +227,7 @@ export function deviceId(): string {
  *
  * The response carries any trial the server just granted, so a new account
  * becomes pro immediately rather than on the next page load — a signup that
- * says "2 days free" and then shows a locked terminal is the worst possible
+ * promises free access and then shows a locked terminal is the worst possible
  * first impression.
  */
 export function recordLogin(email: string, source?: string): void {

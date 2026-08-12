@@ -11,7 +11,7 @@ import { DonatePrompt } from "@/components/Donate";
 import LiveUsers from "@/components/LiveUsers";
 import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
 import { planById } from "@/lib/plans";
-import { TRIAL_DAYS } from "@/lib/auth";
+import { TRIAL_LABEL } from "@/lib/auth";
 import { confirmStripeSession, capturePaypal } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
@@ -221,7 +221,7 @@ export default function TerminalPage() {
             <div className="text-3xl">⏱</div>
             <div className="text-sm font-bold text-slate-100">Your free preview is up</div>
             <div className="text-[11px] text-terminal-muted max-w-[420px]">
-              The terminal is for members. Start your {TRIAL_DAYS}-day free trial for live True P on
+              The terminal is for members. Start your {TRIAL_LABEL} free trial for live True P on
               tennis, the edge board, trade tickets and the bet journal. Keep it running
               from <b className="text-slate-200">${planById("day").usd} for a day</b> to ${planById("year").usd} for the year.
             </div>

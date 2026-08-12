@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { PLANS, planById } from "@/lib/plans";
-import { TRIAL_DAYS } from "@/lib/auth";
+import { TRIAL_LENGTH } from "@/lib/auth";
 
 /**
  * FAQ accordion.
@@ -70,11 +70,11 @@ const FAQS: QA[] = [
     a: <>{PLANS.map((p, i) => (
       <span key={p.id}>{i > 0 ? " · " : ""}<b>${p.usd}</b> {p.label.toLowerCase()}</span>
     ))}. No auto-charging — access simply lapses unless you pay again. Every new account starts
-      with <b>{TRIAL_DAYS} days free</b>, no card required.</>,
+      with <b>{TRIAL_LENGTH} free</b>, no card required.</>,
   },
   {
     q: `Is there a free trial?`,
-    a: <>Yes — {TRIAL_DAYS} days of the full terminal when you sign up, with an email or a
+    a: <>Yes — {TRIAL_LENGTH} of the full terminal when you sign up, with an email or a
       Google account. No payment details are asked for, and nothing charges you when it ends;
       you simply drop back to the free board.</>,
   },

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useTier, subActive, signIn, TRIAL_DAYS, type Session } from "@/lib/auth";
+import { useTier, subActive, signIn, TRIAL_LABEL, TRIAL_LENGTH, type Session } from "@/lib/auth";
 
 /**
  * The trial prompt, and the trial countdown.
@@ -62,7 +62,7 @@ export default function TrialBanner({ onStart }: { onStart: () => void }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 rounded border border-terminal-green/40 bg-terminal-green/[0.07]">
       <span className="text-[12px] text-slate-200">
-        Unlock full access — your first {TRIAL_DAYS} days are free.
+        Unlock full access — your first {TRIAL_LENGTH} are free.
       </span>
       <button
         onClick={() => {
@@ -70,7 +70,7 @@ export default function TrialBanner({ onStart }: { onStart: () => void }) {
           onStart();
         }}
         className="inline-flex items-center min-h-[36px] px-4 rounded bg-terminal-green text-black text-[11px] font-bold hover:opacity-90">
-        START YOUR {TRIAL_DAYS}-DAY FREE TRIAL
+        START YOUR FREE {TRIAL_LENGTH.toUpperCase()}
       </button>
     </div>
   );
