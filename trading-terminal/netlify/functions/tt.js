@@ -19,7 +19,7 @@
  * Reads stay public — the terminal itself gates access client-side.
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 
 const STORE = "tt";
 const KINDS = new Set(["predictions", "live", "metrics"]);

@@ -10,7 +10,7 @@
  * Blobs isn't available we fall back to per-container memory (best-effort).
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 
 const WINDOW_MS = 30_000; // an id is "online" if seen within the last 30s
 const STORE_NAME = "presence";

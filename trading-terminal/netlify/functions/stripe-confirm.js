@@ -17,7 +17,7 @@
  * Env: STRIPE_SECRET_KEY.
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 
 const SUBSCRIPTION_DAYS = 30;
 const DAY = 86400000;

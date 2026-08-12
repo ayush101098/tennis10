@@ -29,7 +29,7 @@
 const STORE = "sofa";
 const MAX_CACHE_AGE_MS = 30 * 60 * 1000;   // served with a warning past this
 
-const { store: sharedStore, blobStatus } = require("./_blobs");
+const { store: sharedStore, blobStatus } = require("./_store");
 
 const blobs = () => sharedStore(STORE);
 

@@ -20,7 +20,7 @@
  * the GET is disabled (never expose the list publicly).
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 const { appendWaitlist, appendWaitlistBatch, config: sheetsConfig } = require("./_sheets");
 
 const STORE = "leads";

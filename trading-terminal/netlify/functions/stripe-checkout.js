@@ -68,7 +68,7 @@ exports.handler = async (event) => {
           unit_amount: PRO_PRICE_USD * 100,
           recurring: { interval: "month" },
           product_data: {
-            name: "Tennis Intelligence Terminal — Pro",
+            name: "Tennis Alpha — Pro",
             description:
               "Live True P for tennis and table tennis, edge vs bookmaker, "
               + "Value Board, hedge timing and the bet tracker.",

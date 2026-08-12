@@ -13,7 +13,7 @@
  *   - paidUntil is recomputed from payments + grants, so it cannot drift.
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 
 const { daysForAmount } = require("./_plans");
 const SUBSCRIPTION_DAYS = 30;   // fallback for legacy rows with no amount

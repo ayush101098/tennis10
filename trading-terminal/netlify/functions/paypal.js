@@ -90,11 +90,11 @@ exports.handler = async (event) => {
           intent: "CAPTURE",
           purchase_units: [{
             amount: { currency_code: "USD", value: PRICE_USD.toFixed(2) },
-            description: "Tennis Intelligence Terminal — Pro, 30 days",
+            description: "Tennis Alpha — Pro, 30 days",
             custom_id: email,
           }],
           application_context: {
-            brand_name: "Tennis Intelligence Terminal",
+            brand_name: "Tennis Alpha",
             user_action: "PAY_NOW",
             shipping_preference: "NO_SHIPPING",
             // Redirect flow rather than the JS SDK: this is a static export, so

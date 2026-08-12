@@ -21,7 +21,7 @@
  * the shipped JS — closing that needs the premium data served from here too.
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 
 const PAYMENT_ADDRESS = "0x905aCd442c7B3EF9BfEB0A3189f3686c1Cd0c697";
 const {

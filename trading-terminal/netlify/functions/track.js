@@ -9,7 +9,7 @@
  * POST /api/track  { path, ref, vid }
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 
 const STORE = "analytics";
 const KEY = "events";

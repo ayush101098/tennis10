@@ -18,7 +18,7 @@
  * Env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET (both required).
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 
 const SUBSCRIPTION_DAYS = 30;
 const DAY = 86400000;

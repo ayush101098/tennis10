@@ -13,7 +13,7 @@
  *   GET  (x-admin-token)    -> { rows, counts }       (admin roster)
  */
 
-const { store: sharedStore } = require("./_blobs");
+const { store: sharedStore } = require("./_store");
 const { daysForAmount } = require("./_plans");
 
 const STORE = "accounts";

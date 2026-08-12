@@ -83,7 +83,7 @@ exports.handler = async (event) => {
           amount: inr * 100,               // paise — smallest currency sub-unit
           currency: "INR",
           receipt: `tt_${Date.now()}`,
-          notes: { email, product: "Tennis Intelligence Terminal Pro (30 days)" },
+          notes: { email, product: "Tennis Alpha Pro (30 days)" },
         }),
       });
       const d = await res.json();
