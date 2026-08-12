@@ -138,7 +138,7 @@ export default function Faq() {
   const [open, setOpen] = useState<number | null>(0);
 
   return (
-    <section id="faq" className="px-4 sm:px-6 pb-14 max-w-[820px] mx-auto">
+    <section id="faq" className="marketing px-4 sm:px-6 pb-14 max-w-[820px] mx-auto">
       <h2 className="text-center text-lg font-bold text-slate-100 mb-1">Frequently asked questions</h2>
       <p className="text-center text-[11px] text-terminal-muted mb-6">
         Methodology, pricing and the limits of what a model can tell you.

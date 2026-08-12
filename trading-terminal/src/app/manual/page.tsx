@@ -31,7 +31,7 @@ export default function ManualPage() {
   const html = markdownToHtml(md);
 
   return (
-    <div className="min-h-screen bg-terminal-bg text-slate-200">
+    <div className="marketing min-h-screen bg-terminal-bg text-slate-200">
       <BreadcrumbLd trail={[{ name: "Trading Manual", path: "/manual" }]} />
       {/* Answers drawn from what the product actually does — every claim here
           is one the manual itself makes and the code enforces. */}

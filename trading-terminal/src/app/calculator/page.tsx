@@ -39,7 +39,7 @@ export default function CalculatorPage() {
     "$" + Math.round(n).toLocaleString("en-US");
 
   return (
-    <div className="min-h-screen bg-terminal-bg text-slate-200">
+    <div className="marketing min-h-screen bg-terminal-bg text-slate-200">
       <BreadcrumbLd trail={[{ name: "Kelly Calculator", path: "/calculator" }]} />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">

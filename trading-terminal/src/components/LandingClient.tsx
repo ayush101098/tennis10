@@ -97,7 +97,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
   const onPick = useCallback((m: ScheduledMatch) => setSelected(m), []);
 
   return (
-    <div className="min-h-screen bg-terminal-bg text-slate-200">
+    <div className="marketing min-h-screen bg-terminal-bg text-slate-200">
       <SoftwareApplicationLd />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
@@ -124,10 +124,11 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
 
       {/* ── Hero ── */}
       <section className="px-4 sm:px-6 pt-10 sm:pt-14 pb-10 text-center max-w-[860px] mx-auto">
-        <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-slate-100 leading-tight">
+        <span className="eyebrow">Live model · ATP · WTA · Challenger · W125 · ITF</span>
+        <h1 className="text-slate-100">
           True probabilities for <span className="text-terminal-green">every professional tennis match.</span>
         </h1>
-        <p className="mt-4 text-[13px] text-slate-400 leading-relaxed max-w-[640px] mx-auto">
+        <p className="mt-5 text-slate-400 max-w-[620px] mx-auto">
           A neural network trained on 41,750 tour matches, fused with a score-conditioned Markov engine,
           priced against live bookmaker odds — with ¼-Kelly staking and hedge-timing discipline built in.
           ATP · WTA · Challenger · W125 · ITF, every day.
@@ -145,14 +146,14 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           <TrialBanner onStart={() => setPricingOpen(true)} />
         </div>
 
-        {/* Stat chips */}
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-2 text-[10px]">
-          <Chip label={`${matches.length || "—"} matches today`} />
-          <Chip label={`${liveCount} matches live now`} tone="green" pulse={liveCount > 0} />
-          <Chip label={`${tours.length || "—"} tours incl. ITF`} />
-          <Chip label="41,750-match neural network" />
-          <Chip label="Markov live engine" />
-          <Chip label="¼-Kelly staking" />
+        {/* A stat row rather than pills: the same facts, but laid out as
+            figures, which reads as a product with numbers behind it instead of
+            a list of tags. Values are live where they can be. */}
+        <div className="mt-10 grid grid-cols-2 sm:grid-cols-4 border-t border-terminal-border">
+          <Stat n={matches.length || "—"} l="Matches today" />
+          <Stat n={liveCount} l="Live right now" tone={liveCount > 0 ? "green" : undefined} />
+          <Stat n="41,750" l="Matches in training set" />
+          <Stat n="2%" l="Hard edge floor" />
         </div>
       </section>
 
@@ -235,7 +236,10 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
 
       {/* ── How it works ── */}
       <section className="px-4 sm:px-6 pb-14 max-w-[1000px] mx-auto">
-        <h2 className="text-center text-lg font-bold text-slate-100 mb-6">The full process, end to end</h2>
+        <div className="text-center mb-8">
+          <span className="eyebrow">The process</span>
+          <h2 className="text-slate-100">From true probability to a sized, hedged position.</h2>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           <Feature n="01" title="TRUE P" body="A Platt-calibrated neural network (41,750 tour matches) sets the pre-match prior; a tour-aware Markov engine re-prices the match on every game of the live score." />
           <Feature n="02" title="EDGE" body="True P is compared against de-vigged bookmaker odds — live prices for live matches, never stale ones. Edges over 20% are quarantined as data errors, not bets." />
@@ -248,7 +252,8 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           youtube-nocookie so a visitor who never presses play is not handed a
           tracking cookie; lazy so the embed costs nothing until scrolled to. */}
       <section id="manual" className="px-4 sm:px-6 pb-14 max-w-[900px] mx-auto">
-        <h2 className="text-center text-lg font-bold text-slate-100 mb-1">Watch the manual</h2>
+        <span className="eyebrow text-center">Watch the manual</span>
+        <h2 className="text-center text-slate-100 mb-2">A live walkthrough of the terminal.</h2>
         <p className="text-center text-[11px] text-terminal-muted mb-5 max-w-[560px] mx-auto leading-relaxed">
           A live walkthrough of the terminal — reading True P, spotting an edge against the
           book, sizing the stake and timing the hedge.
@@ -277,7 +282,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       {/* ── Get in touch ── */}
       <section className="px-4 sm:px-6 pb-16 max-w-[720px] mx-auto text-center">
         <div className="rounded-lg border border-terminal-green/30 bg-terminal-green/[0.06] px-4 sm:px-6 py-7">
-          <h2 className="text-lg font-bold text-slate-100 mb-2">Interested?</h2>
+          <h2 className="text-slate-100 mb-3">Interested?</h2>
           <p className="text-[12px] text-slate-400 mb-5 max-w-[420px] mx-auto leading-relaxed">
             Drop your email for early access, or reach out about a partnership.
           </p>
@@ -305,6 +310,15 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
 }
 
 /* ── Sub-components ── */
+
+function Stat({ n, l, tone }: { n: React.ReactNode; l: string; tone?: "green" }) {
+  return (
+    <div className="py-5 px-3 border-r border-terminal-border last:border-r-0 text-center sm:text-left">
+      <div className={`mono text-xl font-bold ${tone === "green" ? "text-terminal-green" : "text-slate-100"}`}>{n}</div>
+      <div className="text-[11.5px] text-terminal-muted mt-1">{l}</div>
+    </div>
+  );
+}
 
 function Chip({ label, tone, pulse }: { label: string; tone?: "green"; pulse?: boolean }) {
   return (

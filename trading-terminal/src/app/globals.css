@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Kaushan+Script&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Kaushan+Script&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
 
 * {
   box-sizing: border-box;
@@ -29,6 +29,51 @@ body {
      never produces page scroll. */
   overflow-x: hidden;
   min-height: 100%;
+}
+
+/* ── Marketing typography ───────────────────────────────────────────────────
+   The terminal is monospace because it is an instrument: dense, aligned,
+   scannable. Marketing pages were inheriting that, which made them read like a
+   log file — 10px mono body copy is unreadable at arm's length and looks
+   amateur next to any competitor.
+
+   So prose gets a proper type system, scoped to `.marketing` so the terminal
+   is untouched: Source Serif for headings (authority, and it signals research
+   rather than tipster), IBM Plex Sans for body at a readable size, and mono
+   retained for anything that is data — prices, percentages, tickers.
+   Colours are unchanged. */
+.marketing {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+}
+.marketing h1,
+.marketing h2,
+.marketing h3,
+.marketing .serif {
+  font-family: "Source Serif 4", Georgia, serif;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+.marketing h1 { font-size: clamp(32px, 4.6vw, 52px); line-height: 1.08; }
+.marketing h2 { font-size: clamp(24px, 3.2vw, 34px); line-height: 1.16; }
+.marketing h3 { font-size: 18px; line-height: 1.3; }
+.marketing p  { font-size: 15.5px; line-height: 1.65; }
+/* Anything that is a number stays monospace so columns still line up. */
+.marketing .mono,
+.marketing code,
+.marketing .tabular-nums { font-family: "JetBrains Mono", monospace; }
+
+/* Small caps label above a heading — cheap, and it does most of the work of
+   making a page look considered rather than thrown together. */
+.eyebrow {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #22c55e;
+  display: block;
+  margin-bottom: 14px;
 }
 
 /* The wordmark. Brush script for the brand, monospace everywhere else — the
