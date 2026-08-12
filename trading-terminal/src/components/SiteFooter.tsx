@@ -48,6 +48,7 @@ export default function SiteFooter() {
               <li><Link href="/manual" className="hover:text-slate-200">Trading manual</Link></li>
               <li><Link href="/#manual" className="hover:text-slate-200">Video walkthrough</Link></li>
               <li><Link href="/calculator" className="hover:text-slate-200">Bankroll growth</Link></li>
+              <li><Link href="/resources" className="hover:text-slate-200">Research papers</Link></li>
             </ul>
           </nav>
 
