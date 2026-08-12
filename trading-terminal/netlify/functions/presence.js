@@ -36,7 +36,7 @@ async function getStoreSafe() {
 
 const json = (count) => ({
   statusCode: 200,
-  headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  headers: { "Content-Type": "application/json", "Cache-Control": "public, s-maxage=20, stale-while-revalidate=60" },
   body: JSON.stringify({ count }),
 });
 

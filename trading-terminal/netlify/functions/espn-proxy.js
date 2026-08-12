@@ -35,7 +35,7 @@ const json = (statusCode, obj, extra) => ({
   statusCode,
   headers: {
     "Content-Type": "application/json",
-    "Cache-Control": "no-store",
+    "Cache-Control": "public, s-maxage=120, stale-while-revalidate=600",
     "Access-Control-Allow-Origin": "*",
     ...(extra || {}),
   },

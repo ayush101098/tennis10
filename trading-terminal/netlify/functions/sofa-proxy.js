@@ -40,7 +40,13 @@ const json = (statusCode, obj, extra) => ({
   statusCode,
   headers: {
     "Content-Type": "application/json",
-    "Cache-Control": "no-store",
+    // Cached at the CDN, not "no-store". This data is rewritten by push_sofa
+    // every 30s, so a 25s edge cache serves every visitor from the CDN and the
+    // function runs about twice a minute per path no matter how many people
+    // are watching. no-store meant every client request became an invocation —
+    // ~40 per visitor per minute, which is how 10 lakh requests happened in
+    // three days.
+    "Cache-Control": "public, s-maxage=25, stale-while-revalidate=120",
     "Access-Control-Allow-Origin": "*",
     ...(extra || {}),
   },
@@ -119,7 +125,7 @@ exports.handler = async (event) => {
           } catch { /* caching is best-effort */ }
         }
         return json(200, text, {
-          "Cache-Control": "public, s-maxage=3, stale-while-revalidate=5",
+          "Cache-Control": "public, s-maxage=25, stale-while-revalidate=120",
           "x-sofa-source": "upstream",
         });
       }

@@ -9,6 +9,8 @@
  * in-flight promise instead of issuing a second one.
  *
  * /api/tt is no longer warmed — table tennis was unwired from the terminal.
+ * ESPN is not warmed either: it returns no individual matches, so the client
+ * stopped calling it.
  *
  * It must stay a plain inline string: a React component would arrive with the
  * very bundle whose latency this exists to hide.

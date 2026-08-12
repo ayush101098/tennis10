@@ -924,17 +924,15 @@ export async function fetchScheduleClient(
 
   // Today and tomorrow are fired together — but only today is awaited before
   // the first paint. Tomorrow is nobody's first impression.
-  const todayFeeds = Promise.all([
-    fetchESPN("atp", todayStr, rankMap),
-    fetchESPN("wta", todayStr, rankMap),
-    fetchSofaScheduled(todayStr, rankMap),
-  ]);
-  const tomorrowFeeds = Promise.all([
-    fetchESPN("atp", tomorrowStr, rankMap),
-    fetchESPN("wta", tomorrowStr, rankMap),
-    fetchSofaScheduled(tomorrowStr, rankMap),
-  ]);
-  const [at, wt, sofaToday] = await todayFeeds;
+  // ESPN is no longer called. Measured repeatedly: it returns tournaments with
+  // ZERO individual matches, so it contributed nothing to the board while
+  // costing four requests per refresh per visitor — 8/minute of the ~40 that
+  // produced a million requests in three days. fetchESPN and /api/espn are
+  // kept for the day the endpoint carries competitions again.
+  const todayFeeds = fetchSofaScheduled(todayStr, rankMap);
+  const tomorrowFeeds = fetchSofaScheduled(tomorrowStr, rankMap);
+  const at: ScheduledMatch[] = [], wt: ScheduledMatch[] = [];
+  const sofaToday = await todayFeeds;
 
   const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 };
   const sort = (a: ScheduledMatch, b: ScheduledMatch) => {
@@ -1005,7 +1003,8 @@ export async function fetchScheduleClient(
     });
   }
 
-  const [ato, wto, sofaTomorrow] = await tomorrowFeeds;
+  const ato: ScheduledMatch[] = [], wto: ScheduledMatch[] = [];
+  const sofaTomorrow = await tomorrowFeeds;
   const tomorrow = dedup(byId([...ato, ...wto]), sofaTomorrow).sort(sort);
 
   // ── In-play odds for live matches (throttled; per-event cache absorbs polls) ──

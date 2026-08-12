@@ -1,5 +1,12 @@
 "use client";
 
+// 5s was chosen for point-by-point immediacy. Games take ~45s, so the board
+// cannot change faster than that — 15s shows every score change and cuts the
+// request rate by two thirds.
+const LIVE_POLL_MS = 15_000;
+/** Matches a free visitor sees on the homepage. */
+const FREE_MATCH_LIMIT = 3;
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SsrMatch } from "@/components/SsrMatchList";
 import SsrMatchList from "@/components/SsrMatchList";
@@ -14,7 +21,7 @@ import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/schedul
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
-import { useTier } from "@/lib/auth";
+import { useTier, TRIAL_DAYS } from "@/lib/auth";
 import PricingModal from "@/components/PricingModal";
 
 /**
@@ -40,7 +47,9 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
     // complete result. Waiting for both days plus live odds cost ~2s of blank board.
     const load = () => fetchScheduleClient(setData).then(setData).catch(() => {});
     load();
-    const iv = setInterval(load, 45_000);
+    // A hidden tab must not poll. Background tabs left open for hours were
+    // costing as much as active readers.
+    const iv = setInterval(() => { if (document.visibilityState === "visible") load(); }, 45_000);
     return () => clearInterval(iv);
   }, []);
 
@@ -49,11 +58,17 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
   // as they happen instead of waiting on the next full 45s rebuild.
   useEffect(() => {
     const iv = setInterval(async () => {
+      // Only while a live match is actually on screen AND the tab is visible.
+      // This ran every 5s regardless — on a page with no live matches, in a
+      // background tab, forever — which is most of the traffic that blew
+      // through the hosting limits.
+      if (document.visibilityState !== "visible") return;
       const prev = dataRef.current;
       if (!prev) return;
+      if (!prev.today.some(m => m.status === "live")) return;   // nothing live to refresh
       const changed = await refreshLiveMatches([...prev.today, ...prev.tomorrow]);
       if (changed) setData({ ...prev, today: [...prev.today], tomorrow: [...prev.tomorrow] });
-    }, 5_000);
+    }, LIVE_POLL_MS);
     return () => clearInterval(iv);
   }, []);
 
@@ -163,12 +178,27 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
               {!data && initialMatches.length === 0 && (
                 <div className="p-8 text-center text-terminal-muted text-xs animate-pulse">Loading live schedule…</div>
               )}
-              {matches.slice(0, 250).map(m => (
+              {/* Free visitors see THREE matches. Not a teaser for its own
+                  sake: every row on screen is polled, so an ungated board was
+                  serving the full request cost of a paying customer to people
+                  who are not one. Trial and Pro see the full board. */}
+              {matches.slice(0, isPro ? 250 : FREE_MATCH_LIMIT).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
                   freeSlot={false}
                   showProb
                   onClick={() => onPick(m)} />
               ))}
+              {!isPro && matches.length > FREE_MATCH_LIMIT && (
+                <button onClick={() => setPricingOpen(true)}
+                  className="w-full px-4 py-4 text-center border-t border-terminal-border hover:bg-terminal-panel/40 transition">
+                  <div className="text-[12px] font-bold text-terminal-green">
+                    +{matches.length - FREE_MATCH_LIMIT} more matches today
+                  </div>
+                  <div className="text-[10px] text-terminal-muted mt-0.5">
+                    Start your {TRIAL_DAYS}-day free trial to open the full board and the terminal
+                  </div>
+                </button>
+              )}
               {data && matches.length === 0 && (
                 data.sourcesDown ? (
                   // An outage must never masquerade as a quiet day — saying

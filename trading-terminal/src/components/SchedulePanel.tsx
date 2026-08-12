@@ -1,5 +1,10 @@
 "use client";
 
+// 5s was chosen for point-by-point immediacy. Games take ~45s, so the board
+// cannot change faster than that — 15s shows every score change and cuts the
+// request rate by two thirds.
+const LIVE_POLL_MS = 15_000;
+
 import { useEffect, useState, useCallback, useRef } from "react";
 import { fetchScheduleClient, refreshLiveMatches, probToOdds, kellyFraction,
   qualifies, quarterKellyStake, EDGE_FLOOR } from "@/lib/scheduleService";
@@ -91,7 +96,7 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
     // Full schedule rebuild is expensive (450+ matches, ESPN + SofaScore +
     // per-live-match odds) — 45s is enough since the match LIST rarely
     // changes mid-cycle; live scores are kept fresh separately below.
-    const iv = setInterval(refresh, 45_000);
+    const iv = setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 45_000);
     return () => clearInterval(iv);
   }, [refresh]);
 
@@ -100,11 +105,17 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
   // they happen instead of waiting on the next full 45s rebuild.
   useEffect(() => {
     const iv = setInterval(async () => {
+      // Only while a live match is actually on screen AND the tab is visible.
+      // This ran every 5s regardless — on a page with no live matches, in a
+      // background tab, forever — which is most of the traffic that blew
+      // through the hosting limits.
+      if (document.visibilityState !== "visible") return;
       const prev = dataRef.current;
       if (!prev) return;
+      if (!prev.today.some(m => m.status === "live")) return;   // nothing live to refresh
       const changed = await refreshLiveMatches([...prev.today, ...prev.tomorrow]);
       if (changed) setData({ ...prev, today: [...prev.today], tomorrow: [...prev.tomorrow] });
-    }, 5_000);
+    }, LIVE_POLL_MS);
     return () => clearInterval(iv);
   }, []);
 

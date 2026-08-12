@@ -11,6 +11,7 @@ import { DonatePrompt } from "@/components/Donate";
 import LiveUsers from "@/components/LiveUsers";
 import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
 import { planById } from "@/lib/plans";
+import { TRIAL_DAYS } from "@/lib/auth";
 import { confirmStripeSession, capturePaypal } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
@@ -22,34 +23,15 @@ import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnec
  * does not currently sell. TtPanel and the /tt routes are left in the tree so
  * it can be restored by re-adding the tab — nothing was deleted, only unwired.
  *
- * Access model: everyone gets the FULL terminal immediately, no paywall on
- * entry. A cumulative dwell meter (localStorage, ticks only while the tab is
- * visible) grants FREE_PREVIEW_SECONDS of real usage; when it runs out,
- * non-subscribers get the pro-subscription ask. Paid/admin: never gated.
+ * Access model: members only — a subscription or the free trial. The terminal
+ * polls the board continuously, so a timed free preview meant serving a paying
+ * customer's request volume to every casual visitor; at ~40 requests a minute
+ * each that is what exhausted two hosting plans. Free visitors get a
+ * three-match board on the homepage and a trial offer instead.
  */
 
-const FREE_PREVIEW_SECONDS = 60;
-const DWELL_KEY = "tt_dwell_v1";
 
 type View = "centre" | "tracker";
-
-/** Seconds of free preview remaining; null = unlimited (subscriber/admin). */
-function useDwellGate(paid: boolean): number | null {
-  const [remaining, setRemaining] = useState<number | null>(paid ? null : FREE_PREVIEW_SECONDS);
-  useEffect(() => {
-    if (paid) { setRemaining(null); return; }
-    const used = () => parseInt(localStorage.getItem(DWELL_KEY) || "0", 10) || 0;
-    setRemaining(Math.max(FREE_PREVIEW_SECONDS - used(), 0));
-    const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      const u = used() + 1;
-      localStorage.setItem(DWELL_KEY, String(u));
-      setRemaining(Math.max(FREE_PREVIEW_SECONDS - u, 0));
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [paid]);
-  return remaining;
-}
 
 export default function TerminalPage() {
   const { session, refresh } = useTier();
@@ -58,8 +40,12 @@ export default function TerminalPage() {
   const paid = subActive(session);
   const email = session?.email || "guest";
 
-  const remaining = useDwellGate(paid);
-  const expired = remaining === 0;
+  const remaining = paid ? null : 0;
+  // The terminal is the expensive page — it polls the board continuously. It
+  // is now for subscribers and trials only; free visitors get the three-match
+  // board on the homepage and a trial offer, instead of a timed preview that
+  // cost a paying customer's bandwidth for every casual visitor.
+  const expired = !paid;
 
   // Return from Stripe Checkout: confirm the session server-side and unlock.
   // The server asks Stripe directly, so this does not wait on the webhook —
@@ -224,7 +210,9 @@ export default function TerminalPage() {
         {view === "tracker" ? (
           <BetTracker />
         ) : (
-          <SchedulePanel tier="pro" onUpgrade={() => setPricingOpen(true)} />
+          // Not mounted when locked: an overlay over a polling board still
+          // makes every request, which is exactly the cost being removed.
+          paid ? <SchedulePanel tier="pro" onUpgrade={() => setPricingOpen(true)} /> : <div />
         )}
 
         {/* ── Preview expired: lock overlay + subscription ask ── */}
@@ -233,7 +221,7 @@ export default function TerminalPage() {
             <div className="text-3xl">⏱</div>
             <div className="text-sm font-bold text-slate-100">Your free preview is up</div>
             <div className="text-[11px] text-terminal-muted max-w-[420px]">
-              You&apos;ve had a minute with the full terminal — live True P for
+              The terminal is for members. Start your {TRIAL_DAYS}-day free trial for live True P on
               tennis, the edge board, trade tickets and the bet journal. Keep it running
               from <b className="text-slate-200">${planById("day").usd} for a day</b> to ${planById("year").usd} for the year.
             </div>
