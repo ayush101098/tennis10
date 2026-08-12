@@ -37,24 +37,36 @@ export default function ManualPage() {
           is one the manual itself makes and the code enforces. */}
       <FaqLd qa={[
         {
-          q: "How is the tennis win probability calculated?",
-          a: "A neural network trained on 41,750 professional matches sets the pre-match prior from ranking, form, surface and head-to-head. Once play starts, a score-conditioned Markov engine re-prices the match from the live score — game, set and point state — so the probability reflects where the match actually stands rather than where it started.",
+          q: "What is Tennis Alpha?",
+          a: "A live win-probability model for professional tennis. A neural network trained on 41,750 tour matches sets the pre-match prior; a score-conditioned Markov engine re-prices the match as the score changes. That probability is compared against de-vigged bookmaker odds to find edge, and turned into a quarter-Kelly stake. Covers ATP, WTA, Challenger, W125 and ITF.",
         },
         {
-          q: "What is edge in tennis betting?",
-          a: "Edge is the model's true probability minus the bookmaker's implied probability after the vig is removed. De-vigging matters: raw bookmaker prices sum to more than 100%, so comparing against them overstates your edge on every single bet.",
+          q: "Is Tennis Alpha a bookmaker?",
+          a: "No. You cannot place a bet through Tennis Alpha and it never holds your money. It is an analytics terminal: it tells you what a match is worth and what the market is charging. You place the bet wherever you already do.",
+        },
+        {
+          q: "How is the tennis win probability calculated?",
+          a: "A Platt-calibrated neural network reads ranking, form, surface and head-to-head for the pre-match prior. In play, a Markov chain re-prices from the live score — game, set and point state — so the number reflects where the match stands rather than where it started.",
+        },
+        {
+          q: "What is edge in tennis betting, and why de-vig the odds?",
+          a: "Edge is the model's probability minus the bookmaker's implied probability after the margin is removed. De-vigging matters because raw prices sum to more than 100%, so comparing against them overstates your edge on every bet.",
         },
         {
           q: "How much should I stake on a tennis bet?",
-          a: "Tennis Alpha uses quarter Kelly, capped at 5% of bankroll, with a hard 2% edge floor. Below that floor no bet is recommended at all — an edge smaller than the model's own error is not an edge.",
+          a: "Quarter Kelly, capped at 5% of bankroll, with a hard 2% edge floor. Below that floor Tennis Alpha recommends no bet at all — an edge smaller than the model's own error is not an edge.",
         },
         {
-          q: "When should you hedge a live tennis position?",
-          a: "On trend break, adverse move, or a deuce-game loss against the position. The terminal flags these as they happen; the discipline is to protect a profit rather than chase a bigger one.",
+          q: "Does Tennis Alpha guarantee profit?",
+          a: "No. The model produces calibrated probabilities, not certainties. Variance at quarter Kelly is wide and losing runs are ordinary inside a winning strategy. Bet only what you can afford to lose.",
         },
         {
-          q: "Which tours does Tennis Alpha cover?",
-          a: "ATP, WTA, Challenger, W125 and ITF — men's and women's — every match day, including the lower tours where bookmaker pricing is loosest.",
+          q: "What does Tennis Alpha cost, and is there a free trial?",
+          a: "$19 for a day pass, $99 monthly, $999 yearly, with no auto-charging — access lapses unless you pay again. Every new account starts with 2 days of the full terminal free, with no card required.",
+        },
+        {
+          q: "Can I use one account on several devices?",
+          a: "One subscription covers one device. Signing in elsewhere moves access to that device and signs the previous one out, so changing phone is fine but sharing an account is not practical.",
         },
       ]} />
       {/* ── Nav ── */}
