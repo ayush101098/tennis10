@@ -271,8 +271,19 @@ export function recordLogin(email: string, source?: string): void {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: normEmail(email), source, deviceId: deviceId() }),
     })
-      .then(r => r.ok ? r.json() : null)
+      .then(r => r.json().catch(() => null))
       .then((data) => {
+        // A protected account signing in from a device that is not its bound
+        // one is refused outright. Without this the client would keep granting
+        // admin locally from ADMIN_EMAILS — which is in the public bundle —
+        // and the server check would be decoration.
+        if (data?.deviceRejected) {
+          seatLost = true;
+          signOut();
+          try { localStorage.setItem("tt_device_locked", "1"); } catch { /* cosmetic */ }
+          window.dispatchEvent(new Event("tt-session-changed"));
+          return;
+        }
         if (!data?.paidUntil) return;
         const cur = loadSession();
         if (!cur || normEmail(cur.email) !== normEmail(email)) return;
@@ -302,6 +313,9 @@ export async function deviceStillValid(email: string): Promise<boolean> {
     );
     if (!res.ok) return true;
     const data = await res.json();
+    // `locked` means a protected account on the wrong device: never treat that
+    // as valid, even transiently.
+    if (data.locked) return false;
     return data.deviceOk !== false;
   } catch {
     return true;

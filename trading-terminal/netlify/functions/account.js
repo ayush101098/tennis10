@@ -24,6 +24,22 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAY = 86400000;
 
 const norm = (e) => String(e || "").trim().toLowerCase();
+
+/**
+ * Accounts that must never move device on their own.
+ *
+ * Kept server-side and NOT read from the client list: the point is to protect
+ * addresses an attacker already knows, so the check cannot live anywhere the
+ * attacker controls. ADMIN_EMAILS in the bundle still decides what the UI
+ * shows; this decides who actually gets the seat.
+ */
+const PROTECTED_EMAILS = new Set([
+  "ayushmishra101098@gmail.com",
+  "mishrapriyanka9515@gmail.com",
+  "sahil7goyal18@gmail.com",
+  "yuvamsharma98@gmail.com",
+]);
+const isProtected = (e) => PROTECTED_EMAILS.has(norm(e));
 const reply = (statusCode, obj) => ({
   statusCode,
   headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
@@ -167,7 +183,10 @@ exports.handler = async (event) => {
       // deviceOk is true when no device is bound yet, so an account that
       // predates this feature is never locked out of its own seat.
       const deviceOk = !deviceId || !acct.deviceId || acct.deviceId === deviceId;
-      return reply(200, { active: paidUntil > now, paidUntil, deviceOk });
+      // A protected account on the wrong device is not merely "not the current
+      // seat" — it must be reported as locked so the client drops admin.
+      const locked = !deviceOk && isProtected(email);
+      return reply(200, { active: locked ? false : paidUntil > now, paidUntil: locked ? 0 : paidUntil, deviceOk, locked });
     }
     const token = process.env.LEADS_ADMIN_TOKEN;
     const hdr = event.headers["x-admin-token"] || event.headers["X-Admin-Token"];
@@ -284,14 +303,43 @@ exports.handler = async (event) => {
   if (!db[email]) db[email] = blank(email, now);
   const deviceId = String(body.deviceId || "").slice(0, 64);
   let evicted = false;
+  let deviceRejected = false;
+
   if (deviceId) {
-    if (db[email].deviceId && db[email].deviceId !== deviceId) {
-      evicted = true;
-      db[email].deviceChangedAt = now;
-      db[email].deviceChanges = (db[email].deviceChanges || 0) + 1;
+    const bound = db[email].deviceId;
+    const changing = bound && bound !== deviceId;
+
+    if (changing && isProtected(email)) {
+      // PROTECTED (admin) accounts are FIRST-device-wins, not last.
+      //
+      // The admin addresses ship inside the public JavaScript bundle — they
+      // have to, the client checks them — so anyone can read one and type it
+      // in. Under the normal last-device-wins rule that stranger would take
+      // the seat and the real owner would be signed out of their own account.
+      // For these accounts a new device is refused instead, and the binding
+      // does not move. Recovery is deliberate: clear deviceId in the store.
+      deviceRejected = true;
+      db[email].deviceRejections = (db[email].deviceRejections || 0) + 1;
+      db[email].lastRejectedAt = now;
+    } else {
+      if (changing) {
+        evicted = true;
+        db[email].deviceChangedAt = now;
+        db[email].deviceChanges = (db[email].deviceChanges || 0) + 1;
+      }
+      db[email].deviceId = deviceId;
+      db[email].deviceSeenAt = now;
     }
-    db[email].deviceId = deviceId;
-    db[email].deviceSeenAt = now;
+  }
+
+  if (deviceRejected) {
+    await save(s, db);
+    return reply(403, {
+      ok: false,
+      email,
+      deviceRejected: true,
+      reason: "This account is locked to another device.",
+    });
   }
   db[email].lastLogin = now;
   db[email].loginCount += 1;

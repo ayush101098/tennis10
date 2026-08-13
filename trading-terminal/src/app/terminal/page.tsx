@@ -182,9 +182,9 @@ export default function TerminalPage() {
 
       {evicted && (
         <div className="px-4 py-1.5 text-[11px] font-bold text-center bg-terminal-yellow/15 text-terminal-yellow border-b border-terminal-yellow/40 shrink-0">
-          Signed out — this account was opened on another device. One subscription covers one device.
+          Signed out — this account is tied to one device. One account, one device.
           <button
-            onClick={() => { try { localStorage.removeItem("tt_evicted"); } catch {} setEvicted(false); setPricingOpen(true); }}
+            onClick={() => { try { localStorage.removeItem("tt_evicted"); localStorage.removeItem("tt_device_locked"); } catch {} setEvicted(false); setPricingOpen(true); }}
             className="ml-2 underline hover:opacity-80">
             sign back in
           </button>
