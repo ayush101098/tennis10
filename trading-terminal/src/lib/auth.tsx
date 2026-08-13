@@ -85,6 +85,12 @@ export const TIME_GRANTS: Record<string, number> = {
   // recorded in the account DB (payments[] via /admin) so revenue is accounted
   // for rather than looking like a comp.
   "nsanity937@gmail.com": 1788825599000,
+  // Comped by the operator 2026-08-13 — two days of full access → 2026-08-15
+  // 23:59Z. NOTE: the request gave the local part only ("utkarsh.srivastava98");
+  // gmail is assumed, matching every other grant here. A grant is keyed by the
+  // exact address, so if the domain is different this silently does nothing —
+  // change the key rather than adding a second entry.
+  "utkarsh.srivastava98@gmail.com": 1786838399000,
 };
 
 /** Grant expiry for an email if one is currently ACTIVE, else null. */
