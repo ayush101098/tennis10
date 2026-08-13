@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { PLANS, planById } from "@/lib/plans";
-import { TRIAL_LENGTH } from "@/lib/auth";
+import { TRIAL_LENGTH, UPI_ID, USD_INR } from "@/lib/auth";
 
 /**
  * FAQ accordion.
@@ -86,9 +86,26 @@ const FAQS: QA[] = [
   },
   {
     q: "How do I pay?",
-    a: <>PayPal or crypto (ETH, USDC, USDT or DAI on Ethereum mainnet). Crypto unlocks
-      automatically once the transaction confirms on-chain; PayPal is confirmed by hand, so
-      message us on X or Telegram after paying and access goes on the same day.</>,
+    a: <>Three ways: <b>UPI</b> (scan the QR or pay <span className="mono">{UPI_ID}</span> from
+      any UPI app), <b>PayPal</b>, or <b>crypto</b> (ETH, USDC, USDT or DAI on Ethereum
+      mainnet). Crypto unlocks automatically once the transaction confirms on-chain. UPI and
+      PayPal are confirmed by hand, so message us on X or Telegram after paying and access goes
+      on the same day.</>,
+  },
+  {
+    q: "Can I pay with UPI from India?",
+    a: <>Yes. The payment screen shows a UPI QR with the amount already filled in, and the ID
+      <span className="mono"> {UPI_ID}</span> if you would rather type it — GPay, PhonePe, Paytm
+      or any UPI app works. The rupee amount is converted at ₹{USD_INR} to the dollar, which is
+      a display rate rather than a live one, so it may sit slightly above the day&apos;s market
+      rate.</>,
+  },
+  {
+    q: "How long until my access is switched on after paying?",
+    a: <>Crypto is automatic — paste the transaction hash and the terminal unlocks once it
+      confirms on-chain. UPI and PayPal have no callback we can verify, so they are switched on
+      by hand: message us on X or Telegram with the name you paid under and it is done the same
+      day. If you want access the instant you pay, use crypto.</>,
   },
   {
     q: "Can I use one account on several devices?",

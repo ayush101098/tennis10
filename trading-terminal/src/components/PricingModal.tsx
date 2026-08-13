@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  PAYMENT_ADDRESS, PAYPAL_ME_URL, PAYPAL_ID,
+  PAYMENT_ADDRESS, PAYPAL_ME_URL, PAYPAL_ID, UPI_ID, USD_INR, upiUri,
   signIn, grantPro, useTier, subActive, loadSession,
 } from "@/lib/auth";
 import { serverVerifyPayment } from "@/lib/entitlement";
@@ -445,6 +445,36 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
                 </p>
               </div>
             )}
+
+            {/* ── UPI ──
+                Same manual-confirmation model as PayPal.me: no callback, so
+                access is switched on by hand. The QR carries the amount so an
+                Indian payer does not have to type it, and the ID is shown
+                separately for anyone paying from a desktop. */}
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 h-px bg-terminal-border" />
+              <span className="text-[9px] text-terminal-muted">🇮🇳 OR PAY BY UPI</span>
+              <div className="flex-1 h-px bg-terminal-border" />
+            </div>
+
+            <div className="flex flex-col items-center gap-2">
+              <QrCode value={upiUri(plan.usd)} size={124}
+                label={`Scan to pay ₹${Math.round(plan.usd * USD_INR).toLocaleString("en-IN")}`} />
+              <div className="flex items-center gap-2 w-full">
+                <code className="flex-1 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-[11px] text-terminal-green break-all select-all text-center">
+                  {UPI_ID}
+                </code>
+                <button
+                  onClick={() => { navigator.clipboard?.writeText(UPI_ID); setMsg({ ok: true, text: "UPI ID copied." }); }}
+                  className="shrink-0 min-h-[36px] px-2 rounded border border-terminal-border text-[10px] font-bold text-slate-300 hover:bg-terminal-bg">
+                  COPY
+                </button>
+              </div>
+              <p className="text-[9px] text-terminal-muted text-center leading-relaxed">
+                GPay · PhonePe · Paytm · any UPI app. ₹{Math.round(plan.usd * USD_INR).toLocaleString("en-IN")} at
+                ₹{USD_INR}/$ — confirmed by hand, so message us after paying and access goes on the same day.
+              </p>
+            </div>
 
             <div className="flex items-center gap-3 my-4">
               <div className="flex-1 h-px bg-terminal-border" />

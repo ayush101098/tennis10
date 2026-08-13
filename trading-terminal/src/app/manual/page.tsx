@@ -65,6 +65,10 @@ export default function ManualPage() {
           a: "$19 for a day pass, $99 monthly, $999 yearly, with no auto-charging — access lapses unless you pay again. Every new account starts with 24 hours of the full terminal free, with no card required.",
         },
         {
+          q: "How do I pay for Tennis Alpha?",
+          a: "Three ways: UPI (scan the QR or pay tennisalpha.ybl from any UPI app), PayPal, or crypto — ETH, USDC, USDT or DAI on Ethereum mainnet. Crypto unlocks automatically once the transaction confirms on-chain; UPI and PayPal are confirmed by hand and switched on the same day.",
+        },
+        {
           q: "Can I use one account on several devices?",
           a: "One subscription covers one device. Signing in elsewhere moves access to that device and signs the previous one out, so changing phone is fine but sharing an account is not practical.",
         },

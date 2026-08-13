@@ -42,6 +42,23 @@ export const PRO_PRICE_USD = 100;            // monthly subscription
 // flow in PricingModal). The API-based PayPal button above it unlocks instantly.
 export const PAYPAL_ME_URL = "https://paypal.me/jessefuture10";
 export const PAYPAL_ID = "paypal.me/jessefuture10";
+
+/**
+ * UPI — the practical route for Indian customers, where cards and PayPal both
+ * carry friction. Like PayPal.me it produces no callback, so it is confirmed by
+ * hand; unlike PayPal.me, the QR can carry the amount, so the payer does not
+ * have to type it.
+ *
+ * USD_INR is a display rate for prefilling the QR, not a settlement rate. It is
+ * deliberately generous rather than exact — a QR that asks for slightly more
+ * than the price is a bad trade against one that asks for too little and leaves
+ * the customer underpaid and unactivated. Update it when it drifts.
+ */
+export const UPI_ID = "tennisalpha.ybl";
+export const USD_INR = 88;
+export const upiUri = (usd: number): string =>
+  `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent("Tennis Alpha")}`
+  + `&am=${Math.round(usd * USD_INR)}&cu=INR&tn=${encodeURIComponent("Tennis Alpha subscription")}`;
 export const SUBSCRIPTION_DAYS = 30;          // access window per payment
 export const MIN_PAYMENT_USD = 100;           // payments below this are rejected
 export const TRIAL_DAYS = 1;                  // free trial granted on first sign-up
