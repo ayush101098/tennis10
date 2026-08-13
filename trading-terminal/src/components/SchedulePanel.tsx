@@ -7,7 +7,7 @@ const LIVE_POLL_MS = 15_000;
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { fetchScheduleClient, refreshLiveMatches, probToOdds, kellyFraction,
-  qualifies, quarterKellyStake, EDGE_FLOOR } from "@/lib/scheduleService";
+  qualifies, quarterKellyStake, EDGE_FLOOR, tourRank } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
 import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
@@ -119,7 +119,17 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
     return () => clearInterval(iv);
   }, []);
 
-  const raw = data ? (day === "today" ? data.today : data.tomorrow) : [];
+  // Tour tier before time. ITF and Challenger outnumber tour-level roughly
+  // forty to one, so ordering purely by start time buried every ATP and WTA
+  // match below sixty-odd ITF fixtures — the reason they looked unfetched. The
+  // landing board has sorted this way for days; the terminal did not.
+  const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 } as const;
+  const raw = (data ? (day === "today" ? data.today : data.tomorrow) : [])
+    .slice()
+    .sort((a, b) =>
+      ((order[a.status] ?? 2) - (order[b.status] ?? 2)) ||
+      (tourRank(a.tour) - tourRank(b.tour)) ||
+      ((a.start_timestamp || 9e9) - (b.start_timestamp || 9e9)));
   const tours = Array.from(new Set(raw.map(m => m.tour))).sort();
   // "ITF" is a group filter (matches "ITF M" + "ITF W"); every other value is exact.
   const itfCount = raw.filter(m => m.tour.includes("ITF")).length;
@@ -184,7 +194,14 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
         {itfCount > 0 && (
           <Pill active={tourFilter === "ITF"} onClick={() => setTourFilter("ITF")}>ITF ({itfCount})</Pill>
         )}
-        {tours.map(t => <Pill key={t} active={tourFilter === t} onClick={() => setTourFilter(t)}>{t}</Pill>)}
+        {/* Counts on every tour, not only ITF. Without them ATP read as empty
+            beside "ITF (63)" — the matches were there, the pill just never said
+            how many. */}
+        {tours.map(t => (
+          <Pill key={t} active={tourFilter === t} onClick={() => setTourFilter(t)}>
+            {t} ({raw.filter(m => m.tour === t).length})
+          </Pill>
+        ))}
         <span className="text-terminal-border mx-0.5">│</span>
         <Pill active={statusFilter === "ALL"} onClick={() => setStatusFilter("ALL")}>ALL ({raw.length})</Pill>
         {counts.live ? <Pill active={statusFilter === "live"} onClick={() => setStatusFilter("live")} color="green">🔴 LIVE MATCHES ({counts.live})</Pill> : null}
