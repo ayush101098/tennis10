@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { captureLead } from "@/lib/subscribe";
+import { signIn, TRIAL_LENGTH } from "@/lib/auth";
 import { trackEvent } from "@/components/Analytics";
 
 /**
@@ -20,8 +21,13 @@ export default function EmailCapture({ source = "landing", cta = "Get early acce
     setState("loading");
     const res = await captureLead(email.trim(), source);
     if (res.ok) {
+      // Giving an address anywhere on the site is a signup, so it grants the
+      // same 24 hours the pricing modal does. Asking for an email twice — once
+      // "to be kept posted" and again "to start a trial" — is a worse
+      // experience and gets fewer addresses, not more.
+      signIn(email.trim().toLowerCase());
       setState("done");
-      setMsg("You're on the list — we'll be in touch.");
+      setMsg(`You're in — ${TRIAL_LENGTH} of the full terminal is unlocked.`);
       trackEvent("Signup", { source });
     } else {
       setState("error");
@@ -31,8 +37,12 @@ export default function EmailCapture({ source = "landing", cta = "Get early acce
 
   if (state === "done") {
     return (
-      <div className="flex items-center gap-2 text-sm text-terminal-green" role="status">
-        <span aria-hidden>✓</span> {msg}
+      <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-terminal-green" role="status">
+        <span><span aria-hidden>✓</span> {msg}</span>
+        <a href="/terminal"
+          className="inline-flex items-center min-h-[36px] px-3 rounded bg-terminal-green text-black text-[11px] font-bold hover:opacity-90">
+          OPEN THE TERMINAL →
+        </a>
       </div>
     );
   }

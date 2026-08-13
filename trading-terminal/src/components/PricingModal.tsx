@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   PAYMENT_ADDRESS, PAYPAL_ME_URL, PAYPAL_ID,
   signIn, grantPro, useTier, subActive, loadSession,
@@ -66,6 +66,41 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     window.addEventListener("tt-session-changed", onChanged);
     return () => window.removeEventListener("tt-session-changed", onChanged);
   }, [open, onClose, onDone, refresh]);
+
+  /**
+   * Unlock as soon as a valid address has been typed — no second click.
+   *
+   * The only deliberate action is the CTA that opened this modal. Asking for a
+   * button press after the address is already valid is a step that converts
+   * nobody and loses some.
+   *
+   * Debounced 900ms rather than firing on every keystroke: "j@gmail.co" passes
+   * a validity check on the way to "j@gmail.com", and submitting that would
+   * create an account on an address the person never finished typing. The
+   * guard ref makes it fire once per modal, so a later edit cannot start a
+   * second session.
+   */
+  const autoStarted = useRef(false);
+  // beginSession is declared after the early return, so the effect reaches it
+  // through a ref rather than being moved itself — hooks must run on every
+  // render, and `if (!open) return null` sits between the two.
+  const beginSessionRef = useRef<((addr: string) => void) | null>(null);
+  useEffect(() => {
+    if (!open || autoStarted.current || busy) return;
+    if (!/\S+@\S+\.\S+/.test(email) || subActive(loadSession())) return;
+    const t = setTimeout(() => {
+      if (autoStarted.current) return;
+      autoStarted.current = true;
+      setMsg({ ok: true, text: "Unlocking your 24 hours…" });
+      beginSessionRef.current?.(email.trim().toLowerCase());
+    }, 900);
+    return () => clearTimeout(t);
+    // beginSession is stable for the life of the modal
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, email, busy]);
+
+  // A reopened modal may legitimately start a new session.
+  useEffect(() => { if (!open) autoStarted.current = false; }, [open]);
 
   if (!open) return null;
 
@@ -158,10 +193,14 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     else onDone?.();
   };
 
+  beginSessionRef.current = beginSession;
+
   const startFree = () => {
     if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
     beginSession(email);
   };
+
+
 
   const startPro = () => {
     if (!validEmail) { setMsg({ ok: false, text: "Enter a valid email first." }); return; }
