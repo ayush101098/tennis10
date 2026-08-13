@@ -81,13 +81,15 @@ body {
    is confined to the name itself and never leaks into UI text. Replaced by
    /brand/wordmark.svg automatically when that file exists (see Wordmark.tsx). */
 .brand-wordmark {
-  font-family: "Kaushan Script", "Brush Script MT", cursive;
-  font-weight: 400;
+  /* Was a brush script. Beside the TA dial mark that read as two brands at
+     once — a handwritten signature next to a measuring instrument. The serif,
+     letterspaced and small-capped, says the same thing the mark does. */
+  font-family: "Source Serif 4", Georgia, serif;
+  font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   white-space: nowrap;
-  /* the script sits high in its em box; nudge it onto the row's baseline */
-  transform: translateY(0.06em);
 }
 
 /* Terminal header tab. Same visual density as before on a mouse; on a touch

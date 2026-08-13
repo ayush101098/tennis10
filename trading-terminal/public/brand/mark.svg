@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="Tennis Alpha">
+  <!--
+    The TA monogram: a white T overlapped by a green apex A, inside the
+    instrument-dial rings. Rebuilt as vector rather than shipped as a PNG so it
+    stays sharp from a 16px browser tab to a full-page header, and so the
+    palette stays tied to the site's own greens.
+  -->
+  <defs>
+    <linearGradient id="ta-a" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5FE3AC"/>
+      <stop offset="1" stop-color="#22c55e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- dial rings: outer, inner, and the tick ring between them -->
+  <circle cx="200" cy="200" r="188" fill="none" stroke="#22c55e" stroke-opacity="0.30" stroke-width="1.5"/>
+  <circle cx="200" cy="200" r="150" fill="none" stroke="#22c55e" stroke-opacity="0.16" stroke-width="1"/>
+  <g stroke="#22c55e" stroke-opacity="0.45" stroke-width="2" stroke-linecap="round">
+    <!-- quarter ticks, long -->
+    <line x1="200" y1="6"   x2="200" y2="22"/>
+    <line x1="394" y1="200" x2="378" y2="200"/>
+    <line x1="200" y1="394" x2="200" y2="378"/>
+    <line x1="6"   y1="200" x2="22"  y2="200"/>
+  </g>
+  <g stroke="#22c55e" stroke-opacity="0.22" stroke-width="1.5" stroke-linecap="round">
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(30 200 200)"/>
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(60 200 200)"/>
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(120 200 200)"/>
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(150 200 200)"/>
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(210 200 200)"/>
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(240 200 200)"/>
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(300 200 200)"/>
+    <line x1="200" y1="9" x2="200" y2="19" transform="rotate(330 200 200)"/>
+  </g>
+
+  <!-- T — bar plus stem, sitting left of centre so the A can overlap it -->
+  <rect x="112" y="150" width="132" height="17" rx="3" fill="#F1F5F9"/>
+  <rect x="169" y="150" width="18"  height="122" rx="3" fill="#F1F5F9"/>
+
+  <!-- A — an apex with no crossbar, overlapping the T's stem -->
+  <path d="M232 272 L268 158 L286 158 L322 272 L296 272 L277 206 L258 272 Z" fill="url(#ta-a)"/>
+</svg>

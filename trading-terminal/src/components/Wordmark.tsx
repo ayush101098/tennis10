@@ -45,15 +45,15 @@ export default function Wordmark({ size = 18, mark = true }: {
     <span className="inline-flex items-center gap-2 shrink-0" aria-label="Tennis Alpha">
       {mark && hasMark && (
         // eslint-disable-next-line @next/next/no-img-element -- static brand asset
-        <img src="/brand/mark.svg" alt="" height={size * 1.4} style={{ height: size * 1.4, width: "auto" }} />
+        <img src="/brand/mark.svg" alt="" height={size * 1.6} style={{ height: size * 1.6, width: "auto" }} />
       )}
       {hasArt ? (
         // eslint-disable-next-line @next/next/no-img-element -- static brand asset
         <img src="/brand/wordmark.svg" alt="Tennis Alpha"
           style={{ height: size * 1.5, width: "auto", display: "block" }} />
       ) : (
-        <span className="brand-wordmark" style={{ fontSize: size * 1.5, color: BRAND_GREEN }}>
-          tennis alpha
+        <span className="brand-wordmark" style={{ fontSize: size * 0.92, color: BRAND_GREEN }}>
+          Tennis Alpha
         </span>
       )}
     </span>

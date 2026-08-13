@@ -22,14 +22,18 @@ export default function OgImage() {
           background: "#0a0e17", color: "#e2e8f0", fontFamily: "monospace",
         }}
       >
-        {/* The mark is drawn, not typed: next/og ships no font covering ◉ and
-            it rendered as a tofu box. */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16, color: "#4CA85E", fontSize: 34 }}>
-          <div style={{
-            width: 26, height: 26, borderRadius: 13,
-            border: "6px solid #4CA85E", display: "flex",
-          }} />
-          <span>tennis alpha</span>
+        {/* The TA monogram, drawn with primitives: next/og has no SVG import
+            and no font covering the dial glyphs, so the mark is composed from
+            boxes here rather than referenced. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div style={{ display: "flex", position: "relative", width: 54, height: 54 }}>
+            <div style={{ position: "absolute", left: 2, top: 12, width: 30, height: 6, background: "#F1F5F9", display: "flex" }} />
+            <div style={{ position: "absolute", left: 14, top: 12, width: 6, height: 32, background: "#F1F5F9", display: "flex" }} />
+            <div style={{ position: "absolute", left: 26, top: 44, width: 10, height: 6, background: "#22c55e", display: "flex", transform: "rotate(-72deg)" }} />
+            <div style={{ position: "absolute", left: 30, top: 12, width: 6, height: 32, background: "#22c55e", display: "flex", transform: "rotate(-18deg)" }} />
+            <div style={{ position: "absolute", left: 42, top: 12, width: 6, height: 32, background: "#22c55e", display: "flex", transform: "rotate(18deg)" }} />
+          </div>
+          <span style={{ color: "#4CA85E", fontSize: 30, letterSpacing: 4 }}>TENNIS ALPHA</span>
         </div>
         <div style={{ fontSize: 62, fontWeight: 700, color: "#f1f5f9", lineHeight: 1.15, marginTop: 26 }}>
           True probabilities for every
