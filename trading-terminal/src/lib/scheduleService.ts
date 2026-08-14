@@ -115,6 +115,13 @@ export interface ScheduleData {
    * live. Non-zero means the board is being served from cache — see feedAgeMs.
    */
   feedAgeMs?: number;
+  /**
+   * Set when the ESPN standby supplied the tour draws because SofaScore was
+   * stale. The board is then a mix: ATP/WTA current, the rest as old as
+   * feedAgeMs — which the staleness warning has to say, or it accuses fresh
+   * numbers of being stale and people stop trusting the warning that matters.
+   */
+  fallbackActive?: boolean;
 }
 
 /** Past this, the board is stale enough that a live price is not trustworthy. */
@@ -809,6 +816,7 @@ let sofaSourcesOk = true;
  * throwing that away.
  */
 let feedAgeMs = 0;
+let fallbackActive = false;
 
 function noteFeedAge(res: Response) {
   const raw = res.headers.get("x-sofa-age-ms");
@@ -959,6 +967,7 @@ export async function fetchScheduleClient(
   // Reset before the fetches below, or the high-water mark from a past outage
   // would keep warning about staleness long after the feed recovered.
   feedAgeMs = 0;
+  fallbackActive = false;
 
   const now = new Date();
   const tom = new Date(now);
@@ -995,6 +1004,7 @@ export async function fetchScheduleClient(
       fetchESPN("wta", todayStr, rankMap),
     ]);
     at.push(...a); wt.push(...w);
+    fallbackActive = at.length + wt.length > 0;
   }
 
   const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 };
@@ -1063,7 +1073,7 @@ export async function fetchScheduleClient(
   if (onPartial) {
     onPartial({
       today, tomorrow: [], today_date: todayStr, tomorrow_date: tomorrowStr,
-      fetched_at: Date.now(), sourcesDown: false, feedAgeMs,
+      fetched_at: Date.now(), sourcesDown: false, feedAgeMs, fallbackActive,
     });
   }
 
@@ -1084,7 +1094,7 @@ export async function fetchScheduleClient(
   const sourcesDown = !sofaSourcesOk && today.length === 0 && tomorrow.length === 0;
   const result: ScheduleData = {
     today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr,
-    fetched_at: Date.now(), sourcesDown, feedAgeMs,
+    fetched_at: Date.now(), sourcesDown, feedAgeMs, fallbackActive,
   };
   _scheduleCache = { data: result, ts: Date.now() };
   return result;
