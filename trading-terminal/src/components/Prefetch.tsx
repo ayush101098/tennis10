@@ -39,7 +39,16 @@ const SCRIPT = `
       // Kept as a promise, not a value: the consumer awaits whatever state this
       // is in when it arrives, whether that is pending or already settled.
       store[u] = fetch(u, { cache: "no-store" })
-        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (r) {
+          // Record how stale the cache behind this response is, so a warmed
+          // request still reports it. Without this the prefetch path silently
+          // dropped x-sofa-age-ms and the staleness warning never fired.
+          var a = Number(r.headers.get("x-sofa-age-ms"));
+          if (isFinite(a) && a > 0) {
+            window.__ttFeedAge = Math.max(window.__ttFeedAge || 0, a);
+          }
+          return r.ok ? r.json() : null;
+        })
         .catch(function () { return null; });
     });
     window.__ttPrefetch = store;

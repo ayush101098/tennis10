@@ -817,6 +817,19 @@ function noteFeedAge(res: Response) {
   if (Number.isFinite(age)) feedAgeMs = Math.max(feedAgeMs, age);
 }
 
+/**
+ * The head-inline prefetch consumes its own responses, so its headers never
+ * reach fetchSofaEndpoint. It parks the age on window instead; fold that in.
+ */
+function adoptPrefetchedFeedAge() {
+  if (typeof window === "undefined") return;
+  const w = window as unknown as { __ttFeedAge?: number };
+  if (typeof w.__ttFeedAge === "number") feedAgeMs = Math.max(feedAgeMs, w.__ttFeedAge);
+  // Read once. Otherwise this page-load value would keep warning long after a
+  // later refresh proved the feed healthy again.
+  delete w.__ttFeedAge;
+}
+
 async function fetchSofaScheduled(
   targetDate: string,
   rankMap: RankMap,
@@ -1031,6 +1044,7 @@ export async function fetchScheduleClient(
   // edge and stake immediately — what is still missing is only the in-play
   // odds refresh, which arrives below.
   for (const m of today) attachIntelligence(m);
+  adoptPrefetchedFeedAge();
   if (onPartial) {
     onPartial({
       today, tomorrow: [], today_date: todayStr, tomorrow_date: tomorrowStr,
@@ -1051,6 +1065,7 @@ export async function fetchScheduleClient(
 
   // Sources are "down" only when nothing answered AND we have nothing to show.
   // A day that genuinely has no matches must not be reported as an outage.
+  adoptPrefetchedFeedAge();
   const sourcesDown = !sofaSourcesOk && today.length === 0 && tomorrow.length === 0;
   const result: ScheduleData = {
     today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr,
