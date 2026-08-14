@@ -110,7 +110,15 @@ export interface ScheduleData {
    * normal operation and went unnoticed while the board sat empty.
    */
   sourcesDown?: boolean;
+  /**
+   * Age of the upstream data behind this board, in ms. Zero when the feed is
+   * live. Non-zero means the board is being served from cache — see feedAgeMs.
+   */
+  feedAgeMs?: number;
 }
+
+/** Past this, the board is stale enough that a live price is not trustworthy. */
+export const FEED_STALE_MS = 15 * 60 * 1000;
 
 // ─── Rankings lookup (loaded once from /rankings.json) ───────────────────────
 
@@ -771,6 +779,7 @@ async function fetchSofaEndpoint(url: string): Promise<{ events: unknown[]; ok: 
     const res = await fetch(apiUrl(url), { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return { events: [], ok: false };
+    noteFeedAge(res);
     const json = await res.json();
     return { events: json.events || [], ok: true };
   } catch {
@@ -785,6 +794,28 @@ async function fetchSofaEndpoint(url: string): Promise<{ events: unknown[]; ok: 
  * ever read immediately after, when the ScheduleData is assembled.
  */
 let sofaSourcesOk = true;
+
+/**
+ * Age of the newest upstream data behind this board, in ms.
+ *
+ * sourcesDown only fires when EVERY source returns nothing, which misses the
+ * failure that actually happened: SofaScore challenged our IP, the push loop
+ * froze, and the blob cache kept serving an 11-hour-old snapshot. Every request
+ * was a 200 with a full set of fixtures, so the board looked healthy while
+ * showing matches as "upcoming" that had already been played. For a product
+ * that prices live bets, silently stale is worse than visibly empty.
+ *
+ * The proxy already stamps x-sofa-age-ms on every cache hit; this just stops
+ * throwing that away.
+ */
+let feedAgeMs = 0;
+
+function noteFeedAge(res: Response) {
+  const raw = res.headers.get("x-sofa-age-ms");
+  if (raw == null) return;               // a live upstream hit — nothing to report
+  const age = Number(raw);
+  if (Number.isFinite(age)) feedAgeMs = Math.max(feedAgeMs, age);
+}
 
 async function fetchSofaScheduled(
   targetDate: string,
@@ -912,6 +943,10 @@ export async function fetchScheduleClient(
     return _scheduleCache.data;
   }
 
+  // Reset before the fetches below, or the high-water mark from a past outage
+  // would keep warning about staleness long after the feed recovered.
+  feedAgeMs = 0;
+
   const now = new Date();
   const tom = new Date(now);
   tom.setDate(tom.getDate() + 1);
@@ -999,7 +1034,7 @@ export async function fetchScheduleClient(
   if (onPartial) {
     onPartial({
       today, tomorrow: [], today_date: todayStr, tomorrow_date: tomorrowStr,
-      fetched_at: Date.now(), sourcesDown: false,
+      fetched_at: Date.now(), sourcesDown: false, feedAgeMs,
     });
   }
 
@@ -1019,7 +1054,7 @@ export async function fetchScheduleClient(
   const sourcesDown = !sofaSourcesOk && today.length === 0 && tomorrow.length === 0;
   const result: ScheduleData = {
     today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr,
-    fetched_at: Date.now(), sourcesDown,
+    fetched_at: Date.now(), sourcesDown, feedAgeMs,
   };
   _scheduleCache = { data: result, ts: Date.now() };
   return result;

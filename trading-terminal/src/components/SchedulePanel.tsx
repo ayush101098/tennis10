@@ -7,7 +7,7 @@ const LIVE_POLL_MS = 15_000;
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { fetchScheduleClient, refreshLiveMatches, probToOdds, kellyFraction,
-  qualifies, quarterKellyStake, EDGE_FLOOR, tourRank } from "@/lib/scheduleService";
+  qualifies, quarterKellyStake, EDGE_FLOOR, tourRank, FEED_STALE_MS } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
 import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
@@ -229,6 +229,7 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
           {loading && !data && (
             <div className="flex items-center justify-center h-full text-terminal-muted text-xs animate-pulse">Loading ESPN data…</div>
           )}
+          <StaleBanner ageMs={data?.feedAgeMs} />
           {Object.entries(grouped).map(([t, ms]) => (
             <div key={t}>
               <div className="px-3 py-1 bg-terminal-panel/50 border-b border-terminal-border sticky top-0 z-10 flex items-center gap-2">
@@ -1036,6 +1037,33 @@ function StatVal({ v, o, lower, pct: isPct }: { v: number; o: number; lower?: bo
   const worse = lower ? v > o : v < o;
   const color = better ? "text-terminal-green font-bold" : worse ? "text-terminal-red" : "text-slate-200";
   return <span className={`font-mono ${color}`}>{v}{isPct ? "%" : ""}</span>;
+}
+
+/**
+ * Shown when the board is being served from cache rather than a live feed.
+ *
+ * The outage this exists for did not look like an outage: SofaScore challenged
+ * our IP, the push loop froze, and every request kept returning 200 with a full
+ * card of fixtures — hours old, with matches that were already in play still
+ * listed as upcoming. Nothing on screen said so. A stale price on a live match
+ * is the one failure mode this product must never hide, so it says so here
+ * instead of letting someone stake against a number that stopped moving.
+ */
+function StaleBanner({ ageMs }: { ageMs?: number }) {
+  if (!ageMs || ageMs < FEED_STALE_MS) return null;
+  const mins = Math.round(ageMs / 60000);
+  const age = mins < 90 ? `${mins} min` : `${Math.round(mins / 60)} h`;
+  return (
+    <div className="px-3 py-2 border-b border-terminal-yellow/40 bg-terminal-yellow/10">
+      <div className="text-[11px] font-bold text-terminal-yellow">
+        ⚠ Feed delayed — data is {age} old
+      </div>
+      <div className="text-[10px] text-terminal-muted mt-0.5">
+        Scores, odds and edges below are from the last successful update, not live.
+        Don&apos;t stake on them until this clears.
+      </div>
+    </div>
+  );
 }
 
 function Pill({ active, onClick, children, color }: {

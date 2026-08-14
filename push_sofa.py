@@ -26,7 +26,7 @@ SETUP
                     TT_SITE_URL=https://tennispredictions.netlify.app
 
     python push_sofa.py --once      # one push, prints each path
-    python push_sofa.py             # loop every 30s (leave running)
+    python push_sofa.py             # loop every 45s (leave running)
 """
 
 import argparse
@@ -79,16 +79,36 @@ def load_env() -> None:
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-def paths_for(days: int = 2) -> list[str]:
+# ─── Request budget ──────────────────────────────────────────────────────────
+# Everything below exists because the first version of this loop fetched EVERY
+# path every 30s: 1 live + 10 scheduled + 40 live events x 3 detail paths = 131
+# requests per cycle, 262/min, ~377,000/day. SofaScore challenged the IP for it
+# (403 {"reason":"challenge"} on every endpoint, including from a real browser),
+# the feed froze, and the board served hours-old fixtures as if they were current.
+#
+# So each path now refreshes at the rate it actually changes. A scheduled draw
+# does not move every 30 seconds; a live point does.
+SCHEDULED_EVERY = 20   # cycles between scheduled-events refreshes (~15 min)
+ODDS_EVERY = 10        # cycles between bulk daily-odds refreshes (~7.5 min)
+STATS_EVERY = 4        # cycles between per-event statistics refreshes
+LIVE_DETAIL_CAP = 12   # in-play matches carrying full detail, best tours first
+
+
+def paths_for(days: int = 2, cycle_n: int = 0) -> list[str]:
+    """Paths due this cycle. The live feed every time; the rest on their own beat."""
     today = _dt.date.today()
     out = ["sport/tennis/events/live"]
+    want_sched = cycle_n % SCHEDULED_EVERY == 0
+    want_odds = cycle_n % ODDS_EVERY == 0
     for i in range(days):
         d = (today + _dt.timedelta(days=i)).isoformat()
         # sport/tennis/scheduled-events/<date> was dropped upstream — it 404s
         # every time, so it is no longer requested. Coverage comes from the
         # per-category endpoints below.
-        out += [f"category/{c}/scheduled-events/{d}" for c in CATEGORIES]
-        out.append(f"sport/tennis/odds/1/{d}")
+        if want_sched:
+            out += [f"category/{c}/scheduled-events/{d}" for c in CATEGORIES]
+        if want_odds:
+            out.append(f"sport/tennis/odds/1/{d}")
     return out
 
 
@@ -98,21 +118,36 @@ def paths_for(days: int = 2) -> list[str]:
 LIVE_EVENT_PATHS = (
     "event/{id}/odds/1/all",
     "event/{id}/point-by-point",
-    "event/{id}/statistics",
 )
+# Serve/return splits move far slower than the score does.
+SLOW_EVENT_PATHS = ("event/{id}/statistics",)
+
+# Detail budget goes to the tours people actually open, not to whichever ITF
+# match happens to sort first.
+_TIER = {3: 0, 6: 0, 72: 1, 785: 2, 213: 2}
 
 
-def live_event_paths(limit: int = 40) -> list[str]:
+def live_event_paths(limit: int = LIVE_DETAIL_CAP, cycle_n: int = 0) -> list[str]:
     """Paths for the events currently in play, straight from the live feed."""
     payload, err = fetch_local("sport/tennis/events/live")
     if not payload:
         return []
+
+    def rank(evt) -> tuple:
+        cat = ((evt.get("tournament") or {}).get("category") or {}).get("id")
+        return (_TIER.get(cat, 3), evt.get("startTimestamp") or 0)
+
+    inplay = [e for e in (payload.get("events") or [])
+              if ((e.get("status") or {}).get("type") == "inprogress") and e.get("id")]
+    inplay.sort(key=rank)
+
+    templates = list(LIVE_EVENT_PATHS)
+    if cycle_n % STATS_EVERY == 0:
+        templates += SLOW_EVENT_PATHS
+
     out = []
-    for evt in (payload.get("events") or [])[:limit]:
-        eid = evt.get("id")
-        if not eid:
-            continue
-        out += [t.format(id=eid) for t in LIVE_EVENT_PATHS]
+    for evt in inplay[:limit]:
+        out += [t.format(id=evt["id"]) for t in templates]
     return out
 
 
@@ -126,9 +161,17 @@ def fetch_local(path: str):
                 return None, f"proxy HTTP {r.status}"
             return json.loads(r.read().decode()), None
     except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return None, CHALLENGED
         return None, f"proxy HTTP {e.code}"
     except Exception as e:
         return None, str(e)[:120]
+
+
+# Sentinel for "SofaScore is refusing us", as distinct from "this path 404s".
+# The difference matters: a 404 is one dead path, a challenge means every
+# further request digs the hole deeper, so the loop has to stand down.
+CHALLENGED = "challenged"
 
 
 def push(path: str, payload, endpoint: str, token: str):
@@ -156,12 +199,20 @@ def _count(payload) -> str:
     return ""
 
 
-def cycle(endpoint: str, token: str, days: int, verbose: bool) -> tuple[int, int]:
+def cycle(endpoint: str, token: str, days: int, verbose: bool,
+          cycle_n: int = 0) -> tuple[int, int, bool]:
     ok_n = fail_n = 0
+    challenged = False
     # Scheduled/odds first, then per-event detail for whatever is in play now.
-    for path in paths_for(days) + live_event_paths():
+    for path in paths_for(days, cycle_n) + live_event_paths(cycle_n=cycle_n):
         payload, err = fetch_local(path)
         if payload is None:
+            if err == CHALLENGED:
+                # Abandon the cycle immediately. Every extra request while
+                # challenged is one more reason for SofaScore to keep us out.
+                print(f"    CHALLENGED at {path} — standing down for this cycle",
+                      flush=True)
+                return ok_n, fail_n, True
             # SofaScore legitimately 404s some category/date combos — not an error
             if verbose:
                 print(f"    skip  {path}  ({err})", flush=True)
@@ -172,7 +223,7 @@ def cycle(endpoint: str, token: str, days: int, verbose: bool) -> tuple[int, int
         if verbose or not ok:
             print(f"    {'ok  ' if ok else 'FAIL'}  {path}  {_count(payload)} {'' if ok else msg}",
                   flush=True)
-    return ok_n, fail_n
+    return ok_n, fail_n, challenged
 
 
 def main() -> None:
@@ -180,7 +231,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Push SofaScore tennis data to the deployed site")
     ap.add_argument("--url", default=os.getenv("TT_SITE_URL", ""))
     ap.add_argument("--token", default=os.getenv("TT_PUSH_TOKEN", ""))
-    ap.add_argument("--interval", type=int, default=30)
+    ap.add_argument("--interval", type=int, default=45)
     ap.add_argument("--days", type=int, default=2, help="today + N-1 following days")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--quiet", action="store_true")
@@ -194,19 +245,58 @@ def main() -> None:
 
     # fail fast if the local proxy isn't up — otherwise every cycle is a no-op
     probe, err = fetch_local("sport/tennis/events/live")
-    if probe is None:
+    if probe is None and err != CHALLENGED:
         print(f"ERROR: local sofa proxy unreachable at {LOCAL_PROXY} ({err}).\n"
               f"       Start it first:  python sofa_proxy.py", file=sys.stderr)
         sys.exit(2)
+    if err == CHALLENGED:
+        print("WARNING: SofaScore is currently challenging this IP. Starting in "
+              "backoff — the loop will keep probing at a widening interval and "
+              "resume full pushes the moment it is let back in.", flush=True)
 
     endpoint = args.url.rstrip("/") + "/api/sofa/_push"
     print("=" * 68)
     print(f"SOFA PUSH → {endpoint}   every {args.interval}s · {args.days}d")
     print("=" * 68, flush=True)
+
+    # While challenged the loop probes with ONE request at 5, 10, 20, 40, 60min
+    # rather than continuing to poll. A ban that is still being hammered is a
+    # ban that does not expire.
+    BACKOFF = (300, 600, 1200, 2400, 3600)
+    strikes = 0
+    n = 0
     try:
         while True:
             t0 = time.time()
-            ok_n, fail_n = cycle(endpoint, args.token, args.days, not args.quiet)
+            if strikes:
+                # Single cheap probe; only a success ends the standdown.
+                payload, err = fetch_local("sport/tennis/events/live")
+                if payload is None:
+                    wait = BACKOFF[min(strikes - 1, len(BACKOFF) - 1)]
+                    print(f"[{time.strftime('%H:%M:%S')}] still challenged "
+                          f"(strike {strikes}) — next probe in {wait // 60}min",
+                          flush=True)
+                    strikes += 1
+                    if args.once:
+                        break
+                    time.sleep(wait)
+                    continue
+                print(f"[{time.strftime('%H:%M:%S')}] upstream is back — resuming",
+                      flush=True)
+                strikes = 0
+
+            ok_n, fail_n, challenged = cycle(endpoint, args.token, args.days,
+                                             not args.quiet, n)
+            if challenged:
+                strikes = 1
+                if args.once:
+                    break
+                print(f"[{time.strftime('%H:%M:%S')}] backing off "
+                      f"{BACKOFF[0] // 60}min", flush=True)
+                time.sleep(BACKOFF[0])
+                continue
+
+            n += 1
             print(f"[{time.strftime('%H:%M:%S')}] pushed {ok_n} path(s)"
                   f"{f', {fail_n} failed' if fail_n else ''}", flush=True)
             if args.once:
