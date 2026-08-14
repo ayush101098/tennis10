@@ -69,6 +69,16 @@ export const TRIAL_DAYS = 1;                  // free trial granted on first sig
  */
 export const TRIAL_LABEL = TRIAL_DAYS === 1 ? "24-hour" : `${TRIAL_DAYS}-day`;
 export const TRIAL_LENGTH = TRIAL_DAYS === 1 ? "24 hours" : `${TRIAL_DAYS} days`;
+/**
+ * Free trials are OFF (operator, 2026-08-14): the terminal is for subscribers
+ * and operator-issued grants only.
+ *
+ * This flag governs COPY ONLY. The authority is TRIALS_ENABLED in
+ * netlify/functions/account.js, which is what decides whether a grant is
+ * actually written — a client flag alone would be an invitation to flip it in
+ * devtools. Both must be turned back on together to re-open trials.
+ */
+export const TRIALS_ENABLED = false;
 export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription
 
 // Stablecoins we can price 1:1 for the payment-amount guardrail (mainnet).

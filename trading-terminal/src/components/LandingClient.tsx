@@ -4,8 +4,14 @@
 // cannot change faster than that — 15s shows every score change and cuts the
 // request rate by two thirds.
 const LIVE_POLL_MS = 15_000;
-/** Matches a free visitor sees on the homepage. */
-const FREE_MATCH_LIMIT = 3;
+/**
+ * Matches a free visitor sees on the homepage.
+ *
+ * One, since 2026-08-14: the terminal is members-only and this is the whole
+ * free product — a single glance at what the model does, not a usable board.
+ * Every row on screen is polled, so this is also the request-cost floor.
+ */
+const FREE_MATCH_LIMIT = 1;
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SsrMatch } from "@/components/SsrMatchList";
@@ -22,7 +28,7 @@ import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/schedul
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
-import { useTier, TRIAL_LABEL } from "@/lib/auth";
+import { useTier } from "@/lib/auth";
 import PricingModal from "@/components/PricingModal";
 
 /**
@@ -217,7 +223,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
                     +{matches.length - FREE_MATCH_LIMIT} more matches today
                   </div>
                   <div className="text-[10px] text-terminal-muted mt-0.5">
-                    Start your {TRIAL_LABEL} free trial to open the full board and the terminal
+                    Subscribe to open the full board and the terminal
                   </div>
                 </button>
               )}

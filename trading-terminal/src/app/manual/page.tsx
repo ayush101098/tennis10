@@ -61,7 +61,7 @@ export default function ManualPage() {
           a: "No. The model produces calibrated probabilities, not certainties. Variance at quarter Kelly is wide and losing runs are ordinary inside a winning strategy. Bet only what you can afford to lose.",
         },
         {
-          q: "What does Tennis Alpha cost, and is there a free trial?",
+          q: "What does Tennis Alpha cost?",
           a: "$19 for a day pass, $99 monthly, $999 yearly, with no auto-charging — access lapses unless you pay again. Every new account starts with 24 hours of the full terminal free, with no card required.",
         },
         {

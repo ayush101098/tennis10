@@ -9,7 +9,7 @@ import { serverVerifyPayment } from "@/lib/entitlement";
 import QrCode from "@/components/QrCode";
 import GoogleSignIn, { GOOGLE_ENABLED } from "@/components/GoogleSignIn";
 import { PLANS, planById, type Plan } from "@/lib/plans";
-import { TRIAL_LABEL, TRIAL_LENGTH } from "@/lib/auth";
+
 import { X_URL, TELEGRAM_URL } from "@/lib/brand";
 
 interface Props {
@@ -68,11 +68,13 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   }, [open, onClose, onDone, refresh]);
 
   /**
-   * Unlock as soon as a valid address has been typed — no second click.
+   * Register the address as soon as a valid one has been typed — no second click.
    *
-   * The only deliberate action is the CTA that opened this modal. Asking for a
-   * button press after the address is already valid is a step that converts
-   * nobody and loses some.
+   * This no longer unlocks anything: trials are off (see TRIALS_ENABLED) and
+   * the terminal is for subscribers and comped grants only. It is kept because
+   * it is what captures the lead — the account, the leads store and the sheet
+   * mirror all hang off this call, and asking for a button press after the
+   * address is already valid loses people before any of that happens.
    *
    * Debounced 900ms rather than firing on every keystroke: "j@gmail.co" passes
    * a validity check on the way to "j@gmail.com", and submitting that would
@@ -91,7 +93,7 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
     const t = setTimeout(() => {
       if (autoStarted.current) return;
       autoStarted.current = true;
-      setMsg({ ok: true, text: "Unlocking your 24 hours…" });
+      setMsg({ ok: true, text: "Saving your email…" });
       beginSessionRef.current?.(email.trim().toLowerCase());
     }, 900);
     return () => clearTimeout(t);
@@ -183,12 +185,9 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
   const beginSession = (addr: string) => {
     const s = signIn(addr);
     refresh();
-    // The trial is granted server-side, so at this instant the tier is still
-    // "free" — the session upgrades a beat later when recordLogin's response
-    // lands. Promise the trial now and let the effect below close the modal.
     setMsg({ ok: true, text: s.isAdmin ? "Welcome back, admin — full access enabled."
       : s.tier === "pro" ? "Subscription active — full terminal unlocked."
-      : `Account created — starting your ${TRIAL_LABEL} free trial…` });
+      : "Account created — choose a plan below to open the terminal." });
     if (s.isAdmin || s.tier === "pro") { onDone?.(); onClose(); }
     else onDone?.();
   };
@@ -270,11 +269,11 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               placeholder="you@example.com"
               className="w-full mb-2 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-sm text-slate-200 focus:border-terminal-cyan outline-none"
             />
-            {/* The trial is the primary action — a plan chooser is the wrong
-                first ask for someone who has not seen the product work. */}
+            {/* Creates the account (and captures the lead) but grants nothing:
+                the terminal is members-only. Named for what it does. */}
             <button onClick={startFree} disabled={!validEmail}
-              className="w-full min-h-[44px] mb-4 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 disabled:opacity-40 transition">
-              GET {TRIAL_LENGTH.toUpperCase()} FREE ACCESS →
+              className="w-full min-h-[44px] mb-4 rounded border border-terminal-border text-slate-200 text-xs font-bold hover:bg-terminal-panel/40 disabled:opacity-40 transition">
+              SAVE MY EMAIL →
             </button>
 
             {/* Plans */}
@@ -283,8 +282,8 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               <div className="border border-terminal-border rounded-lg p-4 flex flex-col">
                 <div className="text-slate-200 font-bold text-sm mb-1">FREE ACCOUNT</div>
                 <div className="text-2xl font-bold text-slate-100 mb-1">$0</div>
-                <div className="text-[10px] font-bold text-terminal-green mb-2">
-                  includes {TRIAL_LENGTH} of full access, free
+                <div className="text-[10px] font-bold text-terminal-muted mb-2">
+                  home page only — no terminal
                 </div>
                 <ul className="text-[11px] text-slate-300 space-y-1.5 flex-1">
                   <li>✓ Live scores &amp; schedules — ATP · WTA · Challenger · ITF</li>

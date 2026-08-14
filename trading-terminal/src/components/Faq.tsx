@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { PLANS, planById } from "@/lib/plans";
-import { TRIAL_LENGTH, UPI_ID, USD_INR } from "@/lib/auth";
+import { UPI_ID, USD_INR } from "@/lib/auth";
 
 /**
  * FAQ accordion.
@@ -69,20 +69,20 @@ const FAQS: QA[] = [
     q: "What does it cost?",
     a: <>{PLANS.map((p, i) => (
       <span key={p.id}>{i > 0 ? " · " : ""}<b>${p.usd}</b> {p.label.toLowerCase()}</span>
-    ))}. No auto-charging — access simply lapses unless you pay again. Every new account starts
-      with <b>{TRIAL_LENGTH} free</b>, no card required.</>,
+    ))}. No auto-charging — access simply lapses unless you pay again.</>,
   },
   {
     q: `Is there a free trial?`,
-    a: <>Yes — {TRIAL_LENGTH} of the full terminal when you sign up, with an email or a
-      Google account. No payment details are asked for, and nothing charges you when it ends;
-      you simply drop back to the free board.</>,
+    a: <>Not at the moment. The terminal is for subscribers only. You can see the
+      model working on the home page before you pay — one live match, with its
+      probability — and the day pass exists so you can try the full thing for a
+      day without committing to a month.</>,
   },
   {
     q: "What do I get for free?",
-    a: <>Today&apos;s matches with the model&apos;s probability on the home page. The
-      actionable layer — edge against the book, ¼-Kelly stakes, live re-pricing and hedge
-      timing — is what the subscription opens.</>,
+    a: <>One of today&apos;s matches on the home page, with the model&apos;s probability
+      on it. Everything else — the full board, edge against the book, ¼-Kelly stakes,
+      live re-pricing, hedge timing and the bet journal — is behind the subscription.</>,
   },
   {
     q: "How do I pay?",

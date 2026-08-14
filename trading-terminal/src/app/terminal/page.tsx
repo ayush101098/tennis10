@@ -11,7 +11,6 @@ import { DonatePrompt } from "@/components/Donate";
 import LiveUsers from "@/components/LiveUsers";
 import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
 import { planById } from "@/lib/plans";
-import { TRIAL_LABEL } from "@/lib/auth";
 import { confirmStripeSession, capturePaypal } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
@@ -23,7 +22,7 @@ import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnec
  * does not currently sell. TtPanel and the /tt routes are left in the tree so
  * it can be restored by re-adding the tab — nothing was deleted, only unwired.
  *
- * Access model: members only — a subscription or the free trial. The terminal
+ * Access model: members only — an active subscription or an operator grant. The terminal
  * polls the board continuously, so a timed free preview meant serving a paying
  * customer's request volume to every casual visitor; at ~40 requests a minute
  * each that is what exhausted two hosting plans. Free visitors get a
@@ -219,11 +218,11 @@ export default function TerminalPage() {
         {expired && !paid && (
           <div className="absolute inset-0 z-30 bg-terminal-bg/90 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-center px-6">
             <div className="text-3xl">⏱</div>
-            <div className="text-sm font-bold text-slate-100">Your free preview is up</div>
+            <div className="text-sm font-bold text-slate-100">Members only</div>
             <div className="text-[11px] text-terminal-muted max-w-[420px]">
-              The terminal is for members. Start your {TRIAL_LABEL} free trial for live True P on
-              tennis, the edge board, trade tickets and the bet journal. Keep it running
-              from <b className="text-slate-200">${planById("day").usd} for a day</b> to ${planById("year").usd} for the year.
+              The terminal — live True P, the edge board, trade tickets and the bet journal —
+              is for subscribers. From <b className="text-slate-200">${planById("day").usd} for a day</b> to
+              ${planById("year").usd} for the year. Today&apos;s matches stay free to view on the home page.
             </div>
             <button onClick={() => setPricingOpen(true)}
               className="mt-2 px-5 py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">

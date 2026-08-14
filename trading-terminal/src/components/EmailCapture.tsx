@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { captureLead } from "@/lib/subscribe";
-import { signIn, TRIAL_LENGTH } from "@/lib/auth";
+import { signIn } from "@/lib/auth";
 import { trackEvent } from "@/components/Analytics";
 
 /**
@@ -21,13 +21,12 @@ export default function EmailCapture({ source = "landing", cta = "Get early acce
     setState("loading");
     const res = await captureLead(email.trim(), source);
     if (res.ok) {
-      // Giving an address anywhere on the site is a signup, so it grants the
-      // same 24 hours the pricing modal does. Asking for an email twice — once
-      // "to be kept posted" and again "to start a trial" — is a worse
-      // experience and gets fewer addresses, not more.
+      // Still creates the account: this is what puts the address in the leads
+      // store and the sheet mirror. It no longer unlocks anything — trials are
+      // off (see TRIALS_ENABLED) — so the confirmation must not imply it does.
       signIn(email.trim().toLowerCase());
       setState("done");
-      setMsg(`You're in — ${TRIAL_LENGTH} of the full terminal is unlocked.`);
+      setMsg("You're on the list — we'll be in touch.");
       trackEvent("Signup", { source });
     } else {
       setState("error");

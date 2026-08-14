@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useTier, subActive, signIn, TRIAL_LABEL, TRIAL_LENGTH, type Session } from "@/lib/auth";
+import { useTier, subActive, signIn, type Session } from "@/lib/auth";
 
 /**
  * The trial prompt, and the trial countdown.
@@ -59,18 +59,20 @@ export default function TrialBanner({ onStart }: { onStart: () => void }) {
     );
   }
 
+  // Trials are off (see TRIALS_ENABLED). An existing trial still counts down
+  // above until it lapses, but nobody is offered a new one — so this must ask
+  // for the subscription rather than advertise a free window that no longer
+  // exists. Copy that promises access the server will not grant is the fastest
+  // way to lose the person who took it at its word.
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 rounded border border-terminal-green/40 bg-terminal-green/[0.07]">
       <span className="text-[12px] text-slate-200">
-        Unlock full access — your first {TRIAL_LENGTH} are free.
+        The terminal is for members — subscribe to unlock full access.
       </span>
       <button
-        onClick={() => {
-          // An email is all the trial needs; the pricing modal collects it.
-          onStart();
-        }}
+        onClick={onStart}
         className="inline-flex items-center min-h-[36px] px-4 rounded bg-terminal-green text-black text-[11px] font-bold hover:opacity-90">
-        START YOUR FREE {TRIAL_LENGTH.toUpperCase()}
+        GET ACCESS
       </button>
     </div>
   );

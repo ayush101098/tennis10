@@ -20,6 +20,19 @@ const STORE = "accounts";
 const KEY = "byEmail";
 const TRIALS_KEY = "trialsByDevice";   // deviceId -> { email, ts }
 const TRIAL_DAYS = 1;   // 24 hours of the full terminal on first sign-up
+/**
+ * Free trials are OFF: the terminal is for subscribers and operator-issued
+ * grants only. Turned off by the operator 2026-08-14.
+ *
+ * This is the authority — the client flag in src/lib/auth.tsx only controls
+ * copy. Anyone who signs up now gets an account with no grant, so subActive()
+ * is false and the terminal never mounts.
+ *
+ * Existing trials already handed out are NOT revoked here; they lapse on their
+ * own expiry. Set this back to true to re-open trials — trialsByDevice is kept,
+ * so a device that already used one still cannot take a second.
+ */
+const TRIALS_ENABLED = false;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAY = 86400000;
 
@@ -274,6 +287,7 @@ exports.handler = async (event) => {
   // ever. Someone determined can still clear storage — this is the same
   // deterrent trade-off as the single-device seat, not a wall.
   async function maybeGrantTrial(acct, device) {
+    if (!TRIALS_ENABLED) return false;                // members only — see TRIALS_ENABLED
     if (acct.trialStartedAt) return false;            // already had one
     if (acct.payments.length || acct.grants.length) return false;  // paying or comped
     if (!device) return false;                        // no device id, no trial
