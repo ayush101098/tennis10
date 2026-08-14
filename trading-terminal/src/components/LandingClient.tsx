@@ -76,16 +76,26 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
   const matches = useMemo(() => {
     if (!data) return [];
     const order = { live: 0, scheduled: 1, finished: 2, cancelled: 3 } as const;
+    // When the primary feed is stale, a match it calls "live" is not live — it
+    // is a score frozen hours ago. Those sorted to the top of the free board,
+    // so the first three matches a visitor ever saw were dead scoreboards
+    // labelled LIVE. Anything from the fresh standby leads instead.
+    const stale = !!data.fallbackActive;
+    const trust = (m: ScheduledMatch) => (stale && m.source !== "espn" ? 1 : 0);
     return [...data.today]
       .filter(m => m.status === "live" || m.status === "scheduled")
       // live, then tour tier, then time — see tourRank
       .sort((a, b) =>
+        (trust(a) - trust(b)) ||
         (order[a.status] - order[b.status]) ||
         (tourRank(a.tour) - tourRank(b.tour)) ||
         (a.start_timestamp - b.start_timestamp));
   }, [data]);
 
-  const liveCount = matches.filter(m => m.status === "live").length;
+  // Only matches from a feed we currently trust — a frozen scoreboard is not
+  // a live match, and counting it inflates the headline the whole page leads on.
+  const liveCount = matches.filter(
+    m => m.status === "live" && !(data?.fallbackActive && m.source !== "espn")).length;
   const tours = useMemo(() => Array.from(new Set(matches.map(m => m.tour))), [matches]);
 
   // Every match opens for everyone. The gate is on the ACTIONABLE layer, not on
@@ -184,6 +194,16 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
                   sake: every row on screen is polled, so an ungated board was
                   serving the full request cost of a paying customer to people
                   who are not one. Trial and Pro see the full board. */}
+              {data?.fallbackActive && (
+                <div className="px-4 py-2 border-b border-terminal-yellow/40 bg-terminal-yellow/10">
+                  <div className="text-[11px] font-bold text-terminal-yellow">
+                    ⚠ Primary feed down — ATP &amp; WTA on backup source
+                  </div>
+                  <div className="text-[10px] text-terminal-muted mt-0.5">
+                    Tour matches are current. Challenger and ITF scores are delayed.
+                  </div>
+                </div>
+              )}
               {matches.slice(0, isPro ? 250 : FREE_MATCH_LIMIT).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
                   freeSlot={false}
