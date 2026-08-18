@@ -17,12 +17,18 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
 
-GAMMA_URL = "https://gamma-api.polymarket.com"
-CLOB_URL = "https://clob.polymarket.com"
+# Endpoints + chain are env-overridable so the client can be pointed at a
+# testnet / proxy / mock without code changes. Defaults are Polymarket
+# production (Polygon mainnet, chain 137). NOTE: Polymarket does not run a
+# public testnet with populated markets — override only if you have a real
+# alternate host, otherwise leave these at the production defaults.
+GAMMA_URL_DEFAULT = "https://gamma-api.polymarket.com"
+CLOB_URL_DEFAULT = "https://clob.polymarket.com"
 
 # Market types we trade. "match" = match winner, "setN" = winner of set N.
 SET_QUESTION_RE = re.compile(r"set\s+(\d)\s+winner", re.IGNORECASE)
@@ -55,6 +61,20 @@ class VenueMarket:
     outcomes: list[str] = field(default_factory=list)
     token_ids: list[str] = field(default_factory=list)
     prices: list[float] = field(default_factory=list)   # gamma snapshot
+    game_start_time: Optional[str] = None               # ISO match start (in-play marker)
+
+    def is_live(self, now=None) -> bool:
+        """True if the match has started (in-play). Missing start time -> not live."""
+        if not self.game_start_time:
+            return False
+        try:
+            start = datetime.fromisoformat(self.game_start_time.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return False
+        now = now or datetime.now(timezone.utc)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        return now >= start
 
     def side_index(self, signal_p1: str, signal_p2: str, side: str) -> Optional[int]:
         """Map a signal side ('player1'/'player2') to this market's outcome index."""
@@ -71,6 +91,10 @@ class PolymarketClient:
         self.http = session or requests.Session()
         self.http.headers.update({"User-Agent": "tennis10-exec/1.0"})
         self._clob = None  # lazy py-clob-client
+        # Read at construction so a .env loaded by the pipeline is honored.
+        self.gamma_url = os.getenv("POLYMARKET_GAMMA_URL", GAMMA_URL_DEFAULT).rstrip("/")
+        self.clob_url = os.getenv("POLYMARKET_CLOB_URL", CLOB_URL_DEFAULT).rstrip("/")
+        self.chain_id = int(os.getenv("POLYMARKET_CHAIN_ID", "137"))
 
     # ── discovery ────────────────────────────────────────────────────────────
 
@@ -90,7 +114,7 @@ class PolymarketClient:
         """All open tennis events from Gamma (paginated)."""
         events, offset = [], 0
         while len(events) < max_events:
-            page = self._get(f"{GAMMA_URL}/events", {
+            page = self._get(f"{self.gamma_url}/events", {
                 "tag_slug": "tennis", "closed": "false",
                 "limit": 100, "offset": offset,
             })
@@ -147,6 +171,7 @@ class PolymarketClient:
                     market_type=mtype,
                     condition_id=m.get("conditionId", ""),
                     outcomes=outcomes, token_ids=token_ids, prices=prices,
+                    game_start_time=m.get("gameStartTime"),
                 ))
         return found
 
@@ -155,13 +180,53 @@ class PolymarketClient:
     def best_ask(self, token_id: str) -> Optional[float]:
         """Best ask from the CLOB book — the price a market BUY actually fills at."""
         try:
-            book = self._get(f"{CLOB_URL}/book", {"token_id": token_id})
+            book = self._get(f"{self.clob_url}/book", {"token_id": token_id})
             asks = book.get("asks") or []
             if not asks:
                 return None
             return min(float(a["price"]) for a in asks)
         except Exception:
             return None
+
+    def best_bid(self, token_id: str) -> Optional[float]:
+        """Best bid from the CLOB book — the price a market SELL fills at."""
+        try:
+            book = self._get(f"{self.clob_url}/book", {"token_id": token_id})
+            bids = book.get("bids") or []
+            if not bids:
+                return None
+            return max(float(b["price"]) for b in bids)
+        except Exception:
+            return None
+
+    # ── resolution ─────────────────────────────────────────────────────────
+
+    def market_resolution(self, condition_id: str) -> Optional[dict]:
+        """Resolution status of a market by condition_id (works after event close).
+
+        Returns None if unknown or not yet resolved. Otherwise:
+            {"closed": True, "tokens": {token_id: {"winner": bool,
+                                                    "price": float,
+                                                    "outcome": str}}}
+        """
+        if not condition_id:
+            return None
+        try:
+            r = self._get(f"{self.clob_url}/markets/{condition_id}", {})
+        except Exception:
+            return None
+        if not r or not r.get("closed"):
+            return None
+        tokens = {}
+        for t in r.get("tokens", []):
+            tid = t.get("token_id")
+            if tid:
+                tokens[tid] = {"winner": bool(t.get("winner")),
+                               "price": float(t.get("price") or 0.0),
+                               "outcome": t.get("outcome")}
+        if not tokens:
+            return None
+        return {"closed": True, "tokens": tokens}
 
     # ── execution ────────────────────────────────────────────────────────────
 
@@ -174,10 +239,10 @@ class PolymarketClient:
             from py_clob_client.client import ClobClient  # optional dep
             key = os.environ["POLYMARKET_PRIVATE_KEY"]
             funder = os.getenv("POLYMARKET_PROXY_ADDRESS")
-            kwargs = {"key": key, "chain_id": 137}
+            kwargs = {"key": key, "chain_id": self.chain_id}
             if funder:
                 kwargs.update({"signature_type": 1, "funder": funder})
-            client = ClobClient(CLOB_URL, **kwargs)
+            client = ClobClient(self.clob_url, **kwargs)
             client.set_api_creds(client.create_or_derive_api_creds())
             self._clob = client
         return self._clob

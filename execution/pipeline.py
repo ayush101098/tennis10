@@ -105,6 +105,12 @@ def run_signals(signals: list[dict], live: bool = False) -> list[dict]:
         token_id = market.token_ids[idx]
         outcome = market.outcomes[idx]
 
+        live_only = os.getenv("TRADING_LIVE_ONLY", "true").lower() != "false"
+        if live_only and not market.is_live():
+            print(f"SKIP {tag} pre-match (waiting for live) — {market.question}")
+            results.append({"signal": sig, "status": "pre_match"})
+            continue
+
         if trade_log.already_traded(token_id):
             print(f"SKIP {tag} already have an open bet on {outcome} ({market.question})")
             results.append({"signal": sig, "status": "duplicate"})
@@ -134,6 +140,13 @@ def run_signals(signals: list[dict], live: bool = False) -> list[dict]:
         shares = stake / price
         exec_result = client.place_buy(token_id, price, shares, dry_run=dry_run)
 
+        # Journal the live momentum behind an in-play bet so its marginal edge can
+        # be backtested later (momentum can't be reconstructed after the fact).
+        detail = exec_result.get("detail") or ""
+        mom = sig.get("_momentum")
+        if mom:
+            detail = f"{detail} | {mom}".strip(" |")
+
         trade_id = trade_log.record_trade({
             "match_name": fixture,
             "market_type": market.market_type,
@@ -150,7 +163,7 @@ def run_signals(signals: list[dict], live: bool = False) -> list[dict]:
             "shares": round(shares, 2),
             "order_id": exec_result.get("order_id"),
             "status": exec_result["status"],
-            "detail": exec_result.get("detail"),
+            "detail": detail,
         })
         print(f"BET  {tag} -> BUY {shares:.2f} sh '{outcome}' @ {price:.3f} "
               f"(${stake:.2f}, edge {edge:+.3f}, kelly {stake_frac:.3%}) "

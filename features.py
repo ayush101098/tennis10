@@ -17,6 +17,18 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Tier 1 rally intelligence (Match Charting Project). Optional: if the rally_db
+# has no rally_stats table the extractor still works and rally diffs are neutral.
+try:
+    from execution.rally import RallyProfiler
+except Exception:  # pragma: no cover - keep feature extraction usable standalone
+    RallyProfiler = None
+
+RALLY_FEATURE_KEYS = [
+    'RALLY_SHORT_WIN_DIFF', 'RALLY_MID_WIN_DIFF', 'RALLY_LONG_WIN_DIFF',
+    'FIRST_STRIKE_DIFF', 'RALLY_AGGRESSION_DIFF', 'RALLY_DATA_BOTH',
+]
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CORRECTED surface transfer correlations (Cross 2014, Barnett & Clarke 2005)
@@ -72,15 +84,52 @@ TOUR_DEFAULTS = {
 class TennisFeatureExtractor:
     """Extract temporally-isolated features for tennis match prediction."""
 
-    def __init__(self, db_path: str = 'tennis_betting.db', tour: str = 'WTA'):
+    def __init__(self, db_path: str = 'tennis_betting.db', tour: str = 'WTA',
+                 rally_db: str = 'tennis_data.db'):
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.tour = tour.upper()
         self._defaults = TOUR_DEFAULTS.get(self.tour, TOUR_DEFAULTS['WTA'])
 
+        # Serve stats are read from the inline `matches` columns (w_ace, w_svpt …),
+        # which are populated in both tennis_data.db and tennis_betting.db — the
+        # old path read an empty `statistics` table. The date column is named
+        # differently across those DBs, so detect it once here.
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(matches)")}
+        self.date_col = 'tournament_date' if 'tournament_date' in cols else 'tourney_date'
+
+        # Tier 1 rally profiler (name-keyed, decoupled from this match DB).
+        # Disabled gracefully if the module or rally_stats table is unavailable.
+        self.rally = None
+        if RallyProfiler is not None:
+            try:
+                r = RallyProfiler(rally_db)
+                r.conn.execute("SELECT 1 FROM rally_stats LIMIT 1")
+                self.rally = r
+            except Exception as e:
+                logger.info(f"Rally intelligence disabled: {e}")
+
     def close(self):
         if self.conn:
             self.conn.close()
+        if self.rally is not None:
+            self.rally.close()
+
+    def _player_name(self, player_id: int) -> Optional[str]:
+        row = self.conn.execute(
+            "SELECT player_name FROM players WHERE player_id=?", (player_id,)).fetchone()
+        return row[0] if row else None
+
+    def _rally_diffs(self, p1_id: int, p2_id: int, match_date: datetime) -> Dict:
+        """Rally-construction diff features; neutral zeros if unavailable."""
+        neutral = {k: 0.0 for k in RALLY_FEATURE_KEYS}
+        if self.rally is None:
+            return neutral
+        n1, n2 = self._player_name(p1_id), self._player_name(p2_id)
+        if not n1 or not n2:
+            return neutral
+        d = self.rally.diff_features(n1, n2, match_date, tour=self.tour)
+        return {k: d[k] for k in RALLY_FEATURE_KEYS}
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -108,33 +157,62 @@ class TennisFeatureExtractor:
         """
         cutoff = match_date - timedelta(days=lookback_months * 30)
 
-        query = """
-            SELECT
-                m.tournament_date, m.surface,
-                s.first_serve_pct, s.first_serve_win_pct, s.second_serve_win_pct,
-                s.break_point_save_pct, s.aces, s.double_faults,
-                s.serve_games, s.serve_points_total,
-                s.first_serve_won, s.second_serve_won,
-                CASE WHEN s.is_winner = 1 THEN 1.0 ELSE 0.0 END as won
-            FROM statistics s
-            JOIN matches m ON s.match_id = m.match_id
-            WHERE s.player_id = ?
-              AND m.tournament_date < ?
-              AND m.tournament_date >= ?
-              AND s.first_serve_pct IS NOT NULL
-            ORDER BY m.tournament_date DESC
+        # Serve/return stats come from the inline `matches` columns (w_*/l_*),
+        # unioned across whichever side the player was on. The previous version
+        # read a `statistics` table that is empty in tennis_betting.db, so the
+        # extractor silently fell back to tour defaults there. Percentages are
+        # derived here (NULLIF guards divide-by-zero) keeping downstream column
+        # names/semantics identical. `{d}` is the DB-specific date column.
+        d = self.date_col
+        query = f"""
+            SELECT tournament_date, surface, first_serve_pct, first_serve_win_pct,
+                   second_serve_win_pct, break_point_save_pct, aces, double_faults,
+                   serve_games, serve_points_total, first_serve_won,
+                   second_serve_won, won
+            FROM (
+                SELECT {d} AS tournament_date, surface,
+                    CAST(w_1stIn  AS FLOAT) / NULLIF(w_svpt, 0)          AS first_serve_pct,
+                    CAST(w_1stWon AS FLOAT) / NULLIF(w_1stIn, 0)         AS first_serve_win_pct,
+                    CAST(w_2ndWon AS FLOAT) / NULLIF(w_svpt - w_1stIn,0) AS second_serve_win_pct,
+                    CAST(w_bpSaved AS FLOAT)/ NULLIF(w_bpFaced, 0)       AS break_point_save_pct,
+                    w_ace AS aces, w_df AS double_faults, w_SvGms AS serve_games,
+                    w_svpt AS serve_points_total, w_1stWon AS first_serve_won,
+                    w_2ndWon AS second_serve_won, 1.0 AS won
+                FROM matches
+                WHERE winner_id = ? AND {d} < ? AND {d} >= ? AND w_svpt > 0
+                UNION ALL
+                SELECT {d}, surface,
+                    CAST(l_1stIn  AS FLOAT) / NULLIF(l_svpt, 0),
+                    CAST(l_1stWon AS FLOAT) / NULLIF(l_1stIn, 0),
+                    CAST(l_2ndWon AS FLOAT) / NULLIF(l_svpt - l_1stIn, 0),
+                    CAST(l_bpSaved AS FLOAT)/ NULLIF(l_bpFaced, 0),
+                    l_ace, l_df, l_SvGms, l_svpt, l_1stWon, l_2ndWon, 0.0
+                FROM matches
+                WHERE loser_id = ? AND {d} < ? AND {d} >= ? AND l_svpt > 0
+            )
+            ORDER BY tournament_date DESC
         """
-        df = pd.read_sql_query(self.conn, query,
-                               params=(player_id,
-                                       match_date.strftime('%Y-%m-%d'),
-                                       cutoff.strftime('%Y-%m-%d')))
+        upper = match_date.strftime('%Y-%m-%d')
+        lower = cutoff.strftime('%Y-%m-%d')
+        df = pd.read_sql_query(query, self.conn,
+                               params=(player_id, upper, lower,
+                                       player_id, upper, lower))
 
         if len(df) == 0:
-            d = self._defaults.copy()
-            d.update({'win_rate': 0.50, 'surface_win_rate': 0.50,
-                      'matches_played': 0, 'surface_matches': 0,
-                      'wrp': 1.0 - d['wsp']})
-            return d
+            # No pre-match data: return tour defaults keyed exactly like the main
+            # path (extract_features expects e.g. 'bp_save', not 'bp_save_pct').
+            dft = self._defaults
+            return {
+                'wsp': dft['wsp'], 'wrp': 1.0 - dft['wsp'],
+                'aces_per_game': dft['aces_per_game'],
+                'df_per_game': dft['df_per_game'],
+                'bp_save': dft['bp_save_pct'],
+                'first_serve_pct': dft['first_serve_pct'],
+                'first_serve_win_pct': dft['first_serve_win_pct'],
+                'second_serve_win_pct': dft['second_serve_win_pct'],
+                'win_rate': 0.50, 'surface_win_rate': 0.50,
+                'matches_played': 0, 'surface_matches': 0,
+            }
 
         df['tournament_date'] = pd.to_datetime(df['tournament_date'])
 
@@ -188,13 +266,14 @@ class TennisFeatureExtractor:
 
     def _fatigue(self, player_id: int, match_date: datetime, decay: float = 0.75) -> float:
         cutoff = match_date - timedelta(days=3)
-        query = """
-            SELECT tournament_date, minutes
+        d = self.date_col
+        query = f"""
+            SELECT {d} AS tournament_date, minutes
             FROM matches
             WHERE (winner_id = ? OR loser_id = ?)
-              AND tournament_date >= ? AND tournament_date < ?
+              AND {d} >= ? AND {d} < ?
         """
-        df = pd.read_sql_query(self.conn, query,
+        df = pd.read_sql_query(query, self.conn,
                                params=(player_id, player_id,
                                        cutoff.strftime('%Y-%m-%d'),
                                        match_date.strftime('%Y-%m-%d')))
@@ -211,14 +290,15 @@ class TennisFeatureExtractor:
     def _h2h(self, p1: int, p2: int, match_date: datetime,
               lookback_months: int = 36) -> Dict:
         cutoff = match_date - timedelta(days=lookback_months * 30)
-        query = """
-            SELECT tournament_date,
+        d = self.date_col
+        query = f"""
+            SELECT {d} AS tournament_date,
                    CASE WHEN winner_id = ? THEN 1.0 ELSE 0.0 END as p1_won
             FROM matches
             WHERE ((winner_id = ? AND loser_id = ?) OR (winner_id = ? AND loser_id = ?))
-              AND tournament_date < ? AND tournament_date >= ?
+              AND {d} < ? AND {d} >= ?
         """
-        df = pd.read_sql_query(self.conn, query,
+        df = pd.read_sql_query(query, self.conn,
                                params=(p1, p1, p2, p2, p1,
                                        match_date.strftime('%Y-%m-%d'),
                                        cutoff.strftime('%Y-%m-%d')))
@@ -233,9 +313,10 @@ class TennisFeatureExtractor:
         }
 
     def _retired(self, player_id: int, match_date: datetime) -> bool:
-        query = """SELECT MAX(tournament_date) as last FROM matches
-                   WHERE (winner_id=? OR loser_id=?) AND tournament_date < ?"""
-        r = pd.read_sql_query(self.conn, query,
+        d = self.date_col
+        query = f"""SELECT MAX({d}) as last FROM matches
+                   WHERE (winner_id=? OR loser_id=?) AND {d} < ?"""
+        r = pd.read_sql_query(query, self.conn,
                               params=(player_id, player_id,
                                       match_date.strftime('%Y-%m-%d')))
         if r.empty or pd.isna(r.iloc[0]['last']):
@@ -296,6 +377,8 @@ class TennisFeatureExtractor:
             '_p1_first_serve_pct': p1['first_serve_pct'],
             '_p2_first_serve_pct': p2['first_serve_pct'],
         }
+        # Tier 1: rally-construction diffs (first-strike vs grinding, shot quality)
+        features.update(self._rally_diffs(player1_id, player2_id, match_date))
         return features
 
     def extract_features_batch(self, match_ids: Optional[List[int]] = None,
@@ -312,7 +395,7 @@ class TennisFeatureExtractor:
                 q = """SELECT winner_id, loser_id, tournament_date, surface,
                               winner_rank, loser_rank, winner_rank_points, loser_rank_points
                        FROM matches WHERE match_id=?"""
-                m = pd.read_sql_query(self.conn, q, params=(mid,))
+                m = pd.read_sql_query(q, self.conn, params=(mid,))
                 if len(m) == 0:
                     continue
                 r = m.iloc[0]

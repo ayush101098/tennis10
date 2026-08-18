@@ -109,6 +109,44 @@ def recent_trades(limit: int = 25, user_name: str | None = None) -> list[dict]:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def open_positions(user_name: str | None = None) -> list[dict]:
+    """Open (unsettled) primary bets — excludes hedge rows themselves."""
+    sql = ("SELECT * FROM trade_log WHERE status IN ('dry_run','placed') "
+           "AND (detail IS NULL OR detail NOT LIKE 'HEDGE%')")
+    params: list = []
+    if user_name is not None:
+        sql += " AND user_name = ?"
+        params.append(user_name)
+    with _conn() as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def all_trades(user_name: str | None = None) -> list[dict]:
+    """Every journal row (oldest first), for reporting/analytics."""
+    sql = "SELECT * FROM trade_log"
+    params: list = []
+    if user_name is not None:
+        sql += " WHERE user_name = ?"
+        params.append(user_name)
+    sql += " ORDER BY trade_id ASC"
+    with _conn() as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def unsettled_trades(user_name: str | None = None) -> list[dict]:
+    """Every open (unsettled) row — primary bets AND hedges — for settlement."""
+    sql = "SELECT * FROM trade_log WHERE status IN ('dry_run','placed')"
+    params: list = []
+    if user_name is not None:
+        sql += " AND user_name = ?"
+        params.append(user_name)
+    with _conn() as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def settle_trade(trade_id: int, won: bool) -> None:
     """Mark a trade settled and compute PnL (binary market payout $1/share)."""
     with _conn() as conn:
@@ -125,6 +163,52 @@ def settle_trade(trade_id: int, won: bool) -> None:
              datetime.now(timezone.utc).isoformat(timespec="seconds"), pnl, trade_id))
 
 
+def cancel_trade(trade_id: int) -> None:
+    """Void an open bet (as if never placed). Only open trades can be cancelled."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _conn() as conn:
+        row = conn.execute("SELECT status FROM trade_log WHERE trade_id = ?",
+                           (trade_id,)).fetchone()
+        if not row:
+            raise ValueError(f"trade {trade_id} not found")
+        if row[0] not in ("dry_run", "placed"):
+            raise ValueError(f"trade {trade_id} is {row[0]}, only open trades can be cancelled")
+        conn.execute("UPDATE trade_log SET status='cancelled', settled_at=?, pnl_usd=0 "
+                     "WHERE trade_id=?", (now, trade_id))
+
+
+def cancel_all_open(user_name: str | None = None) -> int:
+    """Void every open bet (e.g. flatten all pre-match positions). Returns count."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    sql = ("UPDATE trade_log SET status='cancelled', settled_at=?, pnl_usd=0 "
+           "WHERE status IN ('dry_run','placed')")
+    params: list = [now]
+    if user_name is not None:
+        sql += " AND user_name = ?"
+        params.append(user_name)
+    with _conn() as conn:
+        return conn.execute(sql, params).rowcount
+
+
+def close_trade(trade_id: int, exit_price: float) -> float:
+    """Sell/liquidate an open position at `exit_price`; book realized PnL. Returns PnL."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _conn() as conn:
+        row = conn.execute("SELECT status, stake_usd, shares FROM trade_log "
+                           "WHERE trade_id = ?", (trade_id,)).fetchone()
+        if not row:
+            raise ValueError(f"trade {trade_id} not found")
+        status, stake, shares = row
+        if status not in ("dry_run", "placed"):
+            raise ValueError(f"trade {trade_id} is {status}, only open trades can be sold")
+        pnl = round(float(shares) * float(exit_price) - float(stake), 2)
+        conn.execute(
+            "UPDATE trade_log SET status='closed', settled_at=?, pnl_usd=?, "
+            "detail=COALESCE(detail,'') || ? WHERE trade_id=?",
+            (now, pnl, f" | SOLD {shares:.2f} sh @ {exit_price:.3f}", trade_id))
+        return pnl
+
+
 def summary(user_name: str | None = None) -> dict:
     where = " WHERE user_name = ?" if user_name is not None else ""
     params = [user_name] if user_name is not None else []
@@ -132,7 +216,7 @@ def summary(user_name: str | None = None) -> dict:
         cur = conn.execute(f"""
             SELECT COUNT(*),
                    SUM(CASE WHEN status IN ('dry_run','placed') THEN stake_usd ELSE 0 END),
-                   SUM(CASE WHEN status LIKE 'settled%' THEN pnl_usd ELSE 0 END),
+                   SUM(CASE WHEN status LIKE 'settled%' OR status='closed' THEN pnl_usd ELSE 0 END),
                    SUM(CASE WHEN status = 'settled_win' THEN 1 ELSE 0 END),
                    SUM(CASE WHEN status = 'settled_loss' THEN 1 ELSE 0 END)
             FROM trade_log{where}""", params)

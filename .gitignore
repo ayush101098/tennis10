@@ -35,6 +35,15 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+# Timestamped .env backups — these carry the same live secrets as .env
+.env.bak*
+.env.*.bak
+
+# Daemon pid files
+*.pid
+
+# tennis_vision generated run artifacts (regenerate: python -m tennis_vision.pipeline)
+tennis_vision/out/
 
 # Betfair SSL certificates (NEVER commit these)
 certs/
