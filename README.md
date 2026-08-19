@@ -108,18 +108,49 @@ nudges the Markov engine. Flag: `TRADING_MOMENTUM`. Validate with
 
 ## 📡 Live data feed
 
-Sofascore blocks programmatic requests by TLS fingerprint, and the deployed
-proxy gets challenged too — so the feed runs **from a local machine**:
+Sofascore blocks programmatic requests two different ways, and they need two
+different answers:
+
+1. **TLS fingerprint** — a stock python/curl handshake is 403'd (`"Forbidden"`).
+   `tls_client` impersonates Chrome and gets past it.
+2. **IP reputation** — once an address has pulled enough API traffic, Sofascore
+   challenges *that address* on `/api/v1/*` (`403 {"reason":"challenge"}`) while
+   plain HTML pages still return 200. **No handshake trick fixes this.** The
+   request has to leave from somewhere else, or come from another provider.
+
+So the feed runs **from a local machine**, with an egress pool and a fallback:
 
 ```
-sofa_proxy.py  ──TLS-impersonating Chrome──▶  Sofascore API
-      │  (localhost:3001, 4-session pool, stale-while-revalidate cache)
-      ▼
+                    ┌─ lane 0 ─ residential proxy ─┐
+sofa_proxy.py ──────┼─ lane 1 ─ residential proxy ─┼──▶ Sofascore API
+   (localhost:3001) └─ lane N ─ direct ────────────┘
+      │  all lanes challenged?  ──▶ execution/flashscore.py ──▶ Flashscore
+      ▼                                (translated to Sofascore's schema)
 push_sofa.py  ──POST /api/sofa/_push──▶  Netlify blob cache  ──▶  terminal
 ```
 
-- [sofa_proxy.py](sofa_proxy.py) — local proxy, 4 Chrome TLS sessions round-robin,
-  3s fresh / 30s stale-while-revalidate cache, schedule endpoints pre-warmed.
+- [sofa_proxy.py](sofa_proxy.py) — local proxy. Each **lane** is one Chrome TLS
+  session pinned to one egress; a challenged lane is benched on an escalating
+  cooldown (1→60 min) and traffic moves to the others, so one burned IP degrades
+  throughput instead of killing the feed. 3s fresh / 30s stale-while-revalidate
+  cache, schedule endpoints pre-warmed.
+
+  ```bash
+  python sofa_proxy.py --check     # probe every egress, print exit IP + status
+  curl localhost:3001/_health      # which lanes are alive, which are cooling down
+  ```
+
+  Configure egress in `.env` — with nothing set it runs one direct lane:
+
+  ```bash
+  SOFA_EGRESS=http://user:pass@gate.provider.com:7000,socks5://user:pass@host:1080
+  SOFA_EGRESS_DIRECT=1     # also keep an un-proxied lane
+  SOFA_LANES=2             # sessions per egress
+  SOFA_FALLBACK=1          # Flashscore fallback (default on)
+  ```
+
+  > Residential or mobile egress only. Datacenter IPs (AWS/GCP/Netlify) are
+  > challenged on sight — that's why the deployed proxy never worked.
 - [push_sofa.py](push_sofa.py) — uploads live scores, per-category schedules
   (ATP 3, WTA 6, Challenger 72, ITF-M 785, ITF-W 213), bulk odds, and per-event
   odds/point-by-point/statistics. Each path refreshes at the rate it actually
@@ -133,8 +164,43 @@ python push_sofa.py --once    # one push, prints every path
 python push_sofa.py           # 45s loop (leave running)
 ```
 
+### Flashscore fallback — [execution/flashscore.py](execution/flashscore.py)
+
+When every egress is challenged, an empty board is the worst possible answer.
+Flashscore covers the same tours from separate infrastructure and answers
+normally from addresses Sofascore has burned, so its feed is translated into
+Sofascore's event schema and served in place. **The client URL contract is
+unchanged** — the terminal, `push_sofa` and the execution pipeline can't tell
+the difference beyond a `"source": "flashscore"` marker.
+
+| | Sofascore | Flashscore |
+|---|---|---|
+| Live scores, per-set games, tiebreaks | ✅ | ✅ |
+| Current game point score (0/15/30/40/A) | ✅ | ✅ |
+| Serve/return splits, aces, break points | ✅ | ✅ |
+| Scheduled draws (ATP/WTA/Ch/ITF M/ITF W) | ✅ | ✅ |
+| **Point-by-point history** | ✅ | ❌ *derived* |
+| **Odds** | ✅ | ❌ |
+| **Current server** | ✅ | ❌ |
+
+Flashscore publishes **no point-by-point feed** — probing `df_pbp_1_<id>` across
+every live match returns empty, every time. Since the momentum engine needs the
+point *sequence*, `PointStream` reconstructs it by polling the current-game score
+and recording each transition:
+
+```bash
+python -m execution.flashscore --live              # live matches + point scores
+python -m execution.flashscore --stream            # reconstructed point stream
+python -m execution.flashscore --stats <FS_ID>     # serve/return splits
+```
+
+That yields points from the moment you start watching — not the match's earlier
+history, which isn't recoverable from this source. Two points landing inside one
+polling interval are missed, so poll every 5–10s. Odds and the current server
+have no equivalent at all and are reported as absent rather than guessed.
+
 > ESPN contributes nothing usable — it returns tournaments but zero individual
-> matches, and 403s browsers. Sofascore is the only live source.
+> matches, and 403s browsers.
 
 ---
 

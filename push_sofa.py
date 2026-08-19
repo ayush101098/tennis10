@@ -202,17 +202,23 @@ def _count(payload) -> str:
 def cycle(endpoint: str, token: str, days: int, verbose: bool,
           cycle_n: int = 0) -> tuple[int, int, bool]:
     ok_n = fail_n = 0
-    challenged = False
+    challenged_n = 0
     # Scheduled/odds first, then per-event detail for whatever is in play now.
     for path in paths_for(days, cycle_n) + live_event_paths(cycle_n=cycle_n):
         payload, err = fetch_local(path)
         if payload is None:
             if err == CHALLENGED:
-                # Abandon the cycle immediately. Every extra request while
-                # challenged is one more reason for SofaScore to keep us out.
-                print(f"    CHALLENGED at {path} — standing down for this cycle",
-                      flush=True)
-                return ok_n, fail_n, True
+                # A challenge on ONE path is no longer a reason to abandon the
+                # cycle. sofa_proxy now owns upstream backoff — it benches burned
+                # egresses itself and serves what it can from Flashscore — so
+                # these requests never reach SofaScore and cannot deepen a ban.
+                # Some paths simply have no fallback (odds, point-by-point);
+                # skipping those while pushing everything else is the difference
+                # between a working board and an empty one.
+                challenged_n += 1
+                if verbose:
+                    print(f"    skip  {path}  (no upstream, no fallback)", flush=True)
+                continue
             # SofaScore legitimately 404s some category/date combos — not an error
             if verbose:
                 print(f"    skip  {path}  ({err})", flush=True)
@@ -223,7 +229,10 @@ def cycle(endpoint: str, token: str, days: int, verbose: bool,
         if verbose or not ok:
             print(f"    {'ok  ' if ok else 'FAIL'}  {path}  {_count(payload)} {'' if ok else msg}",
                   flush=True)
-    return ok_n, fail_n, challenged
+    # Only stand down when the cycle got NOTHING through. That is the real
+    # "we are locked out everywhere" signal; anything less is partial coverage,
+    # which is worth pushing.
+    return ok_n, fail_n, (ok_n == 0 and challenged_n > 0)
 
 
 def main() -> None:
