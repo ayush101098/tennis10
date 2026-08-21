@@ -19,11 +19,20 @@ import { useEffect, useState } from "react";
 
 const BRAND_GREEN = "#4CA85E";
 
-export default function Wordmark({ size = 18, mark = true }: {
+export default function Wordmark({ size = 18, mark = true, text = true }: {
   /** cap height of the lettering in px */
   size?: number;
   /** show the bird mark alongside, when its file exists */
   mark?: boolean;
+  /**
+   * Show the name as well as the mark. Set false for a mark-only lockup.
+   *
+   * The name does not simply disappear when this is off — it moves to the
+   * wrapper's aria-label, which is already present. A bare icon with no
+   * accessible name is an unlabelled link for anyone using a screen reader,
+   * and this one is the site's home link.
+   */
+  text?: boolean;
 }) {
   const [hasArt, setHasArt] = useState(false);
   const [hasMark, setHasMark] = useState(false);
@@ -47,7 +56,23 @@ export default function Wordmark({ size = 18, mark = true }: {
         // eslint-disable-next-line @next/next/no-img-element -- static brand asset
         <img src="/brand/mark.svg" alt="" height={size * 1.6} style={{ height: size * 1.6, width: "auto" }} />
       )}
-      {hasArt ? (
+      {/* Mark-only lockup, before the HEAD probe has resolved (or if the asset
+          is missing): without this the header renders empty on first paint,
+          because the name is hidden and the mark has not been confirmed yet.
+          A monogram is a better first frame than a hole where the logo goes. */}
+      {!text && !hasMark && (
+        <span
+          className="inline-flex items-center justify-center rounded font-bold"
+          style={{
+            width: size * 1.6, height: size * 1.6, fontSize: size * 0.78,
+            color: BRAND_GREEN, border: `1.5px solid ${BRAND_GREEN}66`,
+            letterSpacing: "-0.02em",
+          }}
+        >
+          TA
+        </span>
+      )}
+      {!text ? null : hasArt ? (
         // eslint-disable-next-line @next/next/no-img-element -- static brand asset
         <img src="/brand/wordmark.svg" alt="Tennis Alpha"
           style={{ height: size * 1.5, width: "auto", display: "block" }} />

@@ -28,6 +28,7 @@ import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/schedul
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
+import CourtBackdrop from "@/components/CourtBackdrop";
 import { useTier } from "@/lib/auth";
 import PricingModal from "@/components/PricingModal";
 
@@ -117,7 +118,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       <SoftwareApplicationLd />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
-        <Wordmark size={17} />
+        <Wordmark size={17} text={false} />
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Socials />
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
@@ -142,7 +143,9 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       </nav>
 
       {/* ── Hero ── */}
-      <section className="px-4 sm:px-6 pt-10 sm:pt-14 pb-10 text-center max-w-[860px] mx-auto">
+      <section className="relative isolate overflow-hidden">
+        <CourtBackdrop live={liveCount} />
+        <div className="relative px-4 sm:px-6 pt-10 sm:pt-14 pb-10 text-center max-w-[860px] mx-auto">
         <span className="eyebrow">Live model · ATP · WTA · Challenger · W125 · ITF</span>
         <h1 className="text-slate-100">
           Market intelligence for <span className="text-terminal-green">serious tennis traders.</span>
@@ -188,6 +191,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
               coin flip out of sample. Tours covered is a fact about the product. */}
           <Stat n="5" l="Pro tours covered" />
           <Stat n="2%" l="Hard edge floor" />
+        </div>
         </div>
       </section>
 
