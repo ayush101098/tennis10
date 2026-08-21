@@ -65,6 +65,11 @@ trading-terminal/index_old.html
 
 # Large data files
 *.db
+# SQLite WAL/shared-memory sidecars. `*.db` does not match these suffixes, so
+# without them the point corpus commits its journal on every collector write.
+*.db-wal
+*.db-shm
+*.db-journal
 *.json
 !netlify.toml
 !package.json

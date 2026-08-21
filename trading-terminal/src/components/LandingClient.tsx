@@ -168,9 +168,14 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
             SEE TODAY&apos;S MATCHES ↓
           </a>
         </div>
-        <div className="mt-6 max-w-[560px] mx-auto">
-          <TrialBanner onStart={() => setPricingOpen(true)} />
-        </div>
+        {/* Only for signed-in users. Asking a new visitor to join a waitlist and
+            to subscribe in the same eyeful gives them two different next steps
+            and so no clear one; the waitlist is the ask on this page now. */}
+        {session && (
+          <div className="mt-6 max-w-[560px] mx-auto">
+            <TrialBanner onStart={() => setPricingOpen(true)} />
+          </div>
+        )}
 
         {/* A stat row rather than pills: the same facts, but laid out as
             figures, which reads as a product with numbers behind it instead of
@@ -178,7 +183,10 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
         <div className="mt-10 grid grid-cols-2 sm:grid-cols-4 border-t border-terminal-border">
           <Stat n={matches.length || "—"} l="Matches today" />
           <Stat n={liveCount} l="Live right now" tone={liveCount > 0 ? "green" : undefined} />
-          <Stat n="41,750" l="Matches in training set" />
+          {/* Was "41,750 matches in training set" — a training-set size is not a
+              result, and the model it referred to could not be separated from a
+              coin flip out of sample. Tours covered is a fact about the product. */}
+          <Stat n="5" l="Pro tours covered" />
           <Stat n="2%" l="Hard edge floor" />
         </div>
       </section>
@@ -277,10 +285,180 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           <h2 className="text-slate-100">From true probability to a sized, hedged position.</h2>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-          <Feature n="01" title="TRUE P" body="A Platt-calibrated neural network (41,750 tour matches) sets the pre-match prior; a tour-aware Markov engine re-prices the match on every game of the live score." />
+          <Feature n="01" title="TRUE P" body="A tour-aware Markov engine prices the match from the live score — point to game to set — re-pricing on every game rather than resting on a pre-match number." />
           <Feature n="02" title="EDGE" body="True P is compared against de-vigged bookmaker odds — live prices for live matches, never stale ones. Edges over 20% are quarantined as data errors, not bets." />
           <Feature n="03" title="STAKE" body="¼-Kelly staking capped at 5% of bankroll, with a hard 2% edge floor. The discipline is the product: no edge, no bet." />
           <Feature n="04" title="HEDGE" body="Trend-break, adverse-move and deuce-loss triggers tell you when to hedge a live position — protecting profit beats chasing it." />
+        </div>
+      </section>
+
+      {/* ── The three tools ──
+          One full section per tool rather than a grid of cards. A card says a
+          feature exists; a section has room to show what it puts on screen,
+          which is what a trader is actually deciding about. Panels are built
+          from live design tokens rather than screenshots so they cannot drift
+          out of date with the product. */}
+      <section id="tools" className="px-4 sm:px-6 pb-4 max-w-[1080px] mx-auto scroll-mt-20">
+        <div className="text-center mb-10">
+          <span className="eyebrow">The toolkit</span>
+          <h2 className="text-slate-100">Three questions, every match, in one place.</h2>
+          <p className="mt-4 text-slate-400 max-w-[600px] mx-auto text-sm">
+            Is it mispriced, is it moving, and am I actually any good at this?
+            Everything on the terminal answers one of those.
+          </p>
+        </div>
+      </section>
+
+      <Pillar
+        tag="EDGE"
+        title="Find the matches the market has mispriced."
+        body="Every fixture is priced by a score-conditioned Markov engine and compared against de-vigged exchange odds. But a raw edge is not a signal — an edge on a number we do not trust is noise. Each opportunity is divided by how much our independent estimates disagree, so a clean 5% beats a shaky 9%."
+        points={[
+          "EdgeScore = edge ÷ uncertainty, not edge alone",
+          "De-vigged two-sided exchange prices, never a stale line",
+          "Edges over 20% quarantined as data errors, not bets",
+          "Hard 2% edge floor — no edge, no bet",
+        ]}
+        panel={
+          <div className="text-[10px] mono">
+            {[
+              { m: "Sinner / Alcaraz", e: "+9.0%", s: "3.1", g: "green" },
+              { m: "Rybakina / Sabalenka", e: "+6.2%", s: "2.2", g: "green" },
+              { m: "Fritz / Nakashima", e: "+9.4%", s: "0.8", g: "red" },
+              { m: "Bergs / Sakellaridis", e: "+3.1%", s: "1.4", g: "amber" },
+            ].map((r) => (
+              <div key={r.m} className="flex items-center gap-2 px-3 py-2 border-b border-terminal-border last:border-0">
+                <span className="flex-1 truncate text-slate-300">{r.m}</span>
+                <span className="w-[52px] text-right text-slate-400">{r.e}</span>
+                <span className={`w-[36px] text-right font-bold ${
+                  r.g === "green" ? "text-terminal-green" : r.g === "amber" ? "text-terminal-yellow" : "text-terminal-red"
+                }`}>{r.s}</span>
+                <span className={`w-[14px] text-right ${
+                  r.g === "green" ? "text-terminal-green" : r.g === "amber" ? "text-terminal-yellow" : "text-terminal-red"
+                }`}>●</span>
+              </div>
+            ))}
+            <div className="px-3 py-2 text-[9px] text-terminal-muted">
+              Same 9% edge, opposite verdicts — the difference is confidence.
+            </div>
+          </div>
+        }
+      />
+
+      <Pillar
+        reverse
+        tag="PULSE"
+        title="Read the match while it is still moving."
+        body="Sets and games are the last thing to change. A live momentum engine tracks serve regression and break pressure point by point, so a break coming is visible before it lands — and so is a lead that has stopped meaning anything."
+        points={[
+          "Break probability on the current service game",
+          "Momentum weighted toward the most recent games",
+          "Rally profiles: first-strike vs grinder, per player",
+          "Hedge triggers on trend-break and adverse moves",
+        ]}
+        panel={
+          <div className="p-3 space-y-3">
+            <div>
+              <div className="flex justify-between text-[10px] mono mb-1">
+                <span className="text-slate-300">Break probability · current game</span>
+                <span className="text-terminal-yellow font-bold">72%</span>
+              </div>
+              <div className="h-1.5 rounded bg-terminal-border overflow-hidden">
+                <div className="h-full bg-terminal-yellow" style={{ width: "72%" }} />
+              </div>
+              <div className="text-[9px] text-terminal-muted mt-1">returner leads 15–40 on serve</div>
+            </div>
+            <div>
+              <div className="flex justify-between text-[10px] mono mb-1">
+                <span className="text-slate-300">Momentum</span>
+                <span className="text-terminal-green font-bold">P1 +0.18</span>
+              </div>
+              <div className="h-1.5 rounded bg-terminal-border overflow-hidden flex">
+                <div className="h-full bg-terminal-border" style={{ width: "41%" }} />
+                <div className="h-full bg-terminal-green" style={{ width: "18%" }} />
+              </div>
+            </div>
+            <div className="flex gap-1.5 pt-1">
+              {["W", "W", "L", "W", "W", "W", "L", "W"].map((p, i) => (
+                <span key={i} className={`flex-1 h-5 rounded text-[9px] mono flex items-center justify-center ${
+                  p === "W" ? "bg-terminal-green/20 text-terminal-green" : "bg-terminal-border text-terminal-muted"
+                }`}>{p}</span>
+              ))}
+            </div>
+            <div className="text-[9px] text-terminal-muted">last 8 points on serve</div>
+          </div>
+        }
+      />
+
+      <Pillar
+        tag="LEDGER"
+        title="Find out whether the model is actually right."
+        body="Every intended and placed trade is one row in a journal that settles itself against the market. The calibration report then bins predicted probability against what actually happened — which is the only thing that can tell a sharp model from a merely confident one."
+        points={[
+          "Auto-settled P&L per bet, per source",
+          "Calibration curve: predicted vs actual, per bucket",
+          "Brier score against the 0.25 coin-flip line",
+          "ROI and drawdown by signal source",
+        ]}
+        panel={
+          <div className="p-3">
+            <div className="text-[9px] text-terminal-muted mb-2 mono">PREDICTED vs ACTUAL — by bucket</div>
+            {[
+              { b: "50–60%", p: 55, a: 53 },
+              { b: "60–70%", p: 65, a: 58 },
+              { b: "70–80%", p: 75, a: 61 },
+              { b: "80–90%", p: 85, a: 62 },
+            ].map((r) => (
+              <div key={r.b} className="flex items-center gap-2 mb-1.5">
+                <span className="w-[52px] text-[9px] mono text-terminal-muted">{r.b}</span>
+                <div className="flex-1 h-3 rounded bg-terminal-border/60 relative overflow-hidden">
+                  <div className="absolute inset-y-0 left-0 bg-slate-600" style={{ width: `${r.p}%` }} />
+                  <div className="absolute inset-y-0 left-0 bg-terminal-green/70" style={{ width: `${r.a}%` }} />
+                </div>
+                <span className="w-[62px] text-right text-[9px] mono text-slate-400">{r.p}→{r.a}%</span>
+              </div>
+            ))}
+            <div className="text-[9px] text-terminal-muted mt-2 leading-relaxed">
+              Grey = predicted, green = actual. Gaps like these are why staking is
+              scaled by confidence instead of run at full Kelly.
+            </div>
+          </div>
+        }
+      />
+
+      {/* ── Coverage ── */}
+      <section className="px-4 sm:px-6 py-14 max-w-[1000px] mx-auto">
+        <div className="text-center mb-8">
+          <span className="eyebrow">Coverage</span>
+          <h2 className="text-slate-100">Every professional tour, not just the ones on TV.</h2>
+          <p className="mt-4 text-slate-400 max-w-[600px] mx-auto text-sm">
+            The mispricing is rarely in the Sunday final. It is in the Challenger
+            second round that three people are watching.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          {["ATP", "WTA", "CHALLENGER", "W125", "ITF"].map((t) => (
+            <div key={t} className="border border-terminal-border rounded-lg py-4 text-center bg-terminal-panel/30">
+              <div className="text-terminal-green font-bold text-sm mono">{t}</div>
+              <div className="text-[10px] text-terminal-muted mt-1">singles</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── Honesty panel ──
+          Says plainly what the product does not do. A page that only claims
+          upside reads like every tout site the audience has already been burned
+          by; the disclaimer is the credibility, not a legal afterthought. */}
+      <section className="px-4 sm:px-6 pb-14 max-w-[820px] mx-auto">
+        <div className="border border-terminal-border rounded-lg p-5 sm:p-6 bg-terminal-panel/30">
+          <div className="text-terminal-yellow font-bold text-sm mb-3">What this is not</div>
+          <ul className="space-y-2 text-[12px] text-slate-400 leading-relaxed">
+            <li>· <span className="text-slate-300">Not a tipping service.</span> No one hands you a slip to copy. It prices matches and shows you the working.</li>
+            <li>· <span className="text-slate-300">Not a guarantee.</span> A positive edge is a claim about the long run, and the long run contains losing months.</li>
+            <li>· <span className="text-slate-300">Not a substitute for your own judgement.</span> Every number ships with the uncertainty attached so you can disagree with it.</li>
+            <li>· <span className="text-slate-300">Not for money you need.</span> Staking is capped and fractional for a reason. Bet accordingly, or do not bet.</li>
+          </ul>
         </div>
       </section>
 
@@ -362,6 +540,53 @@ function Chip({ label, tone, pulse }: { label: string; tone?: "green"; pulse?: b
       {pulse && <span className="inline-block w-1.5 h-1.5 rounded-full bg-terminal-green animate-pulse mr-1.5 align-middle" />}
       {label}
     </span>
+  );
+}
+
+/**
+ * One tool, given a full band: copy on one side, a live-token mock of what it
+ * puts on screen on the other. `reverse` alternates the sides so a run of them
+ * does not read as a stack of identical rows.
+ *
+ * The mock is built from the same design tokens as the real terminal rather
+ * than a screenshot, so it cannot quietly drift out of date with the product —
+ * and it stays legible at any width, which a scaled-down screenshot does not.
+ */
+function Pillar({ tag, title, body, points, panel, reverse }: {
+  tag: string; title: string; body: string; points: string[];
+  panel: React.ReactNode; reverse?: boolean;
+}) {
+  return (
+    <section className="px-4 sm:px-6 py-10 max-w-[1080px] mx-auto">
+      <div className={`flex flex-col gap-8 md:gap-12 md:items-center ${reverse ? "md:flex-row-reverse" : "md:flex-row"}`}>
+        <div className="flex-1 min-w-0">
+          <span className="inline-block text-[10px] font-bold tracking-[0.14em] text-terminal-green border border-terminal-green/40 rounded-full px-2.5 py-1">
+            {tag}
+          </span>
+          <h3 className="mt-4 text-slate-100 text-[22px] sm:text-[26px] leading-tight font-bold">{title}</h3>
+          <p className="mt-3 text-slate-400 text-sm leading-relaxed">{body}</p>
+          <ul className="mt-5 space-y-2">
+            {points.map((p) => (
+              <li key={p} className="flex gap-2.5 text-[12.5px] text-slate-300">
+                <span className="text-terminal-green shrink-0" aria-hidden>▸</span>
+                <span>{p}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="flex-1 min-w-0 w-full">
+          <div className="border border-terminal-border rounded-lg bg-terminal-panel/40 overflow-hidden">
+            <div className="flex items-center gap-1.5 px-3 py-2 border-b border-terminal-border bg-terminal-panel/60">
+              <span className="w-2 h-2 rounded-full bg-terminal-red/60" />
+              <span className="w-2 h-2 rounded-full bg-terminal-yellow/60" />
+              <span className="w-2 h-2 rounded-full bg-terminal-green/60" />
+              <span className="ml-1.5 text-[9px] mono text-terminal-muted tracking-wider">{tag}</span>
+            </div>
+            {panel}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
