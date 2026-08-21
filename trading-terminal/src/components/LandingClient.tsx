@@ -121,6 +121,9 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Socials />
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
+          {/* Signed-in users keep their way in — someone who already signed up,
+              or is paying, must never be sent to a waitlist for access they
+              already hold. The waitlist CTA is for new visitors only. */}
           {session ? (
             <>
               <span className={`font-bold px-1.5 py-0.5 rounded ${session.isAdmin ? "bg-terminal-red/20 text-terminal-red" : isPro ? "bg-terminal-green/20 text-terminal-green" : "bg-terminal-border text-slate-300"}`}>
@@ -131,9 +134,9 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
               </Link>
             </>
           ) : (
-            <Link href="/terminal" className="inline-flex items-center justify-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
-              OPEN TERMINAL →
-            </Link>
+            <a href="#waitlist" className="inline-flex items-center justify-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
+              JOIN WAITLIST →
+            </a>
           )}
         </div>
       </nav>
@@ -142,19 +145,26 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       <section className="px-4 sm:px-6 pt-10 sm:pt-14 pb-10 text-center max-w-[860px] mx-auto">
         <span className="eyebrow">Live model · ATP · WTA · Challenger · W125 · ITF</span>
         <h1 className="text-slate-100">
-          True probabilities for <span className="text-terminal-green">every professional tennis match.</span>
+          Market intelligence for <span className="text-terminal-green">serious tennis traders.</span>
         </h1>
         <p className="mt-5 text-slate-400 max-w-[620px] mx-auto">
-          A neural network trained on 41,750 tour matches, fused with a score-conditioned Markov engine,
-          priced against live bookmaker odds — with ¼-Kelly staking and hedge-timing discipline built in.
+          Live point-by-point pricing across every professional tour, fused with a
+          score-conditioned Markov engine and compared against real exchange odds —
+          with edge confidence, ¼-Kelly staking and hedge-timing discipline built in.
           ATP · WTA · Challenger · W125 · ITF, every day.
         </p>
-        <div className="mt-6 flex items-center justify-center gap-3">
-          <Link href="/terminal"
-            className="inline-flex items-center justify-center min-h-[44px] px-5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-            OPEN THE TERMINAL →
-          </Link>
-          <a href="#matches" className="inline-flex items-center justify-center min-h-[44px] px-5 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
+
+        {/* Waitlist is the primary action. The email lands in the Netlify Blobs
+            `leads` store via /api/subscribe, same path the rest of the site uses,
+            and is mirrored to the waitlist sheet — so nothing new to maintain. */}
+        <div id="waitlist" className="mt-7 scroll-mt-24 flex flex-col items-center gap-2">
+          <div className="w-full max-w-md flex justify-center">
+            <EmailCapture source="waitlist-hero" cta="Join the waitlist" variant="waitlist" />
+          </div>
+          <p className="text-[11px] text-terminal-muted">
+            Free while in beta · no card required · unsubscribe anytime
+          </p>
+          <a href="#matches" className="mt-2 inline-flex items-center justify-center min-h-[40px] px-5 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
             SEE TODAY&apos;S MATCHES ↓
           </a>
         </div>
