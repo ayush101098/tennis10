@@ -362,6 +362,23 @@ class FlashscoreClient:
 _POINT_ORDER = {"0": 0, "15": 1, "30": 2, "40": 3, "A": 4}
 
 
+def _pt_value(v) -> Optional[int]:
+    """Rank a point score so two observations can be compared.
+
+    Ordinary games report 0/15/30/40/A, but a TIEBREAK reports plain integers
+    ("9-9"). Ranking only the ordinary ladder made every tiebreak point
+    unattributable — losing precisely the highest-leverage points in the match.
+    Both scales are monotonic within a single game, and a game never switches
+    scale midway, so comparing like with like is sufficient.
+    """
+    if v is None:
+        return None
+    s = str(v)
+    if s in _POINT_ORDER:
+        return _POINT_ORDER[s]
+    return int(s) if s.isdigit() else None
+
+
 @dataclass
 class Point:
     ts: float
@@ -422,9 +439,13 @@ class PointStream:
         if cag > pag:
             return 2
 
-        # Same game — compare point ranks.
-        dh = _POINT_ORDER.get(cph, -1) - _POINT_ORDER.get(pph, -1)
-        da = _POINT_ORDER.get(cpa, -1) - _POINT_ORDER.get(ppa, -1)
+        # Same game — compare point ranks. Handles both the 0/15/30/40/A ladder
+        # and the plain integers a tiebreak reports.
+        vph, vcph = _pt_value(pph), _pt_value(cph)
+        vpa, vcpa = _pt_value(ppa), _pt_value(cpa)
+        if None in (vph, vcph, vpa, vcpa):
+            return None                      # unreadable score; do not guess
+        dh, da = vcph - vph, vcpa - vpa
         if dh > 0 and da <= 0:
             return 1
         if da > 0 and dh <= 0:

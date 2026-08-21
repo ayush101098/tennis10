@@ -39,10 +39,12 @@ WHAT IS AND IS NOT RECOVERABLE
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
-from contextlib import closing
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -205,19 +207,145 @@ class PointStore:
         self.conn.close()
 
 
+# ─── Proxy feed ──────────────────────────────────────────────────────────────
+# Read through the local sofa_proxy rather than calling a provider directly.
+#
+# What this actually costs — stated precisely, because the cheap version of this
+# claim ("it's free, it's cached") is false and this is the exact mistake that
+# cost us SofaScore. The proxy's cache is 3s fresh / 30s stale-while-revalidate,
+# so a poll arriving later than CACHE_FRESH serves instantly but kicks off a
+# background upstream refresh. Polling every 8s therefore drives roughly one
+# upstream refresh per poll — about 7/min, on ONE endpoint.
+#
+# The saving is real but it is a ratio, not a zero:
+#
+#   direct provider : 1 live-feed request + 1 detail request per live match,
+#                     every poll (~25 in play) -> ~26 requests/poll, ~195/min
+#   through proxy   : 1 localhost request per poll, refreshing one cached
+#                     endpoint                  -> ~1 request/poll,  ~7/min
+#
+# Roughly 25x less traffic, and it shares one warm cache with push_sofa and the
+# terminal instead of opening a second independent front against the only
+# provider still answering this address. Raise --interval to cut it further;
+# below ~5s you mostly add load without adding resolution.
+#
+# It also makes the collector source-agnostic. The proxy emits SofaScore's schema
+# whichever upstream is alive, so the same parser handles Flashscore-translated
+# events today and real SofaScore events if the block ever lifts — and real
+# SofaScore carries `firstToServe`, so the server column fills itself in.
+
+LOCAL_PROXY = os.getenv("SOFA_PROXY", "http://127.0.0.1:3001")
+
+_SLUG_TO_TOUR = {"atp": "ATP", "wta": "WTA", "challenger": "CHALLENGER",
+                 "itf-men": "ITF M", "itf-women": "ITF W", "wta-125": "W125"}
+
+
+def _match_from_event(evt: dict):
+    """One SofaScore-shaped event -> a flashscore.Match, or None if unusable."""
+    from execution.flashscore import Match
+
+    home = ((evt.get("homeTeam") or {}).get("name") or "").strip()
+    away = ((evt.get("awayTeam") or {}).get("name") or "").strip()
+    if not home or not away:
+        return None
+    # type 2 is a doubles pair; the point model is singles-only.
+    if (evt.get("homeTeam") or {}).get("type") == 2:
+        return None
+
+    tour_block = evt.get("tournament") or {}
+    cat = tour_block.get("category") or {}
+    uniq = tour_block.get("uniqueTournament") or {}
+    slug = (cat.get("slug") or "").lower()
+
+    status = evt.get("status") or {}
+    stype = status.get("type")
+    state = ("live" if stype == "inprogress"
+             else "finished" if stype == "finished" else "scheduled")
+
+    hs, as_ = evt.get("homeScore") or {}, evt.get("awayScore") or {}
+    hg, ag, htb, atb = [], [], {}, {}
+    for i in range(1, 6):
+        k = f"period{i}"
+        if k not in hs and k not in as_:
+            continue
+        hg.append(int(hs.get(k) or 0))
+        ag.append(int(as_.get(k) or 0))
+        tb = f"period{i}TieBreak"
+        if tb in hs or tb in as_:
+            htb[i] = int(hs.get(tb) or 0)
+            atb[i] = int(as_.get(tb) or 0)
+
+    # `point` is absent between games and on non-live rows; None means "unknown",
+    # which PointStream correctly declines to diff.
+    ph = hs.get("point")
+    pa = as_.get("point")
+
+    fs_id = f"{evt.get('source', 'sofascore')}:{evt.get('id')}"
+    server = evt.get("firstToServe")
+    return Match(
+        fs_id=fs_id, id=int(evt.get("id") or 0), slug=slug,
+        tour=_SLUG_TO_TOUR.get(slug, slug.upper() or "?"),
+        tournament=(uniq.get("name") or tour_block.get("name") or ""),
+        country="", surface=(uniq.get("groundType") or "Hard"),
+        home=home, away=away, status=state,
+        start_ts=int(evt.get("startTimestamp") or 0),
+        set_index=max(1, len(hg)),
+        home_sets=int(hs.get("current") or 0), away_sets=int(as_.get("current") or 0),
+        home_games=hg, away_games=ag, home_tb=htb, away_tb=atb,
+        point_home=None if ph is None else str(ph),
+        point_away=None if pa is None else str(pa),
+        server=server if server in (1, 2) else None,
+    )
+
+
+class ProxyFeed:
+    """Live matches read from the local sofa_proxy.
+
+    Exposes `live_matches()` so it drops straight into PointStream in place of
+    FlashscoreClient.
+    """
+
+    def __init__(self, base: str = LOCAL_PROXY, timeout: int = 40):
+        self.base = base.rstrip("/")
+        self.timeout = timeout
+
+    def live_matches(self, with_points: bool = True) -> list:
+        req = urllib.request.Request(f"{self.base}/sport/tennis/events/live",
+                                     headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            payload = json.loads(r.read().decode())
+        out = []
+        for evt in (payload.get("events") or []):
+            m = _match_from_event(evt)
+            if m is not None and m.status == "live":
+                out.append(m)
+        return out
+
+
 # ─── Collector ───────────────────────────────────────────────────────────────
 
 def collect(poll_s: float = 8.0, db_path: Path | str = DEFAULT_DB,
-            iterations: Optional[int] = None, verbose: bool = True) -> None:
-    """Run the reconstructed point stream and persist everything it sees."""
+            iterations: Optional[int] = None, verbose: bool = True,
+            source: str = "proxy") -> None:
+    """Run the reconstructed point stream and persist everything it sees.
+
+    `source="proxy"` (default) reads the local cache and costs nothing upstream.
+    `source="flashscore"` calls the provider directly — only for debugging, and
+    only when the proxy is down.
+    """
     from execution.flashscore import FlashscoreClient, PointStream
 
     store = PointStore(db_path)
-    client = FlashscoreClient()
+    if source == "flashscore":
+        client = FlashscoreClient()
+    else:
+        client = ProxyFeed()
     stream = PointStream(client, poll_s=poll_s)
 
     if verbose:
         print(f"[pointstore] collecting -> {store.db_path}")
+        print(f"[pointstore] source: {source}"
+              + (f" ({LOCAL_PROXY}, cached — no upstream cost)" if source == "proxy" else ""))
         print(f"[pointstore] polling every {poll_s}s — Ctrl-C to stop")
 
     n = 0
@@ -230,7 +358,11 @@ def collect(poll_s: float = 8.0, db_path: Path | str = DEFAULT_DB,
                 for m in client.live_matches(with_points=True):
                     store.upsert_match(m)
                     p = stream.observe(m)
-                    if p and store.record_point(m, p):
+                    # fs_id is "<upstream>:<id>", so the row records which
+                    # provider actually produced the observation rather than a
+                    # hardcoded guess — the proxy may be serving either.
+                    origin = m.fs_id.split(":", 1)[0] if ":" in m.fs_id else source
+                    if p and store.record_point(m, p, source=origin):
                         written += 1
                         if verbose:
                             who = {1: m.home, 2: m.away, None: "?"}[p.winner]
@@ -262,10 +394,13 @@ def _main() -> None:
     ap.add_argument("--interval", type=float, default=8.0)
     ap.add_argument("--polls", type=int, default=None, help="stop after N polls")
     ap.add_argument("--db", default=str(DEFAULT_DB))
+    ap.add_argument("--source", choices=("proxy", "flashscore"), default="proxy",
+                    help="proxy (default, free) or flashscore (direct, costs upstream)")
     args = ap.parse_args()
 
     if args.collect:
-        collect(poll_s=args.interval, db_path=args.db, iterations=args.polls)
+        collect(poll_s=args.interval, db_path=args.db, iterations=args.polls,
+                source=args.source)
         return
 
     store = PointStore(args.db)
