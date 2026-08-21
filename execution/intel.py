@@ -25,6 +25,7 @@ from execution.sxbet import SXBetClient  # noqa: E402
 from execution.inplay import InPlayModel  # noqa: E402
 from execution.signals_gen import _split_fixture, _surface, _level  # noqa: E402
 from true_p_ensemble import kelly_stake  # noqa: E402
+from execution.edgescore import score_edge, size_multiplier  # noqa: E402
 
 
 def _score_contradicts(score: dict | None, backing_p1: bool) -> bool:
@@ -170,8 +171,30 @@ def compute_intel() -> list[dict]:
                 # score. Only pre-match sources (Sofascore line / model) get the
                 # stale guard: flag when the scoreboard contradicts the pick.
                 stale = source not in ("inplay", "sxbet") and _score_contradicts(score, s == p1)
+
+                # Grade the edge against how much the independent estimates
+                # disagree. Everything above is computed in the p1 frame, so when
+                # backing p2 each estimate has to be flipped to the traded side
+                # before it can be compared with that side's price.
+                backing_p1 = (s == p1)
+                estimates = {k: (v if backing_p1 else 1.0 - v)
+                             for k, v in (("inplay", inplay_p1), ("sxbet", sx_p1),
+                                          ("sofascore", fair_p1), ("model", model_p1))
+                             if v is not None}
+                scored = score_edge(
+                    p_model=pr, p_market=px, estimates=estimates,
+                    is_live=(inplay_p1 is not None or score is not None),
+                    source=source, stale=stale,
+                )
+                # Kelly assumes the probability is right; ours measurably is not,
+                # so the stake is scaled by confidence rather than bet in full.
+                stake = round(stake * size_multiplier(scored), 2)
+
                 suggest = {"side": s, "edge": round(e, 3), "price": px,
-                           "prob": round(pr, 3), "stake": stake, "stale": stale}
+                           "prob": round(pr, 3), "stake": stake, "stale": stale,
+                           "edge_score": round(scored.edge_score, 2),
+                           "sigma": round(scored.sigma, 3),
+                           "grade": scored.grade, "why": scored.reasons}
 
         rows.append({
             "match": f"{p1} vs {p2}", "tournament": title.split(":")[0],
@@ -193,5 +216,8 @@ def compute_intel() -> list[dict]:
 
     mm.close()
     # Best edges first; unsuggested rows after.
-    rows.sort(key=lambda r: (r["suggest"] or {}).get("edge", -1), reverse=True)
+    # Rank by EdgeScore, not raw edge: a 9-point edge on a number we do not
+    # trust belongs below a 5-point edge on one we do. Raw edge breaks ties.
+    rows.sort(key=lambda r: ((r["suggest"] or {}).get("edge_score", -99),
+                             (r["suggest"] or {}).get("edge", -1)), reverse=True)
     return rows
