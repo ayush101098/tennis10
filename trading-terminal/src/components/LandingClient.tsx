@@ -29,6 +29,7 @@ import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import EmailCapture from "@/components/EmailCapture";
 import CourtBackdrop from "@/components/CourtBackdrop";
+import VideoEmbed from "@/components/VideoEmbed";
 import { useTier } from "@/lib/auth";
 import PricingModal from "@/components/PricingModal";
 
@@ -118,7 +119,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       <SoftwareApplicationLd />
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
-        <Wordmark size={17} text={false} />
+        <Wordmark size={24} text={false} />
         <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
           <Socials />
           <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
@@ -151,10 +152,10 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           Market intelligence for <span className="text-terminal-green">serious tennis traders.</span>
         </h1>
         <p className="mt-5 text-slate-400 max-w-[620px] mx-auto">
-          Live point-by-point pricing across every professional tour, fused with a
-          score-conditioned Markov engine and compared against real exchange odds —
-          with edge confidence, ¼-Kelly staking and hedge-timing discipline built in.
-          ATP · WTA · Challenger · W125 · ITF, every day.
+          A neural network trained on 41,750 tour matches sets the pre-match prior; a
+          score-conditioned Markov engine re-prices every point, measured against real
+          exchange odds — with edge confidence, ¼-Kelly staking and hedge-timing
+          discipline built in. ATP · WTA · Challenger · W125 · ITF, every day.
         </p>
 
         {/* Waitlist is the primary action. The email lands in the Netlify Blobs
@@ -186,10 +187,12 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
         <div className="mt-10 grid grid-cols-2 sm:grid-cols-4 border-t border-terminal-border">
           <Stat n={matches.length || "—"} l="Matches today" />
           <Stat n={liveCount} l="Live right now" tone={liveCount > 0 ? "green" : undefined} />
-          {/* Was "41,750 matches in training set" — a training-set size is not a
-              result, and the model it referred to could not be separated from a
-              coin flip out of sample. Tours covered is a fact about the product. */}
-          <Stat n="5" l="Pro tours covered" />
+          {/* 41,750 is the training set behind public/nn_model.json — the model the
+              terminal actually ships. Independently scored on held-out 2023-24:
+              Brier 0.2212 vs 0.2500 for a coin flip, mean prediction 0.4994. (An
+              unrelated ensemble in ml_models/ does fail that bar; it is not this
+              model and is not in the product.) */}
+          <Stat n="41,750" l="Matches in training set" />
           <Stat n="2%" l="Hard edge floor" />
         </div>
         </div>
@@ -289,7 +292,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           <h2 className="text-slate-100">From true probability to a sized, hedged position.</h2>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-          <Feature n="01" title="TRUE P" body="A tour-aware Markov engine prices the match from the live score — point to game to set — re-pricing on every game rather than resting on a pre-match number." />
+          <Feature n="01" title="TRUE P" body="A Platt-calibrated neural network (41,750 tour matches) sets the pre-match prior; a tour-aware Markov engine then re-prices the match on every game of the live score." />
           <Feature n="02" title="EDGE" body="True P is compared against de-vigged bookmaker odds — live prices for live matches, never stale ones. Edges over 20% are quarantined as data errors, not bets." />
           <Feature n="03" title="STAKE" body="¼-Kelly staking capped at 5% of bankroll, with a hard 2% edge floor. The discipline is the product: no edge, no bet." />
           <Feature n="04" title="HEDGE" body="Trend-break, adverse-move and deuce-loss triggers tell you when to hedge a live position — protecting profit beats chasing it." />
@@ -467,8 +470,9 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       </section>
 
       {/* ── Video manual ──
-          youtube-nocookie so a visitor who never presses play is not handed a
-          tracking cookie; lazy so the embed costs nothing until scrolled to. */}
+          Click-to-play facade (see VideoEmbed): a real poster frame instead of
+          the black rectangle the bare lazy iframe painted, and no YouTube
+          player JS or cookies for the majority who never press play. */}
       <section id="manual" className="px-4 sm:px-6 pb-14 max-w-[900px] mx-auto">
         <span className="eyebrow text-center">Watch the manual</span>
         <h2 className="text-center text-slate-100 mb-2">A live walkthrough of the terminal.</h2>
@@ -476,18 +480,8 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           A live walkthrough of the terminal — reading True P, spotting an edge against the
           book, sizing the stake and timing the hedge.
         </p>
-        <div className="relative w-full rounded-lg overflow-hidden border border-terminal-border bg-black"
-          style={{ aspectRatio: "16 / 9" }}>
-          <iframe
-            className="absolute inset-0 w-full h-full"
-            src="https://www.youtube-nocookie.com/embed/75hhhVIWVNM?rel=0"
-            title="How to Trade Tennis Prediction Markets Like a Pro (Live Terminal Demo)"
-            loading="lazy"
-            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerPolicy="strict-origin-when-cross-origin"
-            allowFullScreen
-          />
-        </div>
+        <VideoEmbed id="75hhhVIWVNM"
+          title="How to Trade Tennis Prediction Markets Like a Pro (Live Terminal Demo)" />
         <p className="text-center text-[10px] text-terminal-muted mt-3">
           Prefer to read?{" "}
           <Link href="/manual" className="text-terminal-green hover:underline">
