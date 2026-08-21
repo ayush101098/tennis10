@@ -70,7 +70,13 @@ def calculate_accuracy(predictions: np.ndarray, actuals: np.ndarray) -> float:
     Returns:
         Accuracy as fraction
     """
-    predicted_winner = (predictions > 0.5).astype(int) + 1
+    # `predictions` is P(player 1 wins), so p > 0.5 means player 1 is favoured
+    # and the predicted winner is 1 — NOT 2. The previous form,
+    # `(predictions > 0.5).astype(int) + 1`, mapped a confident player-1
+    # prediction onto label 2 and so reported (1 - accuracy): a model scoring a
+    # genuine 62.9% was recorded as 37.1%, and an always-0.5 baseline scored the
+    # player-1 win rate by accident, which made the inversion hard to spot.
+    predicted_winner = np.where(predictions > 0.5, 1, 2)
     return (predicted_winner == actuals).mean()
 
 
