@@ -17,16 +17,9 @@ import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnec
 /**
  * The trading terminal.
  *
- * Table tennis was removed 2026-08-11: it polled /api/tt every 8s for every
- * open tab and needed three of the five feed daemons, for a sport this product
- * does not currently sell. TtPanel and the /tt routes are left in the tree so
- * it can be restored by re-adding the tab — nothing was deleted, only unwired.
- *
- * Access model: members only — an active subscription or an operator grant. The terminal
- * polls the board continuously, so a timed free preview meant serving a paying
- * customer's request volume to every casual visitor; at ~40 requests a minute
- * each that is what exhausted two hosting plans. Free visitors get a
- * three-match board on the homepage and a trial offer instead.
+ * Table tennis was removed: it polled /api/tt every 8s for every terminal
+ * user, for a product this does not sell. The panel, routes, feed function
+ * and Python pipeline are all gone as of 2026-09-02.
  */
 
 

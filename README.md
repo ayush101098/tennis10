@@ -14,7 +14,7 @@ What started as an ATP data pipeline is now four layers deep:
 | **Execution** | Signal → sized order → journal → settlement → calibration | [execution/pipeline.py](execution/pipeline.py), [execution/agent.py](execution/agent.py), [execution/trade_log.py](execution/trade_log.py) |
 
 Plus a **Next.js trading terminal** ([trading-terminal/](trading-terminal/)) deployed at
-`tennisalpha.in`, a **table tennis** predictor ([tabletennis/](tabletennis/)), and a
+`tennisalpha.in`, and a
 **computer-vision** prototype ([tennis_vision/](tennis_vision/)).
 
 ---
@@ -277,7 +277,7 @@ npm run build
 ```
 
 **Routes** — `/terminal` (live board), `/calculator` (edge/bookmaker calculator),
-`/tt` (table tennis board), `/manual`, `/resources`, `/admin` (analytics).
+`/manual`, `/resources`, `/admin` (analytics).
 
 **Client engines** — [breakHoldEngine.ts](trading-terminal/src/lib/breakHoldEngine.ts),
 [momentumEngine.ts](trading-terminal/src/lib/momentumEngine.ts),
@@ -296,15 +296,6 @@ analytics tracking.
 ---
 
 ## 🏓 Table tennis
-
-[tabletennis/](tabletennis/) is a parallel predictor: Sofascore ingest through the
-same proxy, walk-forward Elo + form GBDT, residual model, and its own dashboard.
-
-```bash
-python -m tabletennis.pipeline
-python -m tabletennis.live       # live daemon
-python -m tabletennis.push       # push to site
-```
 
 Live/push/refresh daemons run on the Mac alongside `sofa_proxy.py`.
 
@@ -341,7 +332,6 @@ tennis10/
 ├── validate_rally.py / validate_momentum.py
 ├── execution/                  # signals, venues, agent, journal, calibration
 ├── trading-terminal/           # Next.js terminal + Netlify functions
-├── tabletennis/                # table tennis predictor
 ├── tennis_vision/              # CV prototype
 ├── backtesting/ evaluation/ validation/ tests/
 ├── ml_models/ notebooks/ dashboard/ api/

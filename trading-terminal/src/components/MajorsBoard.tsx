@@ -6,16 +6,27 @@ import { EDGE_FLOOR, MAX_BANKROLL_FRACTION, quarterKellyStake } from "@/lib/sche
 import { usePolymarket } from "@/hooks/usePolymarket";
 import { fixtureKey, eventUrl, type PmFixture } from "@/lib/polymarket";
 import { polymarketValue } from "@/lib/pmValue";
+import { tourRank } from "@/lib/scheduleService";
 import { Panel, Badge, EmptyState, ErrorState, LoadingState } from "@/components/ui/Panel";
 import { pct, signedPct, odds as fmtOdds, money } from "@/components/ui/Table";
 import Icon from "@/components/ui/Icon";
 
 /**
- * US OPEN VALUE BOARD — the homepage's lead act during the slam.
+ * MAJORS VALUE BOARD — the homepage's lead act.
  *
- * Every US Open match on the card, ranked by the model's edge over the
+ * Every TOUR-LEVEL match on the card (ATP and WTA main draw, which is where
+ * the Grand Slams and Masters live), ranked by the model's edge over the
  * de-vigged market. The board below this one is a schedule; this is the answer
- * to the only question a visitor has during a slam — what is worth betting.
+ * to the only question a visitor actually has — what is worth betting.
+ *
+ * Was US Open only. A board that empties the day a slam ends is a board people
+ * stop opening, and the model prices the whole tour identically — there was
+ * never a reason to show one fortnight of it.
+ *
+ * Challenger and ITF are excluded on purpose rather than for volume: those
+ * draws are full of players the rankings file does not cover, so the model has
+ * no prior, the gate correctly stays silent, and the rows would be unpriced
+ * padding. They remain on the full schedule below.
  *
  * It renders the same `m.value` the terminal's ValueBoard trades off, so the
  * public number and the members' number cannot drift apart. What stays gated
@@ -32,8 +43,12 @@ import Icon from "@/components/ui/Icon";
 const STRONG_EDGE = 0.05;
 const SHOWCASE_BANKROLL = 1000;
 
-/** Matches the SofaScore `uniqueTournament` name; tolerant of "US Open, Men" variants. */
-export const isUsOpen = (m: { tournament: string }) => /\bus open\b/i.test(m.tournament);
+/** Tour-level: ATP or WTA main draw. tourRank 0 is exactly that tier. */
+export const isMajor = (m: { tour: string }) => tourRank(m.tour) === 0;
+
+/** Grand slams lead the board — the matches most people came to see. */
+export const isSlam = (m: { tournament: string }) =>
+  /australian open|roland garros|french open|wimbledon|us open/i.test(m.tournament);
 
 /** One priced match: the model's best side, and where the price came from. */
 interface Row {
@@ -55,7 +70,7 @@ interface Props {
   onToggleParlay?: (m: ScheduledMatch, value: NonNullable<ScheduledMatch["value"]>) => void;
 }
 
-export default function UsOpenBoard({
+export default function MajorsBoard({
   matches, isPro, onSelectMatch, onUpgrade, sourcesDown, loading,
   parlayIds, onToggleParlay,
 }: Props) {
@@ -63,7 +78,7 @@ export default function UsOpenBoard({
 
   const { bets, watch, suspect, priced, unpriced, liveCount, total } = useMemo(() => {
     const pool = matches.filter(m =>
-      isUsOpen(m) && (m.status === "live" || m.status === "scheduled"));
+      isMajor(m) && (m.status === "live" || m.status === "scheduled"));
 
     // Bookmaker odds first where they exist, Polymarket otherwise. SofaScore's
     // odds endpoints currently 403 for every US Open match, so in practice this
@@ -74,7 +89,10 @@ export default function UsOpenBoard({
       const value = m.value ?? polymarketValue(m, fixture);
       if (value) rows.push({ m, value, fixture, source: m.value ? "book" : "polymarket" });
     }
-    rows.sort((a, b) => b.value.edge - a.value.edge);
+    // Slam first, then edge. A slam row sitting below a 250 because its edge
+    // was 0.3 points smaller reads as a bug to anyone who came for the slam.
+    rows.sort((a, b) =>
+      (isSlam(b.m) ? 1 : 0) - (isSlam(a.m) ? 1 : 0) || b.value.edge - a.value.edge);
     return {
       bets: rows.filter(r => r.value.edge >= EDGE_FLOOR && !r.value.suspect),
       watch: rows.filter(r => r.value.edge > 0 && r.value.edge < EDGE_FLOOR),
@@ -91,8 +109,8 @@ export default function UsOpenBoard({
   return (
     <div className="px-4 sm:px-6 pb-12 sm:pb-16 max-w-[1180px] mx-auto">
       <Panel
-        id="us-open"
-        title="US Open — value board"
+        id="majors"
+        title="Majors — value board"
         icon="trophy"
         tone="neutral"
         live={liveCount > 0}
@@ -110,8 +128,8 @@ export default function UsOpenBoard({
           <LoadingState label="Pricing the US Open card" rows={4} />
         ) : total === 0 ? (
           <EmptyState
-            title="No US Open matches on today’s card"
-            body="The board below has every other tour running today. This section fills back up on the next match day." />
+            title="No tour-level matches on today’s card"
+            body="ATP and WTA main draws are between events. The board below still has every Challenger and ITF match running today." />
         ) : (
           <>
             <Group title={`Value bets — edge ≥ ${Math.round(EDGE_FLOOR * 100)}%`} count={bets.length} tone="primary">
@@ -119,8 +137,8 @@ export default function UsOpenBoard({
               {bets.length === 0 && (
                 <p className="px-4 py-5 text-center text-sm text-content-muted max-w-[60ch] mx-auto">
                   {priced === 0
-                    ? "No US Open match is priced yet — market prices arrive closer to first serve."
-                    : `Every US Open price is inside the ${Math.round(EDGE_FLOOR * 100)}% floor right now. No edge, no bet — that is the system working, not a quiet board.`}
+                    ? "Nothing is priced yet — market prices arrive closer to first serve."
+                    : `Every tour price is inside the ${Math.round(EDGE_FLOOR * 100)}% floor right now. No edge, no bet — that is the system working, not a quiet board.`}
                 </p>
               )}
             </Group>

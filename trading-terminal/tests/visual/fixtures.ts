@@ -48,12 +48,13 @@ const PM_MARKETS = [
 
 /** A SofaScore-shaped event, in the feed's own abbreviated "Surname F." form —
  *  the format the ranking lookup has to cope with in production. */
-function sofaEvent(id: number, home: string, away: string, startTs: number, tour: "atp" | "wta" = "atp") {
+function sofaEvent(id: number, home: string, away: string, startTs: number,
+                   tour: "atp" | "wta" = "atp", tournament = "US Open") {
   return {
     id,
     tournament: {
-      name: "US Open", category: { slug: tour, name: tour.toUpperCase() },
-      uniqueTournament: { name: "US Open", id: 2480 },
+      name: tournament, category: { slug: tour, name: tour.toUpperCase() },
+      uniqueTournament: { name: tournament, id: 2480 },
     },
     homeTeam: { name: home, type: 1, id: id * 10 },
     awayTeam: { name: away, type: 1, id: id * 10 + 1 },
@@ -77,7 +78,7 @@ export async function stubNetwork(page: Page, { mode = "populated" }: StubOption
   const events = mode === "populated"
     ? [
         sofaEvent(9001, "Sinner J.", "Alcaraz C.", 1788264000),
-        sofaEvent(9002, "Sabalenka A.", "Swiatek I.", 1788270000, "wta"),
+        sofaEvent(9002, "Sabalenka A.", "Swiatek I.", 1788270000, "wta", "Cincinnati"),
       ]
     : [];
 

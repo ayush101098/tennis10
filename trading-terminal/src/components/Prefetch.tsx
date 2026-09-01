@@ -8,14 +8,16 @@
  * the requests the terminal is about to make. The service then adopts the
  * in-flight promise instead of issuing a second one.
  *
- * /api/tt is no longer warmed — table tennis was unwired from the terminal.
- * ESPN is not warmed either: it returns no individual matches, so the client
- * stopped calling it.
+ * ESPN is not warmed: it returns no individual matches, so the client stopped
+ * calling it.
+ *
+ * (`__ttPrefetch` / `__ttFeedAge` are "trading terminal", not table tennis —
+ * they warm the tennis feed and are load-bearing.)
  *
  * It must stay a plain inline string: a React component would arrive with the
  * very bundle whose latency this exists to hide.
  *
- * The URLs MUST match scheduleService/TtPanel character for character, or the
+ * The URLs MUST match scheduleService character for character, or the
  * prefetch is dead weight and the request is made twice. They are asserted in
  * the same file that builds them (see PREFETCH_KEYS in scheduleService).
  */

@@ -34,8 +34,8 @@ matching function returns an error; nothing falls back to a default.
 
 | Variable | Used by | What breaks without it |
 |---|---|---|
-| `NETLIFY_API_TOKEN` | `_blobs.js`, `_store.js` | **Everything.** Blob context is not injected automatically; this token is what keeps all storage-backed functions alive — accounts, leads, payments, the TT feed, the SofaScore cache. |
-| `TT_PUSH_TOKEN` | `sofa-proxy.js`, `tt.js` | The Mac cannot push tennis or table-tennis data. Board goes empty. Must be **identical** to the value in the local `.env`. |
+| `NETLIFY_API_TOKEN` | `_blobs.js`, `_store.js` | **Everything.** Blob context is not injected automatically; this token is what keeps all storage-backed functions alive — accounts, leads, payments, the SofaScore cache. |
+| `TT_PUSH_TOKEN` | `sofa-proxy.js` | The Mac cannot push tennis data. Board goes empty. Must be **identical** to the value in the local `.env`. Name is historical — it predates the table-tennis removal and is now the tennis push secret. |
 | `LEADS_ADMIN_TOKEN` | `account.js`, `subscribe.js` | No admin access; manual grants (`action:"grant"`) return 401. This is the token needed to comp an account through the API. |
 | `SOFA_PROXY_URL` | `sofa-proxy.js` | Optional upstream. Absent, the function serves only what the Mac has pushed — which is the normal operating mode. |
 | `STRIPE_SECRET_KEY` | checkout, confirm, webhook | Card payments fail. |
@@ -84,7 +84,7 @@ as of this audit.**
 | `in.tennisalpha.archive` | loaded, last exit 0 | Commits the daily match archive to git | SSR homepage serves stale matches to crawlers |
 
 **This machine is the single point of failure for the whole product.** Nothing
-feeds tennis or table tennis from the cloud — SofaScore blocks servers, ESPN
+feeds tennis from the cloud — SofaScore blocks servers, ESPN
 403s them. If the Mac is off, the board is empty regardless of Netlify.
 
 Check them with:

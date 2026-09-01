@@ -29,11 +29,11 @@ test.describe("homepage", () => {
     });
   });
 
-  test("US Open value board matches the visual baseline", async ({ page }) => {
+  test("majors value board matches the visual baseline", async ({ page }) => {
     await stubNetwork(page, { mode: "populated" });
     await page.goto("/");
     await settle(page);
-    await expect(page.locator("#us-open")).toHaveScreenshot("us-open-board.png");
+    await expect(page.locator("#majors")).toHaveScreenshot("majors-board.png");
   });
 
   test("parlay builder matches the visual baseline, empty and filled", async ({ page }) => {
@@ -48,6 +48,17 @@ test.describe("homepage", () => {
     await expect(parlay).toHaveScreenshot("parlay-filled.png");
   });
 
+  test("the board shows every match, not a teaser", async ({ page }) => {
+    // The free board was capped at ONE row on a stated request-cost argument
+    // that did not hold: refreshLiveMatches polls every live match in state
+    // regardless of how many are rendered, so the cap saved no requests.
+    await stubNetwork(page, { mode: "populated" });
+    await page.goto("/");
+    await settle(page);
+    await expect(page.getByText(/more matches today/i)).toHaveCount(0);
+    await expect(page.getByText(/Subscribe to open the full board/i)).toHaveCount(0);
+  });
+
   test("value board and parlay builder are present and labelled", async ({ page }) => {
     await stubNetwork(page, { mode: "populated" });
     await page.goto("/");
@@ -55,7 +66,7 @@ test.describe("homepage", () => {
 
     // Landmarks, not text: this asserts the section exists as a real region
     // with an accessible name, which is also what a screen reader navigates by.
-    await expect(page.getByRole("heading", { name: /US Open — value board/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Majors — value board/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Parlay builder/i })).toBeVisible();
   });
 
@@ -66,7 +77,7 @@ test.describe("homepage", () => {
 
     // An empty state must say what would be here and why it is not — a blank
     // panel is indistinguishable from a broken one.
-    const empty = page.getByText(/No US Open matches on today.s card/i);
+    const empty = page.getByText(/No tour-level matches on today.s card/i);
     await expect(empty).toBeVisible();
     await expect(page.getByText(/Build a ticket from the board above/i)).toBeVisible();
   });

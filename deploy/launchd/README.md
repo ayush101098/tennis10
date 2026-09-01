@@ -2,7 +2,7 @@
 
 Both sports are fed from this machine. Nothing runs in the cloud, so if these
 processes are not running, tennisalpha.in serves an empty board (tennis) and a
-stale or missing feed (table tennis) — to everyone, paying or not.
+stale or missing feed — to everyone, paying or not.
 
 Four processes:
 
@@ -13,7 +13,8 @@ Four processes:
 | `refresh-archive.sh` | match archive → the server-rendered board (every 3h) |
 
 Table tennis was unwired from the terminal on 2026-08-11; its three daemons
-(`tabletennis.live`, `.push`, `.refresh`) were removed with it. Re-add them to
+(`tabletennis.live`, `.push`, `.refresh`) were removed with it, and table tennis
+itself was removed from the product on 2026-09-02. Do not re-add them.
 `JOBS` in install.sh to bring the sport back.
 
 Until now these were started by hand and did not survive a reboot.

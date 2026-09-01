@@ -5,13 +5,19 @@
 // request rate by two thirds.
 const LIVE_POLL_MS = 15_000;
 /**
- * Matches a free visitor sees on the homepage.
+ * How many matches the board renders. Everyone sees the same list.
  *
- * One, since 2026-08-14: the terminal is members-only and this is the whole
- * free product — a single glance at what the model does, not a usable board.
- * Every row on screen is polled, so this is also the request-cost floor.
+ * It was 1 for free visitors, on the stated reasoning that "every row on
+ * screen is polled, so this is also the request-cost floor". That reasoning no
+ * longer holds and is worth recording: `refreshLiveMatches` is handed
+ * `[...today, ...tomorrow]` and polls every LIVE match in state regardless of
+ * how many rows are rendered. Truncating the list therefore saved exactly zero
+ * requests — it was a paywall wearing a performance argument.
+ *
+ * The cap that remains is a rendering bound, not a gate: a 400-row list is
+ * slow to paint and nobody scrolls it.
  */
-const FREE_MATCH_LIMIT = 1;
+const MATCH_RENDER_LIMIT = 250;
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SsrMatch } from "@/components/SsrMatchList";
@@ -27,7 +33,7 @@ import { SoftwareApplicationLd } from "@/components/JsonLd";
 import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
-import UsOpenBoard, { isUsOpen } from "@/components/UsOpenBoard";
+import MajorsBoard, { isMajor } from "@/components/MajorsBoard";
 import { surname as pmSurname } from "@/lib/polymarket";
 import ParlayBuilder from "@/components/ParlayBuilder";
 import type { ParlayLeg } from "@/lib/parlay";
@@ -113,13 +119,13 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
   const tours = useMemo(() => Array.from(new Set(matches.map(m => m.tour))), [matches]);
 
   /**
-   * US Open matches across BOTH feed days.
+   * Tour-level matches across BOTH feed days.
    *
    * A slam's night session runs past midnight UTC, so half the card lands in
    * `tomorrow` while it is still the same match day for the viewer. Taking
    * only `today` dropped those matches off the value board entirely.
    */
-  const usOpenMatches = useMemo(() => {
+  const majorMatches = useMemo(() => {
     if (!data) return [];
     // Dedupe across the two days. The same fixture is served by more than one
     // upstream feed under DIFFERENT event ids, so the id-keyed dedupe upstream
@@ -128,7 +134,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
     const key = (m: ScheduledMatch) =>
       [pmSurname(m.player1), pmSurname(m.player2)].sort().join("|") + "@" + m.tournament;
     const best = new Map<string, ScheduledMatch>();
-    for (const m of [...data.today, ...data.tomorrow].filter(isUsOpen)) {
+    for (const m of [...data.today, ...data.tomorrow].filter(isMajor)) {
       const k = key(m);
       const prev = best.get(k);
       if (!prev) { best.set(k, m); continue; }
@@ -269,8 +275,8 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       </section>
 
       {/* ── US Open value board — the lead act while the slam is on ── */}
-      <UsOpenBoard
-        matches={usOpenMatches}
+      <MajorsBoard
+        matches={majorMatches}
         isPro={isPro}
         loading={!data}
         sourcesDown={!!data?.sourcesDown}
@@ -301,7 +307,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
             <span className="text-[11px] font-bold text-terminal-yellow tracking-wider">📅 TODAY — LIVE &amp; UPCOMING</span>
             <span className="hidden xs:block text-[10px] text-terminal-muted">
               {isPro ? "every match unlocked — analyse anything"
-                : "open any match free — signals unlock with Pro"}
+                : "every match on the tour — signals unlock with Pro"}
             </span>
           </div>
           {/* On mobile: list caps at ~55vh (scrolls), analysis flows in the
@@ -331,22 +337,16 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
                   </div>
                 </div>
               )}
-              {matches.slice(0, isPro ? 250 : FREE_MATCH_LIMIT).map(m => (
+              {matches.slice(0, MATCH_RENDER_LIMIT).map(m => (
                 <PublicRow key={m.id} m={m} active={selected?.id === m.id}
                   freeSlot={false}
                   showProb
                   onClick={() => onPick(m)} />
               ))}
-              {!isPro && matches.length > FREE_MATCH_LIMIT && (
-                <button onClick={() => setPricingOpen(true)}
-                  className="w-full px-4 py-4 text-center border-t border-terminal-border hover:bg-terminal-panel/40 transition">
-                  <div className="text-[12px] font-bold text-terminal-green">
-                    +{matches.length - FREE_MATCH_LIMIT} more matches today
-                  </div>
-                  <div className="text-[10px] text-terminal-muted mt-0.5">
-                    Subscribe to open the full board and the terminal
-                  </div>
-                </button>
+              {matches.length > MATCH_RENDER_LIMIT && (
+                <div className="px-4 py-3 text-center text-xs text-content-muted border-t border-border">
+                  Showing the first {MATCH_RENDER_LIMIT} of {matches.length} matches today.
+                </div>
               )}
               {data && matches.length === 0 && (
                 data.sourcesDown ? (
