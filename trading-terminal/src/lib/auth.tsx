@@ -70,15 +70,16 @@ export const TRIAL_DAYS = 1;                  // free trial granted on first sig
 export const TRIAL_LABEL = TRIAL_DAYS === 1 ? "24-hour" : `${TRIAL_DAYS}-day`;
 export const TRIAL_LENGTH = TRIAL_DAYS === 1 ? "24 hours" : `${TRIAL_DAYS} days`;
 /**
- * Free trials are OFF (operator, 2026-08-14): the terminal is for subscribers
- * and operator-issued grants only.
+ * Free trials are ON (operator, 2026-09-02): every new sign-up gets 24 hours of
+ * the full terminal. Re-opened after being off since 2026-08-14.
  *
  * This flag governs COPY ONLY. The authority is TRIALS_ENABLED in
  * netlify/functions/account.js, which is what decides whether a grant is
  * actually written — a client flag alone would be an invitation to flip it in
- * devtools. Both must be turned back on together to re-open trials.
+ * devtools. Both must be flipped together, or the copy offers a trial the
+ * server refuses to grant.
  */
-export const TRIALS_ENABLED = false;
+export const TRIALS_ENABLED = true;
 export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription
 
 // Stablecoins we can price 1:1 for the payment-amount guardrail (mainnet).
@@ -118,6 +119,12 @@ export const TIME_GRANTS: Record<string, number> = {
   // exact address, so if the domain is different this silently does nothing —
   // change the key rather than adding a second entry.
   "utkarsh.srivastava98@gmail.com": 1786838399000,
+  // Comped by the operator 2026-09-02 — seven days of full access
+  // → 2026-09-09 23:59:59Z. Lapses back to free on its own; shorten the expiry
+  // (or set it to 1) to end it sooner. Should also be recorded in the account
+  // DB via /admin so it shows as a comp in the roster — that could not be done
+  // at grant time because /api/account is returning 503 usage_exceeded.
+  "ajinkyakharpe97@gmail.com": 1788998399000,
 };
 
 /** Grant expiry for an email if one is currently ACTIVE, else null. */

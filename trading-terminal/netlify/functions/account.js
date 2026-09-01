@@ -21,18 +21,20 @@ const KEY = "byEmail";
 const TRIALS_KEY = "trialsByDevice";   // deviceId -> { email, ts }
 const TRIAL_DAYS = 1;   // 24 hours of the full terminal on first sign-up
 /**
- * Free trials are OFF: the terminal is for subscribers and operator-issued
- * grants only. Turned off by the operator 2026-08-14.
+ * Free trials are ON: 24 hours of the full terminal, granted once on the first
+ * sign-in of a new account. Re-opened by the operator 2026-09-02 (off since
+ * 2026-08-14).
  *
  * This is the authority — the client flag in src/lib/auth.tsx only controls
- * copy. Anyone who signs up now gets an account with no grant, so subActive()
- * is false and the terminal never mounts.
+ * copy.
  *
- * Existing trials already handed out are NOT revoked here; they lapse on their
- * own expiry. Set this back to true to re-open trials — trialsByDevice is kept,
- * so a device that already used one still cannot take a second.
+ * NOTE ON REACH: trialsByDevice was kept while trials were off, so a device
+ * that already used one before 2026-08-14 still cannot take a second. "Everyone"
+ * therefore means every new sign-up on a device that has not had a trial — not
+ * a fresh 24 hours for people who already used theirs. Clearing trialsByDevice
+ * would reset that, at the cost of letting one device farm trials forever.
  */
-const TRIALS_ENABLED = false;
+const TRIALS_ENABLED = true;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAY = 86400000;
 
