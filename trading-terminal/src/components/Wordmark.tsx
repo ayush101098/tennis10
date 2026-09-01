@@ -51,7 +51,7 @@ export default function Wordmark({ size = 18, mark = true, text = true }: {
   }, [mark]);
 
   return (
-    <span className="inline-flex items-center gap-2 shrink-0" aria-label="Tennis Alpha">
+    <span className="inline-flex items-center gap-2 shrink-0" role="img" aria-label="Tennis Alpha">
       {mark && hasMark && (
         // eslint-disable-next-line @next/next/no-img-element -- static brand asset
         <img src="/brand/mark.svg" alt="" height={size * 1.6} style={{ height: size * 1.6, width: "auto" }} />

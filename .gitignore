@@ -94,3 +94,9 @@ trading-terminal/tsconfig.tsbuildinfo
 
 # Local Netlify folder
 .netlify
+
+# Playwright artifacts (baselines ARE committed; runs and reports are not)
+trading-terminal/test-results/
+trading-terminal/playwright-report/
+trading-terminal/blob-report/
+trading-terminal/.playwright/

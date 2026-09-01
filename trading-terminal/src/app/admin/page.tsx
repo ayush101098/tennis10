@@ -164,7 +164,7 @@ export default function AdminPage() {
   }
   if (!session.isAdmin) {
     return <Shell><p className="text-red-400">Not authorized. This page is admin-only.</p>
-      <Link href="/" className="text-terminal-green text-sm hover:underline">← back to site</Link></Shell>;
+      <Link href="/" className="text-primary text-sm underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current">← back to site</Link></Shell>;
   }
 
   const paidLeads = (leads || []).filter(l => l.paid).length;
@@ -314,15 +314,15 @@ export default function AdminPage() {
 
           <Section title="On-chain payments — who actually paid">
             {onchain === null ? <Muted>Loading chain…</Muted> :
-              onchain.length === 0 ? <Muted>No on-chain transfers found (or blocked locally). <a className="text-terminal-green hover:underline" target="_blank" rel="noreferrer" href={`https://etherscan.io/address/${PAYMENT_ADDRESS}`}>View on Etherscan ↗</a></Muted> :
+              onchain.length === 0 ? <Muted>No on-chain transfers found (or blocked locally). <a className="text-primary underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current" target="_blank" rel="noreferrer" href={`https://etherscan.io/address/${PAYMENT_ADDRESS}`}>View on Etherscan ↗</a></Muted> :
               <Table head={["When", "Amount", "≈USD", "From", "Tx"]}>
                 {onchain.map(t => (
                   <tr key={t.hash} className="border-t border-terminal-border">
                     <td className="py-1.5 pr-3 text-terminal-muted">{fmtDate(t.when)}</td>
                     <td className="pr-3 tabular-nums">{t.amount.toFixed(t.symbol === "ETH" ? 4 : 2)} {t.symbol}</td>
                     <td className="pr-3 tabular-nums">{t.usd != null ? `$${t.usd.toFixed(0)}` : "—"}</td>
-                    <td className="pr-3"><a className="text-terminal-green hover:underline" target="_blank" rel="noreferrer" href={`https://etherscan.io/address/${t.from}`}>{short(t.from)}</a></td>
-                    <td><a className="text-terminal-green hover:underline" target="_blank" rel="noreferrer" href={`https://etherscan.io/tx/${t.hash}`}>{short(t.hash)}</a></td>
+                    <td className="pr-3"><a className="text-primary underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current" target="_blank" rel="noreferrer" href={`https://etherscan.io/address/${t.from}`}>{short(t.from)}</a></td>
+                    <td><a className="text-primary underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current" target="_blank" rel="noreferrer" href={`https://etherscan.io/tx/${t.hash}`}>{short(t.hash)}</a></td>
                   </tr>
                 ))}
               </Table>}
@@ -337,7 +337,7 @@ export default function AdminPage() {
                     <td className="py-1.5 pr-3 text-terminal-muted">{fmtDate(p.ts)}</td>
                     <td className="pr-3 text-slate-200">{p.email}</td>
                     <td className="pr-3 tabular-nums">{p.amount ?? "—"}</td>
-                    <td><a className="text-terminal-green hover:underline" target="_blank" rel="noreferrer" href={`https://etherscan.io/tx/${p.txHash}`}>{short(p.txHash)}</a></td>
+                    <td><a className="text-primary underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current" target="_blank" rel="noreferrer" href={`https://etherscan.io/tx/${p.txHash}`}>{short(p.txHash)}</a></td>
                   </tr>
                 ))}
               </Table>}

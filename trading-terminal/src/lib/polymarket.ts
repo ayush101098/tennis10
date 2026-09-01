@@ -43,9 +43,23 @@ export function norm(text: string): string {
     .trim();
 }
 
+/**
+ * Surname used to key a fixture.
+ *
+ * Taking the LAST token is right for Polymarket's own "Aryna Sabalenka" but
+ * wrong for every name coming off the SofaScore feed, which writes them
+ * surname-first and abbreviated: "Sabalenka A." yielded the surname "a", so no
+ * schedule match could ever be keyed to its Polymarket fixture. Trailing
+ * initial tokens are dropped first; what remains ends with the real surname.
+ */
 export function surname(fullName: string): string {
-  const parts = norm(fullName).split(/\s+/);
-  return parts[parts.length - 1] || "";
+  const parts = norm(fullName).split(/\s+/).filter(Boolean);
+  if (!parts.length) return "";
+  // "sabalenka a" → "sabalenka";  "cerundolo j m" → "cerundolo";
+  // "wang xin" → "wang". Never strip down to nothing.
+  let end = parts.length;
+  while (end > 1 && parts[end - 1].length <= 3) end--;
+  return parts[end - 1] || "";
 }
 
 export function fixtureKey(p1: string, p2: string): string {

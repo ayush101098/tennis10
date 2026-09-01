@@ -279,7 +279,7 @@ export default function ResourcesPage() {
                   <p className="text-[11.5px] text-slate-400 mt-2 leading-relaxed">{p.note}</p>
                   {p.free && (
                     <a href={p.free} target="_blank" rel="noreferrer"
-                      className="inline-block mt-2 text-[10px] text-terminal-cyan hover:underline">
+                      className="inline-block mt-2 text-micro text-accent underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current">
                       free PDF ↗
                     </a>
                   )}

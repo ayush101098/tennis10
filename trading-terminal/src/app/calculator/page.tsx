@@ -62,7 +62,7 @@ export default function CalculatorPage() {
           <p className="mt-2 text-[13px] text-slate-400 max-w-[680px] leading-relaxed">
             Set your portfolio once. We size every bet at ¼ Kelly against the model&apos;s edge,
             capped at 6% per event, with the 2% edge floor and three-tier bankroll from the{" "}
-            <Link href="/manual" className="text-terminal-cyan hover:underline">execution manual</Link>.
+            <Link href="/manual" className="text-accent underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current">execution manual</Link>.
           </p>
         </header>
 
@@ -91,7 +91,7 @@ export default function CalculatorPage() {
               ))}
             </div>
             <div className="ml-auto text-[11px] text-terminal-muted">
-              1 unit = <span className="text-slate-200 font-mono">{money(t.unit)}</span> <span className="opacity-60">(1% of bankroll)</span>
+              1 unit = <span className="text-slate-200 font-mono">{money(t.unit)}</span> <span className="text-content-muted">(1% of bankroll)</span>
             </div>
           </div>
 

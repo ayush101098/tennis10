@@ -129,7 +129,7 @@ export const FEED_STALE_MS = 15 * 60 * 1000;
 
 // ─── Rankings lookup (loaded once from /rankings.json) ───────────────────────
 
-interface RankEntry { rank: number; points: number }
+export interface RankEntry { rank: number; points: number }
 interface RankingsFile {
   atp: Record<string, RankEntry>;
   wta: Record<string, RankEntry>;
@@ -147,7 +147,7 @@ function normName(n: string): string {
     .trim();
 }
 
-type RankMap = Map<string, RankEntry>;
+export type RankMap = Map<string, RankEntry>;
 
 let _rankingsPromise: Promise<RankMap> | null = null;
 
@@ -174,7 +174,63 @@ function loadRankings(): Promise<RankMap> {
   return _rankingsPromise;
 }
 
-function lookupEntry(nameMap: RankMap, displayName: string): RankEntry | null {
+/**
+ * Ranked players indexed for "Surname F." lookups.
+ *
+ * Built lazily from the same rankings file and rebuilt whenever the map
+ * identity changes (i.e. once per page load).
+ */
+interface InitialCandidate { given: string[]; entry: RankEntry }
+let _initialIndexFor: RankMap | null = null;
+let _initialIndex: Map<string, InitialCandidate[]> = new Map();
+
+function initialIndex(nameMap: RankMap): Map<string, InitialCandidate[]> {
+  if (_initialIndexFor === nameMap) return _initialIndex;
+  const idx = new Map<string, InitialCandidate[]>();
+  for (const [key, entry] of nameMap) {
+    const tok = key.split(" ");
+    if (tok.length < 2) continue;
+    // Register every plausible surname tail (1..3 tokens) so compound
+    // surnames — "Merida Aguilar", "Mpetshi Perricard" — are reachable from
+    // the feed's short form, which never abbreviates the surname.
+    for (let take = 1; take <= 3 && take < tok.length; take++) {
+      const surname = tok.slice(tok.length - take).join(" ");
+      const given = tok.slice(0, tok.length - take);
+      const list = idx.get(surname);
+      if (list) list.push({ given, entry });
+      else idx.set(surname, [{ given, entry }]);
+    }
+  }
+  _initialIndexFor = nameMap;
+  _initialIndex = idx;
+  return idx;
+}
+
+/**
+ * Resolve a SofaScore display name against the rankings file.
+ *
+ * WHY THIS IS MORE THAN AN EXACT LOOKUP
+ *   SofaScore names players "Borges N.", "Struff J-L.", "Etcheverry T. M." —
+ *   surname first, given name abbreviated. The rankings file is "Nuno Borges".
+ *   Those two strings share no normalised form, so the exact lookup missed
+ *   EVERY SofaScore-sourced match: ranks came back 0, which makes computeProb
+ *   fall through to "unknown", which makes attachIntelligence discard the
+ *   match as having no real prior. The entire US Open board — 52 matches on
+ *   2026-09-01 — was therefore unpriced and could show no value at all.
+ *
+ *   So after the exact and swapped forms fail, match structurally: the leading
+ *   tokens are the surname, the trailing short tokens are given-name initials,
+ *   and a candidate qualifies when each initial PREFIXES the corresponding
+ *   given name. Prefix rather than first-letter-only is what separates
+ *   "Wang Xin." (Xinyu) from "Wang Xiy." (Xiyu) and "Blanch Dar." (Darwin)
+ *   from "Blanch Dal." (Dali) — first initials alone are ambiguous for all
+ *   four, and a wrong rank is worse than no rank because it prices a match
+ *   confidently on the wrong player.
+ *
+ *   An ambiguous match resolves to null. Guessing between two ranked players
+ *   would hand the model a confident prior for the wrong person.
+ */
+export function lookupEntry(nameMap: RankMap, displayName: string): RankEntry | null {
   const key = normName(displayName);
   const r = nameMap.get(key);
   if (r) return r;
@@ -185,7 +241,26 @@ function lookupEntry(nameMap: RankMap, displayName: string): RankEntry | null {
     const r2 = nameMap.get(swapped);
     if (r2) return r2;
   }
-  return null;
+
+  // ── "Surname F." / "Surname F. M." abbreviated form ──
+  // normName has already turned "J-L." into "j l" and dropped nothing else,
+  // so strip the dots here before splitting into surname + initials.
+  const tok = key.replace(/\./g, " ").replace(/\s+/g, " ").trim().split(" ");
+  if (tok.length < 2) return null;
+
+  // Trailing tokens of 1-3 characters are given-name initials ("n", "j l",
+  // "xin"). Everything before them is the surname.
+  let split = tok.length;
+  while (split > 1 && tok[split - 1].length <= 3) split--;
+  if (split === tok.length) return null;   // nothing abbreviated — not this form
+
+  const surname = tok.slice(0, split).join(" ");
+  const initials = tok.slice(split);
+
+  const candidates = (initialIndex(nameMap).get(surname) ?? []).filter(c =>
+    initials.every((ini, i) => c.given[i]?.startsWith(ini)));
+
+  return candidates.length === 1 ? candidates[0].entry : null;
 }
 
 function lookupRank(nameMap: RankMap, displayName: string): number {

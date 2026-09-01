@@ -27,10 +27,16 @@ import { SoftwareApplicationLd } from "@/components/JsonLd";
 import { fetchScheduleClient, refreshLiveMatches, tourRank } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
+import UsOpenBoard, { isUsOpen } from "@/components/UsOpenBoard";
+import { surname as pmSurname } from "@/lib/polymarket";
+import ParlayBuilder from "@/components/ParlayBuilder";
+import type { ParlayLeg } from "@/lib/parlay";
 import EmailCapture from "@/components/EmailCapture";
 import CourtBackdrop from "@/components/CourtBackdrop";
 import VideoEmbed from "@/components/VideoEmbed";
 import { useTier } from "@/lib/auth";
+import Button, { ButtonLink } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Panel";
 import PricingModal from "@/components/PricingModal";
 
 /**
@@ -106,12 +112,72 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
     m => m.status === "live" && !(data?.fallbackActive && m.source !== "espn")).length;
   const tours = useMemo(() => Array.from(new Set(matches.map(m => m.tour))), [matches]);
 
+  /**
+   * US Open matches across BOTH feed days.
+   *
+   * A slam's night session runs past midnight UTC, so half the card lands in
+   * `tomorrow` while it is still the same match day for the viewer. Taking
+   * only `today` dropped those matches off the value board entirely.
+   */
+  const usOpenMatches = useMemo(() => {
+    if (!data) return [];
+    // Dedupe across the two days. The same fixture is served by more than one
+    // upstream feed under DIFFERENT event ids, so the id-keyed dedupe upstream
+    // does not catch it and the board listed Alcaraz–Safiullin twice, once per
+    // id. Key on the pairing instead, and keep the live/earlier copy.
+    const key = (m: ScheduledMatch) =>
+      [pmSurname(m.player1), pmSurname(m.player2)].sort().join("|") + "@" + m.tournament;
+    const best = new Map<string, ScheduledMatch>();
+    for (const m of [...data.today, ...data.tomorrow].filter(isUsOpen)) {
+      const k = key(m);
+      const prev = best.get(k);
+      if (!prev) { best.set(k, m); continue; }
+      // Prefer a live copy, then the one that is actually priced, then earlier.
+      const better =
+        (m.status === "live") !== (prev.status === "live") ? (m.status === "live" ? m : prev)
+        : !!m.value !== !!prev.value ? (m.value ? m : prev)
+        : m.start_timestamp <= prev.start_timestamp ? m : prev;
+      best.set(k, better);
+    }
+    return [...best.values()];
+  }, [data]);
+
   // Every match opens for everyone. The gate is on the ACTIONABLE layer, not on
   // access: edge, Kelly stakes and the trade signals render blurred for
   // non-subscribers, so a visitor sees the shape of the answer and what it is
   // worth. Locking whole matches instead hid the product from the people it
   // needs to convince — and from search engines, which index this page.
   const [pricingOpen, setPricingOpen] = useState(false);
+
+  /**
+   * Parlay ticket. Keyed by match id so a match can appear at most once —
+   * two legs from one match are not independent and multiplying them is
+   * simply wrong, so the data structure refuses it rather than the UI warning
+   * about it after the fact.
+   */
+  const [parlayLegs, setParlayLegs] = useState<ParlayLeg[]>([]);
+  const parlayIds = useMemo(() => new Set(parlayLegs.map(l => l.matchId)), [parlayLegs]);
+
+  const toggleParlayLeg = useCallback(
+    (m: ScheduledMatch, value: NonNullable<ScheduledMatch["value"]>) => {
+      setParlayLegs(prev => {
+        if (prev.some(l => l.matchId === m.id)) return prev.filter(l => l.matchId !== m.id);
+        return [...prev, {
+          matchId: m.id,
+          player: value.player,
+          opponent: value.side === 1 ? m.player2 : m.player1,
+          tournament: m.tournament,
+          trueP: value.trueP,
+          marketP: value.marketP,
+          odds: value.odds,
+          live: value.live,
+        }];
+      });
+    }, []);
+
+  const removeParlayLeg = useCallback(
+    (matchId: string) => setParlayLegs(prev => prev.filter(l => l.matchId !== matchId)), []);
+  const clearParlay = useCallback(() => setParlayLegs([]), []);
   const onPick = useCallback((m: ScheduledMatch) => setSelected(m), []);
 
   return (
@@ -120,25 +186,25 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       {/* ── Nav ── */}
       <nav className="sticky top-0 z-40 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-terminal-border bg-terminal-bg/95 backdrop-blur">
         <Wordmark size={24} text={false} />
-        <div className="flex items-center gap-2 sm:gap-3 text-[11px] shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 text-xs shrink-0">
           <Socials />
-          <Link href="/manual" className="hidden sm:inline text-terminal-muted hover:text-slate-200">Manual</Link>
+          <Link href="/manual" className="hidden sm:inline text-content-muted hover:text-content underline underline-offset-4 decoration-1 decoration-border hover:decoration-content-muted">Manual</Link>
           {/* Signed-in users keep their way in — someone who already signed up,
               or is paying, must never be sent to a waitlist for access they
               already hold. The waitlist CTA is for new visitors only. */}
           {session ? (
             <>
-              <span className={`font-bold px-1.5 py-0.5 rounded ${session.isAdmin ? "bg-terminal-red/20 text-terminal-red" : isPro ? "bg-terminal-green/20 text-terminal-green" : "bg-terminal-border text-slate-300"}`}>
-                {session.isAdmin ? "ADMIN" : isPro ? "PRO" : "FREE"}
-              </span>
-              <Link href="/terminal" className="inline-flex items-center justify-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
-                LAUNCH TERMINAL →
-              </Link>
+              <Badge tone={session.isAdmin ? "danger" : isPro ? "primary" : "neutral"}>
+                {session.isAdmin ? "Admin" : isPro ? "Pro" : "Free"}
+              </Badge>
+              <ButtonLink href="/terminal" variant="primary" iconAfter="arrowRight">
+                Launch terminal
+              </ButtonLink>
             </>
           ) : (
-            <a href="#waitlist" className="inline-flex items-center justify-center min-h-[40px] font-bold px-3 rounded bg-terminal-green text-black hover:opacity-90">
-              JOIN WAITLIST →
-            </a>
+            <ButtonLink href="#waitlist" variant="primary" iconAfter="arrowRight">
+              Join waitlist
+            </ButtonLink>
           )}
         </div>
       </nav>
@@ -148,10 +214,10 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
         <CourtBackdrop live={liveCount} />
         <div className="relative px-4 sm:px-6 pt-10 sm:pt-14 pb-10 text-center max-w-[860px] mx-auto">
         <span className="eyebrow">Live model · ATP · WTA · Challenger · W125 · ITF</span>
-        <h1 className="text-slate-100">
-          Market intelligence for <span className="text-terminal-green">serious tennis traders.</span>
+        <h1 className="text-content-strong">
+          Market intelligence for <span className="text-primary">serious tennis traders.</span>
         </h1>
-        <p className="mt-5 text-slate-400 max-w-[620px] mx-auto">
+        <p className="mt-5 text-content-muted max-w-[620px] mx-auto">
           A neural network trained on 41,750 tour matches sets the pre-match prior; a
           score-conditioned Markov engine re-prices every point, measured against real
           exchange odds — with edge confidence, ¼-Kelly staking and hedge-timing
@@ -165,11 +231,15 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           <div className="w-full max-w-md flex justify-center">
             <EmailCapture source="waitlist-hero" cta="Join the waitlist" variant="waitlist" />
           </div>
-          <p className="text-[11px] text-terminal-muted">
+          <p className="text-xs text-content-muted">
             Free while in beta · no card required · unsubscribe anytime
           </p>
-          <a href="#matches" className="mt-2 inline-flex items-center justify-center min-h-[40px] px-5 rounded border border-terminal-border text-xs font-bold text-slate-200 hover:bg-terminal-panel">
-            SEE TODAY&apos;S MATCHES ↓
+          {/* Deliberately a link, not a second button. The hero had three
+              button-shaped things competing (nav CTA, waitlist, this) and a
+              screen with three primary actions has none. */}
+          <a href="#us-open"
+            className="mt-1 text-xs text-content-muted underline underline-offset-4 decoration-border hover:text-content hover:decoration-content-muted">
+            or see today&apos;s value board
           </a>
         </div>
         {/* Only for signed-in users. Asking a new visitor to join a waitlist and
@@ -197,6 +267,32 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
         </div>
         </div>
       </section>
+
+      {/* ── US Open value board — the lead act while the slam is on ── */}
+      <UsOpenBoard
+        matches={usOpenMatches}
+        isPro={isPro}
+        loading={!data}
+        sourcesDown={!!data?.sourcesDown}
+        onSelectMatch={m => {
+          // The analysis pane lives in the board below; selecting up here
+          // without moving the viewport looked like the click did nothing.
+          onPick(m);
+          document.getElementById("matches")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }}
+        onUpgrade={() => setPricingOpen(true)}
+        parlayIds={parlayIds}
+        onToggleParlay={toggleParlayLeg}
+      />
+
+      {/* ── Parlay builder — combines legs picked off the board above ── */}
+      <ParlayBuilder
+        legs={parlayLegs}
+        isPro={isPro}
+        onRemove={removeParlayLeg}
+        onClear={clearParlay}
+        onUpgrade={() => setPricingOpen(true)}
+      />
 
       {/* ── Live board + analysis ── */}
       <section id="matches" className="px-4 sm:px-6 pb-14 max-w-[1180px] mx-auto">
@@ -484,7 +580,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           title="How to Trade Tennis Prediction Markets Like a Pro (Live Terminal Demo)" />
         <p className="text-center text-[10px] text-terminal-muted mt-3">
           Prefer to read?{" "}
-          <Link href="/manual" className="text-terminal-green hover:underline">
+          <Link href="/manual" className="text-primary underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current">
             The written trading manual
           </Link>{" "}
           covers the same ground in detail.
@@ -504,7 +600,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
         </div>
         <p className="text-[10px] text-terminal-muted mt-4">
           or email{" "}
-          <a href="mailto:jessefuture10@gmail.com" className="text-terminal-green hover:underline">
+          <a href="mailto:jessefuture10@gmail.com" className="text-primary underline underline-offset-2 decoration-1 decoration-current/40 hover:decoration-current">
             jessefuture10@gmail.com
           </a>
         </p>
@@ -525,17 +621,17 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
 
 function Stat({ n, l, tone }: { n: React.ReactNode; l: string; tone?: "green" }) {
   return (
-    <div className="py-5 px-3 border-r border-terminal-border last:border-r-0 text-center sm:text-left">
-      <div className={`mono text-xl font-bold ${tone === "green" ? "text-terminal-green" : "text-slate-100"}`}>{n}</div>
-      <div className="text-[11.5px] text-terminal-muted mt-1">{l}</div>
+    <div className="py-5 px-3 border-r border-border last:border-r-0 text-center sm:text-left">
+      <div className={`mono tabular-nums text-xl font-semibold ${tone === "green" ? "text-primary" : "text-content-strong"}`}>{n}</div>
+      <div className="text-xs text-content-muted mt-1">{l}</div>
     </div>
   );
 }
 
 function Chip({ label, tone, pulse }: { label: string; tone?: "green"; pulse?: boolean }) {
   return (
-    <span className={`px-2.5 py-1 rounded-full border ${tone === "green" ? "border-terminal-green/40 text-terminal-green" : "border-terminal-border text-slate-400"}`}>
-      {pulse && <span className="inline-block w-1.5 h-1.5 rounded-full bg-terminal-green animate-pulse mr-1.5 align-middle" />}
+    <span className={`px-2.5 py-1 rounded-full border text-xs ${tone === "green" ? "border-primary/40 text-primary" : "border-border text-content-muted"}`}>
+      {pulse && <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary live-dot mr-1.5 align-middle" />}
       {label}
     </span>
   );
