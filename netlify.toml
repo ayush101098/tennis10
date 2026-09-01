@@ -39,6 +39,15 @@
   status = 200
   force = true
 
+# Polymarket. Without this the static export has no /api/pm/* at all and
+# lib/polymarket.ts falls back to calling gamma-api from the BROWSER — one
+# upstream connection per visitor, refreshing forever. See pm-proxy.js.
+[[redirects]]
+  from = "/api/pm/*"
+  to = "/.netlify/functions/pm-proxy/:splat"
+  status = 200
+  force = true
+
 # Live-presence counter (the static export strips the /api/presence route)
 [[redirects]]
   from = "/api/presence"

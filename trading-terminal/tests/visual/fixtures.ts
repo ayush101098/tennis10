@@ -88,11 +88,17 @@ export async function stubNetwork(page: Page, { mode = "populated" }: StubOption
     return route.fulfill({ json: { events } });
   });
 
-  await page.route("**/gamma-api.polymarket.com/**", route =>
+  // The browser now talks to our proxy, never to Polymarket directly — stub
+  // the proxy path. A request to gamma-api.polymarket.com from the page would
+  // be a regression, so it is stubbed to fail loudly rather than succeed.
+  await page.route("**/api/pm/gamma/**", route =>
     route.fulfill({ json: mode === "populated" ? PM_MARKETS : [] }));
 
-  await page.route("**/clob.polymarket.com/**", route =>
+  await page.route("**/api/pm/clob/**", route =>
     route.fulfill({ json: { bids: [], asks: [] } }));
+
+  await page.route("**/*.polymarket.com/**", route =>
+    route.abort("blockedbyclient"));
 
   // Presence and analytics must never reach the network from a test run.
   await page.route("**/api/presence**", route => route.fulfill({ json: { count: 12 } }));

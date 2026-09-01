@@ -1,14 +1,29 @@
+import { apiUrl } from "@/lib/scheduleService";
+
 /**
  * Polymarket market discovery for the Value Board.
  *
- * Queries the public Gamma API straight from the browser (CORS is open),
- * indexes open tennis fixtures by surname pair, and exposes lookups so a
+ * Reads the Gamma API through our own /api/pm proxy (see below), indexes open
+ * tennis fixtures by surname pair, and exposes lookups so a
  * Value Board row can show the live Polymarket price + edge for the model's
  * pick and deep-link to the market. Mirrors execution/polymarket.py.
  */
 
-const GAMMA_URL = "https://gamma-api.polymarket.com";
-export const CLOB_URL = "https://clob.polymarket.com";
+/**
+ * Polymarket is reached through OUR backend, never directly from the browser.
+ *
+ * Calling gamma-api/clob straight from the page meant one upstream consumer
+ * per visitor: the fixture index refetched every 60s per open tab, the order
+ * book every 10s per open trade ticket. Polymarket's cost and rate limits
+ * therefore scaled with our user count instead of with the number of matches.
+ *
+ * `/api/pm/*` is served by netlify/functions/pm-proxy.js in production and by
+ * src/app/api/pm/[...path] in dev, and it caches per host class — so upstream
+ * sees roughly one request per cache window regardless of how many people are
+ * watching. Do not reintroduce a direct host constant here.
+ */
+const GAMMA_URL = "/api/pm/gamma";
+export const CLOB_URL = "/api/pm/clob";
 const CACHE_TTL_MS = 60_000;
 
 export type PmMarketType = "match" | "set1" | "set2" | "set3";
@@ -119,7 +134,7 @@ async function fetchIndex(): Promise<Map<string, PmFixture>> {
   let offset = 0;
   for (let page = 0; page < 6; page++) {
     const res = await fetch(
-      `${GAMMA_URL}/events?tag_slug=tennis&closed=false&limit=100&offset=${offset}`,
+      apiUrl(`${GAMMA_URL}/events?tag_slug=tennis&closed=false&limit=100&offset=${offset}`),
     );
     if (!res.ok) break;
     const events: any[] = await res.json();
@@ -185,7 +200,7 @@ export interface PmQuote {
 
 /** Live top-of-book for a token from the CLOB order book. */
 export async function fetchQuote(tokenId: string): Promise<PmQuote> {
-  const res = await fetch(`${CLOB_URL}/book?token_id=${tokenId}`);
+  const res = await fetch(apiUrl(`${CLOB_URL}/book?token_id=${tokenId}`));
   if (!res.ok) throw new Error(`CLOB book ${res.status}`);
   const book = await res.json();
   const best = (levels: Array<{ price: string }> | undefined, pick: "max" | "min") => {

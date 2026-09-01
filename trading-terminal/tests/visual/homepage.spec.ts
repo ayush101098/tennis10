@@ -125,6 +125,26 @@ test.describe("interaction contracts", () => {
     expect(unnamed, `controls with no accessible name:\n${unnamed.join("\n")}`).toEqual([]);
   });
 
+  test("the browser never talks to Polymarket directly", async ({ page }) => {
+    // The economics of the whole product rest on this: one upstream consumer
+    // (our backend), not one per visitor. Before /api/pm existed in
+    // production, every open tab refetched the Polymarket fixture index every
+    // 60s straight from gamma-api, so upstream load scaled with user count.
+    const direct: string[] = [];
+    page.on("request", r => {
+      if (/(^|\.)polymarket\.com/.test(new URL(r.url()).hostname)) direct.push(r.url());
+    });
+
+    await stubNetwork(page, { mode: "populated" });
+    await page.goto("/");
+    await settle(page);
+    // Open a trade ticket path too — the order-book poll was the second direct caller.
+    await page.getByTestId("parlay-toggle").first().click();
+    await page.waitForTimeout(500);
+
+    expect(direct, `direct Polymarket requests from the page:\n${direct.join("\n")}`).toEqual([]);
+  });
+
   test("adding a parlay leg updates the ticket", async ({ page }) => {
     await stubNetwork(page, { mode: "populated" });
     await page.goto("/");
