@@ -1,0 +1,6 @@
+{"sequence":1,"type":"POINT","score":{"sets":[0,0],"games":[3,3],"points":["15","0"]},"server":"p1","point":{"winner":"p1"}}
+{"sequence":2,"type":"POINT","score":{"sets":[0,0],"games":[3,3],"points":["15","15"]},"server":"p1","point":{"winner":"p2"}}
+{"sequence":3,"type":"POINT","score":{"sets":[0,0],"games":[3,3],"points":["15","30"]},"server":"p1","point":{"winner":"p2"}}
+{"sequence":4,"type":"POINT","score":{"sets":[0,0],"games":[3,3],"points":["15","40"]},"server":"p1","point":{"winner":"p2"}}
+{"sequence":5,"type":"POINT","score":{"sets":[0,0],"games":[3,4],"points":["0","0"]},"server":"p2","point":{"winner":"p2"}}
+{"sequence":6,"type":"POINT","score":{"sets":[0,0],"games":[3,4],"points":["0","15"]},"server":"p2","point":{"winner":"p2"}}
