@@ -1,0 +1,22 @@
+# Cloudflare Worker + Durable Objects — the fan-out edge for the live engine.
+#
+# One Durable Object per match acts as the room; the Python runtime pushes
+# updates in, and the DO broadcasts to every connected viewer. The upstream
+# provider is never touched from here.
+
+name = "tennisalpha-live"
+main = "src/worker.js"
+compatibility_date = "2026-01-15"
+
+[[durable_objects.bindings]]
+name = "MATCH_ROOM"
+class_name = "MatchRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MatchRoom"]
+
+[vars]
+# Overridden per environment. The push token is a SECRET — set it with
+#   wrangler secret put PUSH_TOKEN
+MAX_VIEWERS_PER_ROOM = "2000"

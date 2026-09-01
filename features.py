@@ -84,6 +84,11 @@ TOUR_DEFAULTS = {
 class TennisFeatureExtractor:
     """Extract temporally-isolated features for tennis match prediction."""
 
+    # Exposed on the class as well as at module level: the surface table is
+    # part of this extractor's contract, and callers (and tests) reach for
+    # it through the class rather than importing the module constant.
+    SURFACE_CORRELATIONS = SURFACE_CORRELATIONS
+
     def __init__(self, db_path: str = 'tennis_betting.db', tour: str = 'WTA',
                  rally_db: str = 'tennis_data.db'):
         self.db_path = db_path
@@ -135,6 +140,21 @@ class TennisFeatureExtractor:
 
     def _surface_weight(self, target: str, source: str) -> float:
         return SURFACE_CORRELATIONS.get((target, source), 0.08)
+
+    # ── public aliases ───────────────────────────────────────────────────────
+    # These two were renamed to private at some point and the tests were never
+    # updated, so 10 of them have been failing on an AttributeError ever since
+    # — asserting nothing about behaviour that is, in fact, correct. The
+    # implementations are unchanged; only the tested names are restored.
+
+    def get_surface_weight(self, target: str, source: str) -> float:
+        """Correlation between two surfaces, 1.0 for the same surface."""
+        return self._surface_weight(target, source)
+
+    def apply_time_discount(self, ref_date, past_date,
+                            half_life_years: float = 0.8) -> float:
+        """Exponential recency weight: 1.0 today, 0.5 one half-life ago."""
+        return self._time_decay(ref_date, past_date, half_life_years)
 
     def _time_decay(self, ref_date: datetime, past_date: datetime,
                     half_life_years: float = 0.8) -> float:

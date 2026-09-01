@@ -35,6 +35,10 @@ failure modes get tested.
 | `signals.py` | §15, §16, §24 | Hysteresis state machine and the publish gate |
 | `gateway.py` | §17-§20 | Match rooms, fan-out, dynamic subscription |
 | `runtime.py` | — | The order in which all of it happens |
+| `calibration.py` | — | Recorder with a fixed orientation; reliability, Platt, isotonic |
+| `edge_publisher.py` | §25 | Pushes updates to the Cloudflare edge |
+| `providers/polymarket_odds.py` | §9, §10 | Exchange prices with real depth |
+| `../../edge/` | §25 | Worker + Durable Object match rooms |
 
 ## What this package does NOT do
 
@@ -98,22 +102,57 @@ requests needed to track **matches** — that is set by endpoint shape:
 updates need the WebSocket tier regardless; a polling feed cannot beat its own
 interval.
 
+## Calibration
+
+`calibration.py` holds the recorder, the diagnostics (reliability diagram,
+Brier, log-loss, ECE) and two correctors (Platt, isotonic).
+
+**There is still no calibration, and that is a data problem, not a code one.**
+Fitting one on `tennis_betting.db:trade_log` was attempted and abandoned on the
+evidence:
+
+```
+corr(true_p, market_price)     +0.15    should be ~+0.8 for the same side
+p in 0.0-0.1                   88% won
+p in 0.9-1.0                   64% won
+```
+
+A prediction of 0.05 winning 88% of the time is a mislabelled column, not a
+miscalibrated model. All four orientation conventions were tested across match,
+set1 and set2: set markets correlate −0.62 as stored and +0.38 under a
+different flip. The log mixes conventions across market types and code
+versions. Fitting on it would produce an authoritative-looking number that
+means nothing — and it would then be wired into the live signal gate.
+
+So the fix is to start recording properly. `CalibrationRecorder` enforces one
+orientation: `p_model` is always the probability of `selection`, and settlement
+names the WINNER rather than asserting per-row correctness, which removes the
+last place a caller could invert it. The runtime records one observation per
+match per tier and `settle_match()` closes the loop.
+
+The machinery is verified against synthetic data with a known injected bias
+(19 tests): the diagnostics detect the bias in the right direction and
+magnitude, Platt and isotonic both remove it, and a correctly-calibrated model
+is left alone. It is ready for the day the data exists.
+
+```bash
+python -m execution.live calibrate      # diagram first, fit second
+```
+
 ## Status
 
-Built and tested: everything above, 74 tests (`tests/test_live_feed.py`,
-`test_live_engine.py`, `test_live_runtime.py`).
+Built and tested: everything above. **111 live tests**, and the full repository
+suite is green (196 passed).
 
 Not done, and why:
 
-- **No live provider integration test.** The adapter is written against the
-  documented shape and exercised through an injected transport; it has never
-  spoken to the real endpoint because that needs a paid key. Expect to adjust
-  `normalize()` on first contact.
-- **Cloudflare Durable Object rooms (§25).** `RoomRegistry` is the fan-out
-  logic and is transport-agnostic; the DO deployment is not written.
-- **Odds provider adapters.** `odds.py` models bookmaker and exchange prices,
-  but nothing feeds them yet — the existing `execution/polymarket.py` is the
-  obvious first source.
-- **Calibration.** The gate accounts for the model's known over-confidence, but
-  accounting for an error is not fixing it. Recalibration against closing lines
-  remains the highest-value work in this project.
+- **The provider adapter has never spoken to the real endpoint.** It is written
+  against the documented shape and exercised through an injected transport;
+  a live key is needed. `python -m execution.live smoke` prints raw frames
+  beside their normalized form so the first five minutes with a key are a
+  field-name diff rather than a debugging session.
+- **The edge is not deployed.** `edge/` holds the Worker and Durable Object,
+  syntax-checked but never pushed — that needs a Cloudflare account.
+  `RoomRegistry` does the same fan-out in-process and works today.
+- **No calibration dataset yet.** See above. Weeks of recording, not hours of
+  coding.

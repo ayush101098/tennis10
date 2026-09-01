@@ -100,3 +100,7 @@ trading-terminal/test-results/
 trading-terminal/playwright-report/
 trading-terminal/blob-report/
 trading-terminal/.playwright/
+
+# Live engine local state (calibration observations are per-machine)
+tennis_points.db-shm
+tennis_points.db-wal

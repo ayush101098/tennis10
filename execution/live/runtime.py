@@ -25,6 +25,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from execution.live.calibration import CalibrationRecorder
+from execution.live.edge_publisher import EdgePublisher
 from execution.live.engine import ModelBridge, game_ladder
 from execution.live.events import LiveEvent
 from execution.live.feed import Health, LatencyBreakdown, worst
@@ -63,12 +65,22 @@ class LiveRuntime:
                  model: Optional[ModelBridge] = None,
                  signals: Optional[SignalEngine] = None,
                  failover: Optional[FailoverManager] = None,
+                 publisher: Optional[EdgePublisher] = None,
+                 recorder: Optional[CalibrationRecorder] = None,
                  now_ms=None):
         self.provider = provider
         self.store: StateStore = store or InMemoryStateStore()
         self.model = model or ModelBridge()
         self.signals = signals or SignalEngine()
         self.failover = failover
+        # Optional edge fan-out. Local rooms work without it; this is what
+        # makes viewer number 1,000 free.
+        self.publisher = publisher
+        # Optional calibration recording. Every published probability is an
+        # observation, and the reason no calibration exists today is that
+        # nothing ever wrote them down with an unambiguous orientation.
+        self.recorder = recorder
+        self._recorded: set = set()
         self._now = now_ms or (lambda: int(time.time() * 1000))
         self.contexts: dict[str, MatchContext] = {}
         self.registry = registry or RoomRegistry(
@@ -205,9 +217,51 @@ class LiveRuntime:
         else:
             kind = "model"
         sent = await self.registry.broadcast(event.match_id, payload, kind=kind)
+        if self.publisher is not None:
+            # Independent of local delivery: the edge has its own viewers, and
+            # suppressing a push because nobody is attached HERE would leave
+            # them stale.
+            await self.publisher.publish(event.match_id, payload)
         if sent:
             self.published += 1
+
+        self._record_for_calibration(event.match_id, ctx, fair)
         return payload if sent else None
+
+    def _record_for_calibration(self, match_id: str, ctx, fair) -> None:
+        """Write one observation per match per model tier change.
+
+        Recording every point would store thousands of near-identical rows for
+        one match and let a single long match dominate the fit. One prediction
+        per match per significant re-price keeps the dataset weighted by
+        MATCHES, which is the unit the model is actually wrong about.
+        """
+        if self.recorder is None or fair is None or not ctx.player1:
+            return
+        key = (match_id, fair.tier)
+        if key in self._recorded:
+            return
+        self._recorded.add(key)
+        try:
+            self.recorder.predict(
+                match_id=match_id, market="match", selection=ctx.player1,
+                p_model=fair.p1, source=fair.source)
+        except Exception:
+            # Calibration bookkeeping must never break the live path.
+            pass
+
+    def settle_match(self, match_id: str, winner: str) -> None:
+        """Close the loop: tell the recorder who actually won.
+
+        Without this the recorder accumulates predictions that never become
+        data, which is indistinguishable from having no recorder at all.
+        """
+        if self.recorder is None:
+            return
+        try:
+            self.recorder.settle(match_id=match_id, market="match", winner=winner)
+        except Exception:
+            pass
 
     async def run(self) -> None:
         """Consume the provider until stopped."""
@@ -239,4 +293,9 @@ class LiveRuntime:
             out["model_error"] = self.model.unavailable_reason
         if self.failover is not None:
             out["feeds"] = self.failover.as_dict()
+        if self.publisher is not None:
+            out["edge"] = self.publisher.health()
+        if self.recorder is not None:
+            total, settled = self.recorder.count()
+            out["calibration"] = {"observations": total, "settled": settled}
         return out
