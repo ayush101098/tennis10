@@ -36,16 +36,45 @@ const blobs = () => sharedStore(STORE);
 // Blob keys can't contain "/" — flatten the SofaScore path.
 const keyFor = (p) => "p_" + String(p).replace(/^\/+|\/+$/g, "").replace(/[^A-Za-z0-9._-]/g, "_");
 
+/**
+ * CDN cache lifetime, PER PATH CLASS.
+ *
+ * Cached at the CDN, not "no-store": no-store made every client request an
+ * invocation — ~40 per visitor per minute, which is how a million requests
+ * happened in three days.
+ *
+ * But a single 25s lifetime for everything was wrong in both directions at
+ * once. It added up to 25s of staleness to the live scoreboard, which
+ * push_sofa now refreshes every 15s — so the cache, not the feed, became the
+ * dominant lag term. And it re-invoked the function every 25s for
+ * scheduled-events and daily odds, which only change every 15 and 7.5 minutes,
+ * spending invocations to re-serve identical bytes.
+ *
+ * Matching each lifetime to how fast its data actually changes makes the live
+ * board fresher AND cuts total invocations.
+ */
+function cacheFor(sofaPath) {
+  const p = String(sofaPath || "");
+  // Live scoreboard: pushed every 15s, and the thing users are watching.
+  if (p.includes("/events/live") || p.includes("/point-by-point")) {
+    return "public, s-maxage=8, stale-while-revalidate=60";
+  }
+  // Per-event detail: pushed every 3 minutes.
+  if (p.includes("/statistics") || p.includes("/odds/")) {
+    return "public, s-maxage=60, stale-while-revalidate=300";
+  }
+  // Draws and schedules: pushed every 15 minutes, so a 25s cache was buying
+  // nothing but invocations.
+  if (p.includes("scheduled-events")) {
+    return "public, s-maxage=180, stale-while-revalidate=900";
+  }
+  return "public, s-maxage=25, stale-while-revalidate=120";
+}
+
 const json = (statusCode, obj, extra) => ({
   statusCode,
   headers: {
     "Content-Type": "application/json",
-    // Cached at the CDN, not "no-store". This data is rewritten by push_sofa
-    // every 30s, so a 25s edge cache serves every visitor from the CDN and the
-    // function runs about twice a minute per path no matter how many people
-    // are watching. no-store meant every client request became an invocation —
-    // ~40 per visitor per minute, which is how 10 lakh requests happened in
-    // three days.
     "Cache-Control": "public, s-maxage=25, stale-while-revalidate=120",
     "Access-Control-Allow-Origin": "*",
     ...(extra || {}),
@@ -125,7 +154,7 @@ exports.handler = async (event) => {
           } catch { /* caching is best-effort */ }
         }
         return json(200, text, {
-          "Cache-Control": "public, s-maxage=25, stale-while-revalidate=120",
+          "Cache-Control": cacheFor(sofaPath),
           "x-sofa-source": "upstream",
         });
       }
@@ -141,7 +170,12 @@ exports.handler = async (event) => {
       const hit = await store.get(keyFor(sofaPath), { type: "json" });
       if (hit && hit.payload != null) {
         const age = Date.now() - (hit.at || 0);
+        // This is the path that actually runs in production — SofaScore 403s
+        // the deployed function, so nearly every response is served from what
+        // push_sofa wrote. It carried the flat 25s lifetime, which made the
+        // CDN the dominant lag term on the live board.
         return json(200, hit.payload, {
+          "Cache-Control": cacheFor(sofaPath),
           "x-sofa-source": "cache",
           "x-sofa-age-ms": String(age),
           ...(age > MAX_CACHE_AGE_MS ? { "x-sofa-stale": "true" } : {}),

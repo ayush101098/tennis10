@@ -1,9 +1,13 @@
 "use client";
 
-// 5s was chosen for point-by-point immediacy. Games take ~45s, so the board
-// cannot change faster than that — 15s shows every score change and cuts the
-// request rate by two thirds.
-const LIVE_POLL_MS = 15_000;
+// How often the board re-reads live scores.
+//
+// 10s, not 15s: with the proxy's live paths now on an 8s CDN lifetime, polling
+// faster costs CDN hits rather than function invocations — the edge collapses
+// every viewer onto one origin request per cache window regardless of how many
+// people are watching. The poll interval was the largest remaining term in how
+// far behind play the board sits, and it is the cheapest one to shorten.
+const LIVE_POLL_MS = 10_000;
 /**
  * How many matches the board renders. Everyone sees the same list.
  *

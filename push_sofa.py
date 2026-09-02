@@ -88,18 +88,39 @@ def load_env() -> None:
 #
 # So each path now refreshes at the rate it actually changes. A scheduled draw
 # does not move every 30 seconds; a live point does.
-SCHEDULED_EVERY = 20   # cycles between scheduled-events refreshes (~15 min)
-ODDS_EVERY = 10        # cycles between bulk daily-odds refreshes (~7.5 min)
-STATS_EVERY = 4        # cycles between per-event statistics refreshes
-LIVE_DETAIL_CAP = 12   # in-play matches carrying full detail, best tours first
+# CADENCES ARE WALL-CLOCK SECONDS, NOT CYCLE COUNTS.
+#   They used to be "every N cycles", which silently couples them to
+#   --interval: dropping the interval from 45s to 15s to make the live feed
+#   fresher would ALSO have tripled the scheduled, odds and stats request rate,
+#   reintroducing exactly the volume that got this IP challenged by SofaScore.
+#   Expressed as seconds, the live path speeds up on its own and everything
+#   else holds its existing beat.
+SCHEDULED_EVERY_S = 900   # a draw does not move inside 15 minutes
+ODDS_EVERY_S = 450        # bulk daily odds
+STATS_EVERY_S = 180       # per-event statistics
+LIVE_DETAIL_CAP = 12      # in-play matches carrying full detail, best tours first
+
+# The live scoreboard is ONE request per cycle. At 15s that is 4/min to
+# SofaScore, against the 262/min that caused the original ban — so it is both
+# the largest contributor to how far behind play the board sits and the
+# cheapest term to buy down.
+DEFAULT_INTERVAL_S = 15
+
+
+_INTERVAL = DEFAULT_INTERVAL_S   # rebound from argv in main()
+
+
+def _every(seconds: int, interval: int) -> int:
+    """Cycle count for a wall-clock cadence, at least 1."""
+    return max(1, round(seconds / max(1, interval)))
 
 
 def paths_for(days: int = 2, cycle_n: int = 0) -> list[str]:
     """Paths due this cycle. The live feed every time; the rest on their own beat."""
     today = _dt.date.today()
     out = ["sport/tennis/events/live"]
-    want_sched = cycle_n % SCHEDULED_EVERY == 0
-    want_odds = cycle_n % ODDS_EVERY == 0
+    want_sched = cycle_n % _every(SCHEDULED_EVERY_S, _INTERVAL) == 0
+    want_odds = cycle_n % _every(ODDS_EVERY_S, _INTERVAL) == 0
     for i in range(days):
         d = (today + _dt.timedelta(days=i)).isoformat()
         # sport/tennis/scheduled-events/<date> was dropped upstream — it 404s
@@ -142,7 +163,7 @@ def live_event_paths(limit: int = LIVE_DETAIL_CAP, cycle_n: int = 0) -> list[str
     inplay.sort(key=rank)
 
     templates = list(LIVE_EVENT_PATHS)
-    if cycle_n % STATS_EVERY == 0:
+    if cycle_n % _every(STATS_EVERY_S, _INTERVAL) == 0:
         templates += SLOW_EVENT_PATHS
 
     out = []
@@ -240,11 +261,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Push SofaScore tennis data to the deployed site")
     ap.add_argument("--url", default=os.getenv("TT_SITE_URL", ""))
     ap.add_argument("--token", default=os.getenv("TT_PUSH_TOKEN", ""))
-    ap.add_argument("--interval", type=int, default=45)
+    ap.add_argument("--interval", type=int, default=DEFAULT_INTERVAL_S)
     ap.add_argument("--days", type=int, default=2, help="today + N-1 following days")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+
+    # Cadences are wall-clock; they need the interval actually in use.
+    global _INTERVAL
+    _INTERVAL = max(1, args.interval)
 
     if not args.url or not args.token:
         print("ERROR: set TT_SITE_URL and TT_PUSH_TOKEN (env or .env), or pass "
@@ -310,7 +335,7 @@ def main() -> None:
                   f"{f', {fail_n} failed' if fail_n else ''}", flush=True)
             if args.once:
                 break
-            time.sleep(max(10.0, args.interval - (time.time() - t0)))
+            time.sleep(max(2.0, args.interval - (time.time() - t0)))
     except KeyboardInterrupt:
         print("\nstopped.")
 

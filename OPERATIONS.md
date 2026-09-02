@@ -6,22 +6,41 @@ loaded.
 
 ---
 
-## 0. Right now, the system is down
+## 0. Which domain is production
+
+**`tennisalpha.in` is the live site and it is healthy.**
+`tennispredictions.netlify.app` is a dead legacy host that returns
+`503 usage_exceeded` on every path.
+
+An earlier revision of this file reported the system as down on the strength of
+that legacy host. It was not; only the old domain was. `push_sofa.py` pushes to
+`TT_SITE_URL`, which is `https://tennisalpha.in` — always check the domain the
+pipeline actually targets before concluding anything is down.
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://tennisalpha.in/api/sofa/sport/tennis/events/live
+```
+
+### Feed latency
+
+`x-sofa-age-ms` on any `/api/sofa/*` response reports how old the pushed data
+is. Combined with the CDN's `age` header that is the whole lag budget:
 
 ```
-https://tennispredictions.netlify.app/api/account    503  usage_exceeded
-https://tennispredictions.netlify.app/api/sofa/...   503  usage_exceeded
-https://tennispredictions.netlify.app/api/presence   503  usage_exceeded
+x-sofa-age-ms   how stale the blob was when the CDN fetched it   (push interval)
+age             how long the CDN has been serving that response  (s-maxage)
 ```
 
-**Netlify is over its plan quota.** Everything server-side is dead: the live
-board, sign-in, payments, entitlement checks and the trial grant. The Mac side
-is healthy and still pushing data into a site that cannot serve it.
+Measured 2026-09-02, before and after the push-interval fix:
 
-Nothing else in this document matters until that is resolved. Either upgrade
-the plan or reduce function invocations — the `s-maxage` CDN caching on
-`sofa-proxy` and the new `pm-proxy` is the lever that already exists for the
-latter.
+```
+before   x-sofa-age-ms 37,816   +  age 0-25   =  38-63s behind play
+after    x-sofa-age-ms  3,039   +  age 0-25   =   3-28s behind play
+```
+
+If the board feels behind, sample those two headers first. A large
+`x-sofa-age-ms` means the push loop is slow or failing; a large `age` means the
+CDN lifetime is the binding constraint, not the feed.
 
 ---
 
@@ -104,7 +123,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/sport/tennis/even
 | Comp without the API | Add to `TIME_GRANTS` in `src/lib/auth.tsx` (epoch ms expiry) and deploy | When the API is down |
 | Turn trials on/off | `TRIALS_ENABLED` in **both** `netlify/functions/account.js` (authority) and `src/lib/auth.tsx` (copy) | Rare |
 | Refresh rankings | `python generate_rankings.py` → `trading-terminal/public/rankings.json` | **Monthly** — currently dated 2026-07-02, two months stale, and it feeds the Elo prior on every match |
-| Check the board | `/admin` page, or `/health` on the live engine | Daily |
+| Check the board | `/admin`, or `x-sofa-age-ms` on `tennisalpha.in` (see §0) | Daily |
 
 ---
 
@@ -122,7 +141,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/sport/tennis/even
 ## 5. Single points of failure, ranked
 
 1. **The Mac.** Off or asleep → no tennis data anywhere. No cloud fallback exists.
-2. **Netlify quota.** Currently exceeded → entire backend 503. *Live now.*
+2. **Netlify quota.** Blowing it takes the whole backend to 503 — that is what killed the legacy host. Path-aware CDN lifetimes in `sofa-proxy.js` are the lever that keeps invocations down.
 3. **`NETLIFY_API_TOKEN`.** Expires or is rotated → all ten storage functions fail at once, silently.
 4. **`TT_PUSH_TOKEN` drift.** Changed on one side only → pushes 401, board goes stale while everything looks healthy.
 5. **`rankings.json` staleness.** Degrades quietly — no error, just worse priors.
