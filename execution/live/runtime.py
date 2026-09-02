@@ -31,6 +31,8 @@ from execution.live.engine import ModelBridge, game_ladder
 from execution.live.events import LiveEvent
 from execution.live.feed import Health, LatencyBreakdown, worst
 from execution.live.gateway import RoomRegistry, build_payload
+from execution.live.marketlag import Divergence, MarketLagDetector
+from execution.live.scanner import Opportunity, ScanFilter, Scanner
 from execution.live.odds import MarketView
 from execution.live.providers.failover import FailoverManager
 from execution.live.signals import SignalEngine
@@ -67,6 +69,8 @@ class LiveRuntime:
                  failover: Optional[FailoverManager] = None,
                  publisher: Optional[EdgePublisher] = None,
                  recorder: Optional[CalibrationRecorder] = None,
+                 lag: Optional[MarketLagDetector] = None,
+                 scanner: Optional[Scanner] = None,
                  now_ms=None):
         self.provider = provider
         self.store: StateStore = store or InMemoryStateStore()
@@ -81,6 +85,11 @@ class LiveRuntime:
         # nothing ever wrote them down with an unambiguous orientation.
         self.recorder = recorder
         self._recorded: set = set()
+        # Price-discovery edge: the one signal that does not depend on the
+        # model's absolute probability being right, only on its direction.
+        self.lag = lag if lag is not None else MarketLagDetector(now_ms=now_ms)
+        self.scanner = scanner or Scanner()
+        self._opportunities: dict = {}
         self._now = now_ms or (lambda: int(time.time() * 1000))
         self.contexts: dict[str, MatchContext] = {}
         self.registry = registry or RoomRegistry(
@@ -166,6 +175,12 @@ class LiveRuntime:
         # working scoreboard is broken.
         odds_health = mv.health(now_ms=self._now()) if mv.has_price else status.health
 
+        # 3b. has the market repriced this yet?
+        lag_event = self.lag.observe(event.match_id,
+                                     model_p=fair.p1 if fair else None,
+                                     market_p=market_p1)
+        open_lag = self.lag.open_lag(event.match_id)
+
         # 4. the gate
         signal = self.signals.evaluate(
             match_id=event.match_id, market="match_winner", selection="p1",
@@ -177,6 +192,22 @@ class LiveRuntime:
         )
         if signal is None and not status.tradeable:
             self.rejected += 1
+
+        # 4b. rank it against everything else on the card
+        if fair is not None and market_p1 is not None:
+            opp = self.scanner.evaluate(
+                match_id=event.match_id,
+                label=f"{ctx.player1} vs {ctx.player2}" if ctx.player1 else event.match_id,
+                market="match", selection=ctx.player1 or "p1",
+                model_p=fair.p1, market_p=market_p1,
+                feed_health=status.health, odds_health=odds_health,
+                estimates=fair.components, is_live=state.started and not state.finished,
+                lag=Divergence.LAG if open_lag else None,
+            )
+            if opp is not None:
+                self._opportunities[event.match_id] = opp
+        else:
+            self._opportunities.pop(event.match_id, None)
 
         latency = LatencyBreakdown(
             provider_ms=event.provider_latency_ms,
@@ -280,6 +311,17 @@ class LiveRuntime:
     async def stop(self) -> None:
         self._running = False
 
+    def opportunities(self, *, filt: Optional[ScanFilter] = None, limit: int = 50) -> list:
+        """The scanner board: everything priced right now, best first.
+
+        Built from the live working set rather than recomputed, so opening the
+        scanner costs a sort rather than a re-price of every match.
+        """
+        return Scanner.rank(self._opportunities.values(), filt=filt, limit=limit)
+
+    def scanner_summary(self) -> dict:
+        return Scanner.summary(self._opportunities.values())
+
     def health(self) -> dict:
         out = {
             "processed": self.processed,
@@ -298,4 +340,6 @@ class LiveRuntime:
         if self.recorder is not None:
             total, settled = self.recorder.count()
             out["calibration"] = {"observations": total, "settled": settled}
+        out["scanner"] = self.scanner_summary()
+        out["market_reaction"] = self.lag.reaction_stats()
         return out

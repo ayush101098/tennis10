@@ -35,6 +35,9 @@ failure modes get tested.
 | `signals.py` | §15, §16, §24 | Hysteresis state machine and the publish gate |
 | `gateway.py` | §17-§20 | Match rooms, fan-out, dynamic subscription |
 | `runtime.py` | — | The order in which all of it happens |
+| `setengine.py` | — | P(win current set) from the games score — the missing ladder rung |
+| `marketlag.py` | — | Lag / steam detection and market reaction times |
+| `scanner.py` | — | Cross-match opportunity ranking by EdgeScore |
 | `calibration.py` | — | Recorder with a fixed orientation; reliability, Platt, isotonic |
 | `edge_publisher.py` | §25 | Pushes updates to the Cloudflare edge |
 | `providers/polymarket_odds.py` | §9, §10 | Exchange prices with real depth |
@@ -101,6 +104,52 @@ requests needed to track **matches** — that is set by endpoint shape:
 `poll_live()` therefore fetches the whole live slate in one call. Sub-second
 updates need the WebSocket tier regardless; a polling feed cannot beat its own
 interval.
+
+## Strategy layer
+
+Most of the strategy framework was already implemented before it was written
+down, which is worth stating so nobody rebuilds it:
+
+| Strategy | Where it already lives |
+|---|---|
+| Game-state Markov re-pricing | `inplay.py` (`live_true_p`) |
+| Serve-hold / break probability | `momentum.py` (`hold_prob_from_score`, `break_prob_from_score`) |
+| Momentum as EWMA | `momentum.py` (`DECAY = 0.79`, ~3-game half-life) |
+| Fatigue | `features.py` (`_fatigue`) |
+| Surface adjustment | `features.py` (`SURFACE_CORRELATIONS`) |
+| Pre-match → live Bayesian update | `inplay.py` (career serve% blended into live serve% over `SERVE_BLEND_RAMP`) |
+| Fractional Kelly on uncertainty | `edgescore.py` (`size_multiplier`) |
+| **Opportunity = (P_model − P_market) / σ** | `edgescore.py:194` — this exact quantity, since before the live engine existed |
+
+Three things were genuinely missing and are now built:
+
+**Set engine** (`setengine.py`). `GameLadder.set_p1` was declared and never
+populated, so the middle rung was null. `model_predict.set_prob` converts a
+MATCH probability into a set probability, which is right pre-match and useless
+in play: at 5-2 with the serve the banked games dominate and a conversion from
+the match number discards exactly that. This walks the set forward from the
+real games score, pricing the in-progress game from the point score.
+
+A property worth knowing, and the reason a flat "server bonus" heuristic is
+wrong in both directions: before 6-6 there are `12 − (a+b)` games left. When
+that is EVEN (0-0, 4-4, 5-5) both players serve it equally often and who serves
+next is worth **exactly zero**. When it is ODD (5-4, 3-4) one player banks an
+extra service game and it is worth **20-35 points of probability**.
+
+**Market-lag detector** (`marketlag.py`). `|ΔP_model|` large while
+`|ΔP_market| ≈ 0` means the market has not repriced the point yet. This is the
+only edge in the codebase that does **not** depend on the model being
+calibrated — it rests on direction and timestamps, not on the absolute
+probability being right, which matters a great deal while the model sits ~13pp
+from the market. STEAM is the mirror image (market moved, we did not) and is
+reported as a reason to stand aside, never as an edge. Reaction times are kept
+as a median because the distribution is long-tailed.
+
+**Scanner** (`scanner.py`). Ranks every priced market by EdgeScore rather than
+raw edge, so a 4% edge on a well-sourced match outranks an 11% edge on a thin
+one. Rows the publish gate would refuse never appear — a scanner listing
+untradeable opportunities is a list of disappointments. Unknown liquidity fails
+a liquidity filter rather than passing it.
 
 ## Calibration
 

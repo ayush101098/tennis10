@@ -16,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from execution.live.engine import Fair  # noqa: E402
@@ -264,3 +266,46 @@ def _collect(bucket, payload):
     async def done():
         return None
     return done()
+
+
+def test_runtime_ranks_opportunities_and_tracks_market_reaction():
+    """The scanner board and the lag detector are wired, not shelf-ware."""
+    rt = _rt(model=StubModel(0.68))
+    rt.register_match("m2", player1="C", player2="D")
+
+    async def run():
+        await rt.registry.join("m1", Viewer(id="v", send=_noop))
+        _price(rt, p1=0.60)
+        await rt.handle_event(ev(1))
+        await rt.handle_event(ev(2, points=("15", "0")))
+
+    asyncio.run(run())
+
+    board = rt.opportunities()
+    assert len(board) == 1
+    row = board[0]
+    assert row.match_id == "m1"
+    assert row.label == "A. Player vs B. Player"
+    assert row.edge == pytest.approx(0.08, abs=0.001)
+
+    h = rt.health()
+    assert h["scanner"]["count"] == 1
+    assert "market_reaction" in h
+
+
+def test_an_unpriced_match_leaves_the_scanner_board():
+    # A row that can no longer be priced must disappear, not linger at its
+    # last known edge — a stale opportunity is worse than none.
+    rt = _rt()
+
+    async def run():
+        await rt.registry.join("m1", Viewer(id="v", send=_noop))
+        _price(rt, p1=0.50)
+        await rt.handle_event(ev(1))
+        assert len(rt.opportunities()) == 1
+        # Drop the market.
+        rt.contexts["m1"].market.clear()
+        await rt.handle_event(ev(2))
+
+    asyncio.run(run())
+    assert rt.opportunities() == []

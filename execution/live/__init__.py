@@ -27,3 +27,6 @@ from execution.live.engine import Fair, GameLadder, ModelBridge, game_ladder  # 
 from execution.live.signals import Signal, SignalEngine, SignalStatus  # noqa: F401
 from execution.live.gateway import RoomRegistry, Viewer, build_payload  # noqa: F401
 from execution.live.runtime import LiveRuntime, MatchContext  # noqa: F401
+from execution.live.setengine import set_win_prob, tiebreak_prob  # noqa: F401
+from execution.live.marketlag import Divergence, LagEvent, MarketLagDetector  # noqa: F401
+from execution.live.scanner import Opportunity, ScanFilter, Scanner  # noqa: F401

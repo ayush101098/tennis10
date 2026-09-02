@@ -204,4 +204,30 @@ def game_ladder(state: MatchState, fair: Optional[Fair],
         return ladder
 
     ladder.game_p1 = hold if server_is_p1 else 1.0 - hold
+
+    # ── set level ──
+    # `set_p1` was declared and never populated, so the middle rung of the
+    # ladder has been null since it was written. It is filled from the ACTUAL
+    # games score rather than converted from the match probability: at 5-2 with
+    # the serve, the games already banked dominate, and a conversion from the
+    # match number discards exactly that.
+    try:
+        from execution.live.setengine import set_win_prob
+        from execution.momentum import game_win_prob
+    except Exception:                     # pragma: no cover - env dependent
+        return ladder
+
+    try:
+        hold_1 = game_win_prob(serve_win_p1)
+        hold_2 = game_win_prob(serve_win_p2)
+        ladder.set_p1 = set_win_prob(
+            state.score.games[0], state.score.games[1],
+            server=1 if server_is_p1 else 2,
+            hold_p1=hold_1, hold_p2=hold_2,
+            sp1=serve_win_p1, sp2=serve_win_p2,
+            current_game_p1=ladder.game_p1,
+        )
+    except Exception:                     # pragma: no cover
+        pass
+
     return ladder
