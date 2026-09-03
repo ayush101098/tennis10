@@ -1,61 +1,24 @@
-import { NextRequest, NextResponse } from "next/server";
+import { adapt } from "@/lib/netlifyAdapter";
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { handler } = require("../../../../../netlify/functions/pm-proxy");
 
 /**
- * Server-side proxy for Polymarket's public data APIs, so the terminal's
- * smart-money / edge dashboard reads wallet history through localhost instead
- * of the browser hitting Polymarket directly (avoids CORS + rate-limit noise
- * and keeps one caching seam).
+ * pm/[...path] — served by the shared handler in netlify/functions/pm-proxy.js.
  *
- * Path prefix selects the upstream host:
- *   /api/pm/data/<path>  -> https://data-api.polymarket.com/<path>   (trades, positions, activity)
- *   /api/pm/lb/<path>    -> https://lb-api.polymarket.com/<path>     (leaderboard)
- *   /api/pm/clob/<path>  -> https://clob.polymarket.com/<path>       (books, markets)
- *   /api/pm/gamma/<path> -> https://gamma-api.polymarket.com/<path>  (events, markets)
+ * WHY THIS STOPPED BEING A SEPARATE IMPLEMENTATION
+ *   It was the last standalone route, and it sent `no-cache, no-store`. On
+ *   Netlify that did not matter, because the redirect sends /api/pm/* to the
+ *   function and the route is stripped at build time. On VERCEL this route IS
+ *   the backend — so the standalone copy would have made every Polymarket
+ *   request a serverless invocation with no CDN caching, reintroducing exactly
+ *   the per-visitor upstream cost the proxy was written to remove, on the host
+ *   we are moving to.
  *
- * The incoming query string is forwarded verbatim.
+ *   Sharing the handler means the host-aware cache lifetimes (gamma 30s,
+ *   clob 3s, data 60s, lb 300s) apply on both, and there is one place where
+ *   that policy lives.
  */
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-const HOSTS: Record<string, string> = {
-  data: "https://data-api.polymarket.com",
-  lb: "https://lb-api.polymarket.com",
-  clob: "https://clob.polymarket.com",
-  gamma: "https://gamma-api.polymarket.com",
-};
-
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  const { path } = await params;
-  const [key, ...rest] = path;
-  const base = HOSTS[key];
-  if (!base) {
-    return NextResponse.json(
-      { error: `unknown polymarket host '${key}'; use one of ${Object.keys(HOSTS).join(", ")}` },
-      { status: 400 },
-    );
-  }
-
-  const qs = req.nextUrl.search;
-  const url = `${base}/${rest.join("/")}${qs}`;
-
-  try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      headers: { "User-Agent": "tennis10-terminal/2.0", Accept: "application/json" },
-    });
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: `polymarket ${key} returned ${res.status}`, url },
-        { status: res.status },
-      );
-    }
-    const data = await res.json();
-    return NextResponse.json(data, {
-      headers: { "Cache-Control": "no-cache, no-store, must-revalidate" },
-    });
-  } catch (err: unknown) {
-    console.error("[pm-proxy route]", err);
-    return NextResponse.json({ error: "polymarket proxy unavailable", url }, { status: 502 });
-  }
-}
+export const GET = adapt(handler);
