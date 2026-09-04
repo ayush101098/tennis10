@@ -110,25 +110,67 @@ class ModelBridge:
         t0 = time.perf_counter()
         full = force_full or is_significant(transitions, state)
 
+        # Price the state THIS pipeline assembled.
+        #
+        # It used to call `inplay.live_true_p(name, name, surface)`, which looks
+        # the match up on SofaScore itself and returns None when it cannot find
+        # it live. Two things were wrong with that: the carefully-built
+        # MatchState was ignored, and on any FAILOVER leg the model still
+        # depended on the very source we had failed away from — so the failover
+        # moved scores but not pricing. `win_prob_from_score` takes the score
+        # directly, which is what makes the second provider actually useful.
         try:
-            p1 = self._inplay.live_true_p(
-                state.player1, state.player2, surface=state.surface or "Hard",
-            )
+            sp1 = self._inplay._serve_win(state.player1)
+            sp2 = self._inplay._serve_win(state.player2)
+            markov = self._inplay.markov
         except Exception as e:                       # pragma: no cover - engine dependent
+            self.unavailable_reason = f"{type(e).__name__}: {e}"[:180]
+            return None
+
+        sets = state.score.sets
+        games = state.score.games
+        best_of = state.best_of or 3
+
+        def priced(p1_serving: bool):
+            return markov.win_prob_from_score(
+                sets_p1=sets[0], sets_p2=sets[1],
+                games_p1=games[0], games_p2=games[1],
+                p1_serving=p1_serving, p1_point_win=sp1, p2_point_win=sp2,
+                best_of=best_of)
+
+        components = {}
+        try:
+            # NOTE, and it is not a small one: `win_prob_from_score` DECLARES
+            # `p1_serving` and never reads it. Verified 2026-09-04 — the two
+            # orientations agree to every decimal place at 5-4, 4-5 and 6-5,
+            # where the set engine in this package puts the difference at ~26
+            # points of set probability. So the match-level model is currently
+            # blind to who is serving.
+            #
+            # That is a model defect, not a bridge defect, and fixing it changes
+            # every live price in the product — which is a validated change, not
+            # a drive-by one. Until then this passes the true server when it has
+            # one and does NOT pretend the output depends on it: no fake
+            # marginalisation, no invented uncertainty. The set and game rungs
+            # of the ladder DO use the server correctly (see setengine.py), so
+            # the ladder is where server-awareness currently lives.
+            p1 = markov.win_prob_from_score(
+                sets_p1=sets[0], sets_p2=sets[1],
+                games_p1=games[0], games_p2=games[1],
+                p1_serving=(state.server != P2),
+                p1_point_win=sp1, p2_point_win=sp2, best_of=best_of)
+            components["markov"] = float(p1)
+            source = "markov" if state.server in (P1, P2) else "markov~no-server"
+        except Exception as e:                       # pragma: no cover
             self.unavailable_reason = f"{type(e).__name__}: {e}"[:180]
             return None
 
         if p1 is None:
             return None
 
-        components = {"inplay": float(p1)}
         momentum_dict = None
-
-        # The expensive tier. `inplay.live_true_p` already folds momentum in
-        # when TRADING_MOMENTUM is enabled, so this reads the state it produced
-        # rather than recomputing it — recomputing would apply the adjustment
-        # twice, which is precisely the kind of quiet double-count that makes a
-        # model look confident and be wrong.
+        # The expensive tier. Momentum is read from the engine's cached state
+        # rather than recomputed — recomputing would apply the adjustment twice.
         if full:
             try:
                 momentum_dict = self._inplay.last_momentum()
@@ -138,7 +180,7 @@ class ModelBridge:
         compute_us = int((time.perf_counter() - t0) * 1_000_000)
         return Fair(
             p1=float(p1),
-            source="inplay",
+            source=source,
             tier="full" if full else "cheap",
             computed_ms=int(time.time() * 1000),
             compute_us=compute_us,

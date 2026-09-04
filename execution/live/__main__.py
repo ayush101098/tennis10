@@ -38,18 +38,28 @@ from execution.live.runtime import LiveRuntime  # noqa: E402
 
 
 def _build_provider():
-    """The configured tennis feed, or None.
+    """The tennis feed to use, preferring the licensed one.
 
-    None is a supported state: the gateway still serves, `doctor` still
-    reports, and the failure is one line in /health rather than a crash at
-    import time.
+    Order matters and is not arbitrary. Live Tennis API is preferred when a key
+    exists: it is licensed, carries the server and true point events, and can
+    stamp provider time. Livesport is the fallback that needs no credentials —
+    it answers from an address SofaScore has burned, which is exactly when a
+    fallback earns its keep, but it cannot see the server and has no sequence
+    of record (see providers/livesport.py).
+
+    Returning None is still supported: the gateway serves, `doctor` reports,
+    and the failure is one line in /health rather than a crash at import.
     """
     key = os.getenv("LIVETENNIS_API_KEY")
-    if not key:
-        return None, "LIVETENNIS_API_KEY is not set"
+    if key:
+        try:
+            from execution.live.providers.livetennis import LiveTennisProvider
+            return LiveTennisProvider(api_key=key), None
+        except Exception as e:                               # pragma: no cover
+            return None, f"{type(e).__name__}: {e}"
     try:
-        from execution.live.providers.livetennis import LiveTennisProvider
-        return LiveTennisProvider(api_key=key), None
+        from execution.live.providers.livesport import LivesportProvider
+        return LivesportProvider(), "LIVETENNIS_API_KEY unset — using livesport (no server, polled)"
     except Exception as e:                                   # pragma: no cover
         return None, f"{type(e).__name__}: {e}"
 

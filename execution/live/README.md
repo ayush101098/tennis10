@@ -27,7 +27,8 @@ failure modes get tested.
 | `events.py` | §5, §6 | Canonical `LiveEvent`; derives GAME_END / BREAK / set boundaries most feeds omit |
 | `feed.py` | §7, §21, §22 | Sequence integrity, freshness bands, latency breakdown |
 | `provider.py` | §4 | `TennisDataProvider` interface + `ReplayProvider` |
-| `providers/livetennis.py` | §4 | Live Tennis API adapter |
+| `providers/livetennis.py` | §4 | Live Tennis API adapter (licensed; preferred) |
+| `providers/livesport.py` | §4 | Livesport/Flashscore polling adapter (no key needed) |
 | `providers/failover.py` | §23 | Feed health and failover decisions |
 | `state.py` | §8 | Match state, game tape, store interface (in-memory / Redis) |
 | `odds.py` | §9, §10, §11 | Bookmaker vs exchange, de-vig, consensus |
@@ -150,6 +151,53 @@ raw edge, so a 4% edge on a well-sourced match outranks an 11% edge on a thin
 one. Rows the publish gate would refuse never appear — a scanner listing
 untradeable opportunities is a list of disappointments. Unknown liquidity fails
 a liquidity filter rather than passing it.
+
+## Providers
+
+Two legs, so `FailoverManager` manages an actual failover rather than tracking
+one provider's health.
+
+| | Live Tennis API | Livesport |
+|---|---|---|
+| Credentials | paid key | none |
+| Delivery | WebSocket (Ultra) / poll | poll, 8s |
+| Server (who is serving) | yes | **no** — rendered as an icon, not a field |
+| Point-by-point history | Ultra tier | **no** — see below |
+| Sequence of record | yes | **no** — gaps undetectable by construction |
+
+Preference order is licensed-first, and `doctor` reports which is in use.
+Livesport is what makes the engine work out of the box: SofaScore challenges an
+IP once it has pulled enough traffic, and Livesport answers from an address
+SofaScore has burned.
+
+**Point-by-point is not available from Livesport.** Re-verified 2026-09-04: the
+legacy `df_pbp_1_<id>` feed returns one byte on `www.livesport.com`,
+`local-global.flashscore.ninja` and `d.flashscore.com` alike. The site renders
+it from a persisted-query GraphQL API (`700.ds.lsapp.eu/pq_graphql`) whose
+operation hash rotates with each client release — an integration that would
+break on their deploy schedule. This provider polls and produces points from
+the moment it starts watching, which is what `momentum.py` and the market-lag
+detector actually consume.
+
+**No server means no ladder.** `setengine` and the game rung both need to know
+who is serving, so on the Livesport leg you get the match probability only.
+The match model is unaffected — see the defect below for why.
+
+## Known model defect: the match model ignores the server
+
+`hierarchical_model.win_prob_from_score` — documented as "the key score-aware
+component for live trading" — **declares `p1_serving` and never reads it**.
+Verified 2026-09-04: the two orientations agree to every decimal place at 5-4,
+4-5 and 6-5, where `setengine.py` puts the difference at roughly 26 points of
+set probability.
+
+This is a model defect, not a plumbing one, and fixing it changes every live
+price in the product — a validated change, not a drive-by one. Until then:
+
+- The bridge passes the true server when it has one and does **not** pretend
+  the output depends on it. No fake marginalisation, no invented uncertainty.
+- Server-awareness currently lives entirely in the set and game rungs of the
+  ladder, which use it correctly.
 
 ## Calibration
 
