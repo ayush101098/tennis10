@@ -52,6 +52,15 @@ if ! git pull --rebase --autostash --quiet origin main; then
   exit 1
 fi
 
+# HOLD. `git push origin main` publishes the whole branch, not just the archive
+# commit — so this agent carries any local work with it. While the repo is
+# being kept local (no paid hosting or data feeds yet), a NO_PUSH file at the
+# repo root stops that. Delete the file to resume publishing.
+if [ -f "$REPO/.no-push" ]; then
+  log "push held: $REPO/.no-push exists — archive commit stays local"
+  exit 0
+fi
+
 if git push --quiet origin main; then
   log "published — Netlify will rebuild"
 else

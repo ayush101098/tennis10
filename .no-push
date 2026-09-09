@@ -1,0 +1,8 @@
+Publishing is on hold.
+
+The archive launchd agent runs `git push origin main`, which publishes the
+WHOLE branch — not just its own archive commit — so it carries local work with
+it. While the repo is being kept local (no paid hosting or data feeds yet),
+this file stops that push.
+
+Delete this file to resume publishing.
