@@ -29,6 +29,7 @@ failure modes get tested.
 | `provider.py` | §4 | `TennisDataProvider` interface + `ReplayProvider` |
 | `providers/livetennis.py` | §4 | Live Tennis API adapter (licensed; preferred) |
 | `providers/livesport.py` | §4 | Livesport/Flashscore polling adapter (no key needed) |
+| `providers/sofaproxy.py` | §4 | Local sofa_proxy — fastest source, derives the server |
 | `providers/failover.py` | §23 | Feed health and failover decisions |
 | `state.py` | §8 | Match state, game tape, store interface (in-memory / Redis) |
 | `odds.py` | §9, §10, §11 | Bookmaker vs exchange, de-vig, consensus |
@@ -164,6 +165,12 @@ one provider's health.
 | Server (who is serving) | yes | **no** — rendered as an icon, not a field |
 | Point-by-point history | Ultra tier | **no** — see below |
 | Sequence of record | yes | **no** — gaps undetectable by construction |
+
+There is a third, `SofaProxyProvider`, for running the engine on your own
+machine: it reads the local `sofa_proxy` directly, skipping the entire
+push/blob/CDN chain, and derives the server from `firstToServe` plus games
+played — so the set and game rungs work on it. See
+`docs/personal-live-board.md`.
 
 Preference order is licensed-first, and `doctor` reports which is in use.
 Livesport is what makes the engine work out of the box: SofaScore challenges an

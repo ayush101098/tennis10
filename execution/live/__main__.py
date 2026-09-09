@@ -5,6 +5,7 @@
     python -m execution.live doctor           # what is configured, what is not
     python -m execution.live calibrate        # reliability diagram + fit
     python -m execution.live smoke            # probe the real provider endpoint
+    python -m execution.live board            # PERSONAL: live board off the local proxy
 
 WHY `doctor` EXISTS
     This system has several independent reasons to be silent — no provider key,
@@ -25,6 +26,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -268,6 +270,121 @@ def cmd_smoke() -> int:
     return 0
 
 
+async def _run_board(poll_s: float, price_s: float, min_edge: float) -> None:
+    """Personal live board: local proxy in, ranked edges out.
+
+    Deliberately not the gateway. There is no fan-out, no cloud hop and no
+    quota here — one machine reading a proxy that is already running, which is
+    why the lag is just the poll interval instead of push + CDN + client poll.
+
+    TWO CADENCES, because the two things move at different speeds. The
+    scoreboard changes on every point; market prices do not, and the CLOB book
+    costs a request per token. Polling prices at the scoreboard rate would
+    multiply upstream calls for numbers that had not moved.
+    """
+    from execution.live.providers.sofaproxy import SofaProxyProvider
+    from execution.live.providers.polymarket_odds import PolymarketOddsSource
+    from execution.live.runtime import LiveRuntime
+    from execution.live.scanner import ScanFilter
+
+    prov = SofaProxyProvider(poll_s=poll_s)
+    rt = LiveRuntime(provider=prov)
+    odds = PolymarketOddsSource()
+
+    await prov.connect()
+    print(f"live board — scoreboard {poll_s:.0f}s · prices {price_s:.0f}s · "
+          f"min edge {min_edge:.0%}   (ctrl-c to stop)\n")
+
+    tokens: dict = {}          # match_id -> (token_p1, token_p2)
+    last_price = 0.0
+    loop = asyncio.get_running_loop()
+
+    while True:
+        t0 = time.time()
+        events = await loop.run_in_executor(None, prov.poll_events)
+
+        for ev in events:
+            mid, r = ev.match_id, ev.raw
+            if mid not in rt.contexts:
+                rt.register_match(mid, player1=r["home"], player2=r["away"],
+                                  surface=_surface(r.get("surface")))
+            await rt.handle_event(ev)
+
+        # Prices on their own beat.
+        if time.time() - last_price >= price_s:
+            last_price = time.time()
+            for mid, ctx in rt.contexts.items():
+                if mid not in tokens:
+                    # Resolved once per match, not per cycle — the gamma lookup
+                    # is the expensive half and the market does not change id.
+                    found = await loop.run_in_executor(
+                        None, odds.find_tokens, ctx.player1, ctx.player2)
+                    tokens[mid] = found[:2] if found else None
+                tk = tokens.get(mid)
+                if not tk:
+                    continue
+                await loop.run_in_executor(
+                    None, lambda c=ctx, m=mid, t=tk: odds.update(
+                        c.view(m, "match_winner"), token_p1=t[0], token_p2=t[1]))
+
+        _print_board(rt, min_edge)
+        await asyncio.sleep(max(0.5, poll_s - (time.time() - t0)))
+
+
+def _surface(ground: str) -> str:
+    g = (ground or "").lower()
+    if "clay" in g:
+        return "Clay"
+    if "grass" in g:
+        return "Grass"
+    return "Hard"
+
+
+def _print_board(rt, min_edge: float) -> None:
+    from execution.live.scanner import ScanFilter
+    rows = rt.opportunities(filt=ScanFilter(min_edge=min_edge), limit=20)
+    summary = rt.scanner_summary()
+
+    print("\033[2J\033[H", end="")          # clear, so the board updates in place
+    print(f"{time.strftime('%H:%M:%S')}   matches {len(rt.contexts)}   "
+          f"priced {summary['count']}   events {rt.processed}")
+    lag = rt.lag.reaction_stats()
+    if lag["n"]:
+        print(f"market reaction: median {lag['median_ms']}ms over {lag['n']} moves")
+    print()
+    print(f"{'MATCH':<38} {'SCORE':<16} {'SRV':<4} {'MODEL':>7} {'MARKET':>7} {'EDGE':>7} {'SCORE':>6}")
+    print("-" * 92)
+
+    if not rows:
+        print("  no edge above the floor — that is the system working, not an empty feed")
+    for o in rows:
+        st = rt.store.get(o.match_id)
+        if st is None:
+            continue
+        sc = f"{'-'.join(map(str, st.score.sets))}  {'-'.join(map(str, st.score.games))} " \
+             f"{'/'.join(st.score.points)}"
+        srv = "p1" if st.server == "p1" else ("p2" if st.server == "p2" else "?")
+        print(f"{o.label[:37]:<38} {sc:<16} {srv:<4} {o.model_p:>6.1%} {o.market_p:>7.1%} "
+              f"{o.edge:>+7.1%} {o.edge_score:>6.2f}")
+
+    # Everything the model priced but the market has not, so a quiet board is
+    # distinguishable from a broken one.
+    unpriced = [m for m in rt.contexts if m not in {o.match_id for o in rows}]
+    if unpriced:
+        print(f"\n  {len(unpriced)} live match(es) without a tradeable edge or price")
+
+
+def cmd_board(poll_s: float, price_s: float, min_edge: float) -> int:
+    try:
+        asyncio.run(_run_board(poll_s, price_s, min_edge))
+    except KeyboardInterrupt:
+        print("\nstopped")
+    except RuntimeError as e:
+        print(f"\n{e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list) -> int:
     cmd = argv[1] if len(argv) > 1 else "doctor"
     if cmd == "doctor":
@@ -278,6 +395,12 @@ def main(argv: list) -> int:
         return cmd_calibrate()
     if cmd == "smoke":
         return cmd_smoke()
+    if cmd == "board":
+        return cmd_board(
+            poll_s=float(os.getenv("BOARD_POLL_S", "3")),
+            price_s=float(os.getenv("BOARD_PRICE_S", "10")),
+            min_edge=float(os.getenv("BOARD_MIN_EDGE", "0.02")),
+        )
     if cmd == "replay":
         if len(argv) < 3:
             print("usage: python -m execution.live replay <tape.jsonl> "

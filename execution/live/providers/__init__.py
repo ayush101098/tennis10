@@ -5,3 +5,4 @@ from execution.live.providers.failover import (  # noqa: F401
     FailoverManager, ProviderHealth, ProviderStats,
 )
 from execution.live.providers.livesport import LivesportProvider  # noqa: F401
+from execution.live.providers.sofaproxy import SofaProxyProvider  # noqa: F401
