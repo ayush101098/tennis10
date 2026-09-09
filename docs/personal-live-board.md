@@ -104,6 +104,35 @@ failure, so it is not allowed to happen quietly.
 An empty board with the proxy up usually just means no tour-level matches are
 in play. `matches N` in the header tells you which it is.
 
+## The server and the point tape are RECONSTRUCTED
+
+SofaScore is currently challenging this IP — every path 403s and `sofa_proxy`
+falls back to Flashscore for everything. Flashscore carries the score but not
+the server, and has no point-by-point feed at all. Both are rebuilt from
+endpoints that do answer (`execution/live/pointtape.py`):
+
+**Server**, from `statistics`. "Service Points Won" reports `(won/served)`; the
+denominator is points that player has served. Between two polls, whoever's
+denominator grew is on serve. One anchor is enough — serve alternates every
+completed game — so this costs a handful of extra requests, not one per match
+per poll, and re-anchors every six games to correct drift.
+
+Measured live: 7 of 8 matches anchored within a minute, the eighth being one
+where no point was played in the window (correctly left unknown rather than
+guessed).
+
+**Point tape**, from the point score. Each transition is a point, and whoever
+advanced won it. Advantage lost is scored as the opponent winning, a game
+boundary is not a point, and tiebreaks are counted numerically because they
+score 1,2,3 rather than 15/30/40.
+
+Two limits, both reported rather than hidden:
+
+- The tape starts when you start watching. The match's earlier history is not
+  recoverable from these sources.
+- Two points inside one poll interval collapse into one observation. Those are
+  counted as `gaps` rather than invented — a sampled tape admits what it missed.
+
 ## What does not work locally, and why
 
 Two SofaScore endpoints are **refused outright** — verified direct against the

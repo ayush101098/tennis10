@@ -81,6 +81,11 @@ class ScanFilter:
     min_liquidity: Optional[float] = None
     live_only: bool = False
     lag_only: bool = False
+    # Mirrors signals.SUSPECT_EDGE. An edge this large is a data fault, not an
+    # opportunity, and the signal engine already refuses it — a scanner that
+    # ranks it anyway shows the user something the product will not let them
+    # act on, which is the definition of a list of disappointments.
+    max_edge: float = 0.20
     # Health floor. Defaults to what the publish gate already requires, so the
     # scanner cannot surface something the system would refuse to trade.
     allow_health: frozenset = frozenset({Health.LIVE, Health.DELAYED})
@@ -89,6 +94,8 @@ class ScanFilter:
         if o.health not in self.allow_health:
             return False
         if o.edge < self.min_edge:
+            return False
+        if o.edge > self.max_edge:
             return False
         if o.edge_score < self.min_edge_score:
             return False

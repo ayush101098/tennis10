@@ -242,6 +242,15 @@ def test_ranking_is_by_edge_score_not_raw_edge():
     assert [o.match_id for o in ranked] == ["solid", "thin"]
 
 
+def test_an_absurd_edge_is_quarantined_not_ranked():
+    # signals.py refuses anything over 20% as a data fault. The scanner showing
+    # it anyway would surface something the product will not let you act on —
+    # seen live at +24.1%.
+    rows = [_op(match_id="real", edge=0.08, edge_score=2.0),
+            _op(match_id="absurd", edge=0.24, edge_score=9.0)]
+    assert [o.match_id for o in Scanner.rank(rows)] == ["real"]
+
+
 def test_degraded_and_stale_rows_never_reach_the_scanner():
     # A scanner listing opportunities the publish gate would refuse is a list
     # of disappointments.

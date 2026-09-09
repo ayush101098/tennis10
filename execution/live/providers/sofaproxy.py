@@ -37,9 +37,11 @@ import json
 import os
 import time
 import urllib.request
+from dataclasses import replace
 from typing import AsyncIterator, Optional
 
 from execution.live.events import EventType, LiveEvent, P1, P2, Score
+from execution.live.pointtape import PointTape, ServeTracker
 from execution.live.provider import TennisDataProvider
 
 DEFAULT_BASE = os.getenv("SOFA_PROXY", "http://127.0.0.1:3001")
@@ -123,7 +125,7 @@ def event_from_sofa(e: dict, *, sequence: int, received_ms: Optional[int] = None
     else:
         points = (_POINT.get(raw_hp, "0"), _POINT.get(raw_ap, "0"))
 
-    server = derive_server(e.get("firstToServe"))
+    server = derive_server(e.get("firstToServe"))   # None on the Flashscore fallback
 
     now = received_ms if received_ms is not None else int(time.time() * 1000)
     return LiveEvent(
@@ -161,18 +163,24 @@ class SofaProxyProvider(TennisDataProvider):
 
     def __init__(self, *, base_url: str = DEFAULT_BASE, poll_s: float = DEFAULT_POLL_S,
                  categories: frozenset = DEFAULT_CATEGORIES, timeout_s: float = 8.0,
-                 fetch=None):
+                 fetch=None, fetch_stats=None):
         self.base_url = base_url.rstrip("/")
         self.poll_s = poll_s
         self.categories = categories
         self.timeout_s = timeout_s
-        self._fetch = fetch          # injected in tests
+        self._fetch = fetch                # injected in tests
+        self._fetch_stats = fetch_stats    # injected in tests
         self.subscriptions: set[str] = set()
         self.connected = False
         self.polls = 0
         self.last_error: Optional[str] = None
         self._seq: dict[str, int] = {}
         self._last: dict[str, tuple] = {}
+        # SofaScore is challenging this IP, so the feed carries no server and no
+        # point-by-point. Both are reconstructed — see pointtape.py.
+        self.serve = ServeTracker()
+        self.tape = PointTape()
+        self._games: dict[str, tuple] = {}
 
     async def connect(self) -> None:
         if self.connected:
@@ -205,6 +213,19 @@ class SofaProxyProvider(TennisDataProvider):
         with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
             return json.loads(r.read())
 
+    def _stats(self, match_id: str) -> Optional[dict]:
+        """Per-event statistics. Used sparingly — only to anchor the server."""
+        try:
+            if self._fetch_stats is not None:
+                return self._fetch_stats(match_id)
+            req = urllib.request.Request(
+                f"{self.base_url}/event/{match_id}/statistics",
+                headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
+                return json.loads(r.read())
+        except Exception:
+            return None            # no anchor is a supported state
+
     def _fingerprint(self, ev: LiveEvent) -> tuple:
         return (ev.score.sets, ev.score.games, ev.score.points, ev.server)
 
@@ -235,6 +256,27 @@ class SofaProxyProvider(TennisDataProvider):
             ev = event_from_sofa(e, sequence=self._seq.get(mid, 0) + 1)
             if ev is None:
                 continue
+
+            # ── reconstruct the server ──
+            # A completed game flips it; otherwise anchor from statistics,
+            # which is the one per-event endpoint that still answers.
+            prev_games = self._games.get(mid)
+            if prev_games is not None and prev_games != ev.score.games:
+                self.serve.observe_game_completed(mid)
+            self._games[mid] = ev.score.games
+
+            if ev.server is None and self.serve.needs_anchor(mid):
+                stats = self._stats(mid)
+                if stats is not None:
+                    self.serve.observe_statistics(mid, stats)
+
+            if ev.server is None:
+                known = self.serve.server(mid)
+                if known is not None:
+                    ev = replace(ev, server=known)
+
+            # ── reconstruct the point tape ──
+            self.tape.observe(mid, ev.score.points, ev.score.games, ev.server)
             fp = self._fingerprint(ev)
             if self._last.get(mid) == fp:
                 continue                       # nothing moved
