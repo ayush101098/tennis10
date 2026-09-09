@@ -10,10 +10,14 @@ WHY THIS IS THE ONE TO RUN LOCALLY
     to the poll interval and nothing else. No push, no blob, no CDN, no quota.
 
 THE SERVER, WHICH MATTERS
-    SofaScore exposes `firstToServe`, and serve alternates every game — so the
-    current server is derivable, unlike the Livesport leg where it is rendered
-    as an icon and simply unavailable. That unlocks the set and game rungs of
-    the ladder (`setengine.py`), which need to know who is serving.
+    SofaScore's `firstToServe` is misleadingly named: on live events it updates
+    every game and carries the CURRENT server. Taken at face value it gives us
+    something the Livesport leg cannot — the server — which is what the set and
+    game rungs of the ladder (`setengine.py`) need.
+
+    It is absent whenever the proxy has failed over to Flashscore, and absent
+    means unknown: the ladder shows nothing rather than guessing, because a
+    wrong server inverts the game market.
 
 REQUEST BUDGET — the real limit for personal use is not a bill
     There is no usage quota here; the constraint is SofaScore challenging the
@@ -64,25 +68,34 @@ def _games(score: dict) -> list:
     return out
 
 
-def derive_server(first_to_serve: Optional[int], home_games: list, away_games: list,
-                  in_tiebreak: bool = False) -> Optional[str]:
-    """Who is serving now, from who served first plus games completed.
+def derive_server(first_to_serve: Optional[int], home_games: list = None,
+                  away_games: list = None, in_tiebreak: bool = False) -> Optional[str]:
+    """Who is serving now.
 
-    Serve alternates every game for the whole match, so the parity of total
-    completed games decides it. A tiebreak counts as one game for this purpose
-    — serve rotates inside it, but the game that follows continues the match
-    alternation, which is what this is for.
+    `firstToServe` is a MISLEADING NAME: on live events SofaScore updates it
+    every game, so it carries the CURRENT server, not the match opener. That
+    was verified live against ESPN possession by the web client
+    (`scheduleService.ts`, which has used it directly in production), and it is
+    the reading this now follows.
 
-    Returns None when `firstToServe` is absent rather than assuming home: a
-    wrong server inverts the game market and misprices the set, and the ladder
-    already treats unknown as unknown.
+    It previously flipped the value by the parity of games played, on the
+    assumption the field meant "who served first". That assumption was never
+    verified, and it is wrong in the worst possible way: it agrees with reality
+    on an even game count and inverts it on an odd one, so the server displayed
+    was correct about half the time. Reported from a live match, 2026-09-09.
+
+    `home_games` / `away_games` are kept in the signature so callers do not
+    change, and are deliberately unused — the parity they were for is the bug.
+
+    Returns None when the field is absent, which is common: the Flashscore
+    fallback source does not carry a server at all, and a guess here inverts
+    the game market.
     """
-    if first_to_serve not in (1, 2):
-        return None
-    played = sum(home_games) + sum(away_games)
-    first = P1 if first_to_serve == 1 else P2
-    other = P2 if first is P1 else P1
-    return first if played % 2 == 0 else other
+    if first_to_serve == 1:
+        return P1
+    if first_to_serve == 2:
+        return P2
+    return None
 
 
 def event_from_sofa(e: dict, *, sequence: int, received_ms: Optional[int] = None
@@ -110,9 +123,7 @@ def event_from_sofa(e: dict, *, sequence: int, received_ms: Optional[int] = None
     else:
         points = (_POINT.get(raw_hp, "0"), _POINT.get(raw_ap, "0"))
 
-    # Completed games only: the set in progress has not finished its current
-    # game, so parity is taken from everything already banked.
-    server = derive_server(e.get("firstToServe"), hg, ag, in_tiebreak=tb)
+    server = derive_server(e.get("firstToServe"))
 
     now = received_ms if received_ms is not None else int(time.time() * 1000)
     return LiveEvent(

@@ -46,25 +46,32 @@ def feed(*events):
     return lambda: {"events": list(events)}
 
 
-# ── server derivation: the thing Livesport cannot do ─────────────────────────
+# ── server derivation ────────────────────────────────────────────────────────
 
-def test_server_alternates_with_games_played():
-    assert derive_server(1, [0], [0]) == P1        # nobody has served yet
-    assert derive_server(1, [1], [0]) == P2        # one game gone
-    assert derive_server(1, [1], [1]) == P1        # two games gone
-    assert derive_server(2, [0], [0]) == P2
-    assert derive_server(2, [2], [1]) == P1        # three games gone
+def test_first_to_serve_is_the_current_server_not_the_opener():
+    """The field name lies, and the old tests believed it.
+
+    SofaScore updates `firstToServe` every game on live events, so it is the
+    CURRENT server — verified live against ESPN possession by the web client,
+    which has used it directly in production. This provider previously flipped
+    it by the parity of games played, which agrees with reality on an even game
+    count and inverts it on an odd one. The server was therefore right about
+    half the time, which is exactly how it was reported from a live match.
+    """
+    assert derive_server(1) == P1
+    assert derive_server(2) == P2
+
+    # The value is what matters — games played must not change it.
+    for games in ([0], [1], [5], [6, 3]):
+        assert derive_server(1, games, [0]) == P1
+        assert derive_server(2, games, [0]) == P2
 
 
-def test_parity_carries_across_sets():
-    # Serve alternates continuously through the match, not per set.
-    assert derive_server(1, [6, 0], [4, 0]) == derive_server(1, [10], [0])
-
-
-def test_unknown_first_server_is_not_guessed():
-    # A wrong server inverts the game market and misprices the set.
-    assert derive_server(None, [1], [1]) is None
-    assert derive_server(0, [1], [1]) is None
+def test_absent_server_is_not_guessed():
+    # Common: the Flashscore fallback carries no server at all, and a guess
+    # inverts the game market.
+    assert derive_server(None) is None
+    assert derive_server(0) is None
 
 
 # ── event conversion ─────────────────────────────────────────────────────────
@@ -74,7 +81,7 @@ def test_basic_conversion():
     assert ev.match_id == "1"
     assert ev.score.games == (3, 2)
     assert ev.score.points == ("30", "15")
-    assert ev.server == P2                      # 5 games played, home served first
+    assert ev.server == P1                      # firstToServe=1 IS the server
 
 
 def test_the_current_set_is_used():

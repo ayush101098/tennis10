@@ -135,6 +135,11 @@ Read this once.
   for that — which is why the Gjorcheska row above shows a +12.2% edge but an
   EdgeScore of only 1.09, i.e. *inside the noise*. **Trust the EdgeScore
   column, not the edge column.**
+- **The `SRV` column shows nothing when the proxy is on its Flashscore
+  fallback.** Flashscore renders the server as an icon, not a feed field, so it
+  is genuinely unavailable — and unknown is shown as `?` rather than guessed,
+  because a wrong server inverts the game market. Check the source with:
+  `curl -s http://127.0.0.1:3001/sport/tennis/events/live | grep -o '"source":"[a-z]*"' | head -1`
 - **The match model ignores the server.** `win_prob_from_score` declares
   `p1_serving` and never reads it (see `execution/live/README.md`). The `SRV`
   column is real and the set/game ladder uses it correctly, but the match
