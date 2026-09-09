@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 import urllib.error
@@ -96,10 +97,54 @@ CREATE TABLE IF NOT EXISTS points (
     -- never reaches this table.
 );
 
+CREATE TABLE IF NOT EXISTS match_stats (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    fs_id     TEXT NOT NULL,
+    ts        REAL NOT NULL,
+    grp       TEXT,              -- Service / Return / Points / Games
+    name      TEXT NOT NULL,     -- "Aces", "1st serve points won", ...
+    home_raw  TEXT,              -- as published: "75% (3/4)", "171 km/h"
+    away_raw  TEXT,
+    home_num  REAL,              -- leading number, parsed where there is one
+    away_num  REAL,
+    home_of   REAL,              -- denominator of "(won/total)", when present
+    away_of   REAL
+    -- Long format, not a wide snapshot: the provider adds and renames
+    -- statistics over time, and a wide table would need a migration each time
+    -- while silently dropping anything new. Rows also let a single stat be
+    -- tracked through a match without reading the whole snapshot back.
+);
+
+CREATE INDEX IF NOT EXISTS idx_stats_match ON match_stats(fs_id, ts);
+CREATE INDEX IF NOT EXISTS idx_stats_name  ON match_stats(name);
 CREATE INDEX IF NOT EXISTS idx_points_match ON points(fs_id, id);
 CREATE INDEX IF NOT EXISTS idx_points_ts    ON points(ts);
 CREATE INDEX IF NOT EXISTS idx_matches_seen ON matches(last_seen);
 """
+
+
+_STAT_NUM = re.compile(r"(-?\d+(?:\.\d+)?)")
+_STAT_FRAC = re.compile(r"\((\d+)\s*/\s*(\d+)\)")
+
+
+def _parse_stat(raw: str):
+    """(leading number, denominator) from a published statistic.
+
+    "75% (3/4)" -> (75.0, 4.0);  "171 km/h" -> (171.0, None);  "0/0" -> (0.0, 0.0).
+    Returns (None, None) for anything unparseable rather than guessing, so a
+    format change shows up as a missing number instead of a wrong one.
+    """
+    if raw is None:
+        return None, None
+    text = str(raw)
+    frac = _STAT_FRAC.search(text)
+    denom = float(frac.group(2)) if frac else None
+    if denom is None:
+        bare = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", text)
+        if bare:
+            return float(bare.group(1)), float(bare.group(2))
+    num = _STAT_NUM.search(text)
+    return (float(num.group(1)) if num else None), denom
 
 
 def connect(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
@@ -202,6 +247,51 @@ class PointStore:
         """Every point for one match, in observation order."""
         return self.conn.execute(
             "SELECT * FROM points WHERE fs_id = ? ORDER BY id", (fs_id,)).fetchall()
+
+    def record_stats(self, fs_id: str, payload: dict, ts: float | None = None) -> int:
+        """Persist a full statistics snapshot. Returns rows written.
+
+        Everything the provider publishes is kept, including stats the model
+        does not use yet — serve speeds, winners, unforced errors, distance
+        covered. They cost nothing to store and cannot be recovered later: a
+        live match is only live once.
+        """
+        now = ts or time.time()
+        rows = []
+        for group in (payload or {}).get("statistics", []) or []:
+            for grp in group.get("groups", []) or []:
+                gname = grp.get("groupName")
+                for it in grp.get("statisticsItems", []) or []:
+                    name = it.get("name")
+                    if not name:
+                        continue
+                    h, a = str(it.get("home", "")), str(it.get("away", ""))
+                    hn, ho = _parse_stat(h)
+                    an, ao = _parse_stat(a)
+                    rows.append((fs_id, now, gname, name, h, a, hn, an, ho, ao))
+        if not rows:
+            return 0
+        try:
+            with self.conn:
+                self.conn.executemany(
+                    "INSERT INTO match_stats (fs_id, ts, grp, name, home_raw, "
+                    "away_raw, home_num, away_num, home_of, away_of) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+            return len(rows)
+        except sqlite3.Error as e:
+            print(f"[pointstore] stats write failed for {fs_id}: {str(e)[:90]}")
+            return 0
+
+    def latest_stats(self, fs_id: str) -> list:
+        """The most recent snapshot for one match."""
+        row = self.conn.execute(
+            "SELECT MAX(ts) FROM match_stats WHERE fs_id = ?", (fs_id,)).fetchone()
+        if not row or row[0] is None:
+            return []
+        return self.conn.execute(
+            "SELECT grp, name, home_raw, away_raw, home_num, away_num "
+            "FROM match_stats WHERE fs_id = ? AND ts = ? ORDER BY id",
+            (fs_id, row[0])).fetchall()
 
     def games(self, fs_id: str, limit_games: int = 12) -> list:
         """The stored points, grouped into the games they were played in.
@@ -417,6 +507,12 @@ def collect(poll_s: float = 8.0, db_path: Path | str = DEFAULT_DB,
     # serving, which is the axis almost every serve analytic needs.
     serve = ServeTracker()
     last_games: dict = {}
+    # Full statistics snapshots. Slower than the point poll on purpose: these
+    # move over games, not points, and each one is a request per match. A live
+    # match is only live once, so everything published is kept — including the
+    # stats no model reads yet.
+    last_stats_at: dict = {}
+    STATS_EVERY_S = 45.0
     if source == "flashscore":
         client = FlashscoreClient()
     else:
@@ -449,14 +545,23 @@ def collect(poll_s: float = 8.0, db_path: Path | str = DEFAULT_DB,
                         serve.observe_game_completed(m.fs_id)
                     last_games[m.fs_id] = games
 
-                    if m.server is None and serve.needs_anchor(m.fs_id):
-                        getter = getattr(client, "statistics", None)
-                        if getter is not None:
-                            serve.observe_statistics(m.fs_id, getter(m.fs_id) or {})
                     if m.server is None:
                         known = serve.server(m.fs_id)
                         if known is not None:
                             m.server = 1 if known == "p1" else 2
+
+                    # One statistics call serves both jobs: the serve anchor
+                    # above and the full snapshot here, so widening what we
+                    # capture costs nothing extra when an anchor was due.
+                    getter = getattr(client, "statistics", None)
+                    if getter is not None and (
+                            time.time() - last_stats_at.get(m.fs_id, 0) > STATS_EVERY_S):
+                        payload = getter(m.fs_id) or {}
+                        last_stats_at[m.fs_id] = time.time()
+                        if payload:
+                            store.record_stats(m.fs_id, payload)
+                            if m.server is None and serve.needs_anchor(m.fs_id):
+                                serve.observe_statistics(m.fs_id, payload)
 
                     p = stream.observe(m)
                     # fs_id is "<upstream>:<id>", so the row records which
@@ -483,6 +588,11 @@ def collect(poll_s: float = 8.0, db_path: Path | str = DEFAULT_DB,
         print(f"\n[pointstore] {written} point(s) written this run")
         print(f"[pointstore] corpus: {s['points']:,} points across "
               f"{s['matches']:,} matches ({s['usable']:,} with 20+ points)")
+        try:
+            n = store.conn.execute("SELECT COUNT(*) FROM match_stats").fetchone()[0]
+            print(f"[pointstore] statistics rows: {n:,}")
+        except Exception:
+            pass
         store.close()
 
 

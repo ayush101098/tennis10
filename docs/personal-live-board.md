@@ -104,6 +104,52 @@ failure, so it is not allowed to happen quietly.
 An empty board with the proxy up usually just means no tour-level matches are
 in play. `matches N` in the header tells you which it is.
 
+## What gets captured
+
+| | |
+|---|---|
+| Live scoreboard | every category — ATP, WTA, Challenger, W125, ITF M/W |
+| Point-by-point | reconstructed, every live match |
+| Server | reconstructed, per point |
+| **Full statistics** | **all 23 published per match**, every 45s |
+
+The 23 statistics include things no model reads yet — average 1st/2nd serve
+speed, winners, unforced errors, net points won, distance covered. They are
+stored anyway: they cost nothing and a live match is only live once.
+
+```bash
+python -m execution.live stats               # newest matches
+python -m execution.live stats brancaccio    # one match
+```
+
+```
+Brancaccio R. vs Llamas Ruiz P.   [CHALLENGER]   captured 46s ago
+  Service     1st serve percentage                   65%  73%
+              1st serve points won           75% (15/20)  84% (16/19)
+              Break Points Saved                     1/1  0/0
+  Return      Break Points Converted                 0/0  0/1
+  Games       Service games won               100% (5/5)  100% (5/5)
+```
+
+Stored long-format in `match_stats` (one row per statistic per snapshot) rather
+than as a wide table: the provider adds and renames statistics over time, and a
+wide schema would need a migration each time while silently dropping anything
+new. Each value keeps the published string AND a parsed number, so
+`75% (15/20)` is queryable as both 75.0 and a denominator of 20.
+
+**The board displays tour level; the store captures everything.** To widen the
+display too:
+
+```bash
+BOARD_CATEGORIES=all python -m execution.live board
+BOARD_CATEGORIES=atp,wta python -m execution.live board
+```
+
+ITF is off the board by default because those draws are mostly players outside
+the top-500 rankings file — the model has no prior, the gate stays silent, and
+the rows are unpriced padding. Nothing is lost by not showing them: they are
+still recorded.
+
 ## Seeing the points, and where they are stored
 
 ```bash

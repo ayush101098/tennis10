@@ -195,3 +195,28 @@ def test_forget_releases_a_finished_match():
     tape.observe("m1", ("15", "0"), (0, 0))
     tape.forget("m1")
     assert tape.points("m1") == []
+
+
+# ── statistics capture (execution/pointstore.py) ─────────────────────────────
+
+def test_stat_parsing_covers_every_published_format():
+    """The formats the provider actually publishes, seen live.
+
+    A wrong number here silently corrupts anything built on the corpus, and the
+    formats are not uniform: percentages with a fraction, bare fractions,
+    speeds with units, and plain counts all appear in one snapshot.
+    """
+    from execution.pointstore import _parse_stat
+    assert _parse_stat("75% (3/4)") == (75.0, 4.0)      # pct + denominator
+    assert _parse_stat("171 km/h") == (171.0, None)     # unit, no fraction
+    assert _parse_stat("0/0") == (0.0, 0.0)             # bare fraction
+    assert _parse_stat("2/2") == (2.0, 2.0)
+    assert _parse_stat("57%") == (57.0, None)
+    assert _parse_stat("5") == (5.0, None)
+
+
+def test_unparseable_stat_is_missing_not_guessed():
+    from execution.pointstore import _parse_stat
+    assert _parse_stat("") == (None, None)
+    assert _parse_stat(None) == (None, None)
+    assert _parse_stat("n/a") == (None, None)

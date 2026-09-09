@@ -7,6 +7,7 @@
     python -m execution.live smoke            # probe the real provider endpoint
     python -m execution.live board            # PERSONAL: live board off the local proxy
     python -m execution.live points [match]   # point-by-point, grouped by game
+    python -m execution.live stats [match]    # every statistic captured per match
 
 WHY `doctor` EXISTS
     This system has several independent reasons to be silent — no provider key,
@@ -283,12 +284,26 @@ async def _run_board(poll_s: float, price_s: float, min_edge: float) -> None:
     costs a request per token. Polling prices at the scoreboard rate would
     multiply upstream calls for numbers that had not moved.
     """
-    from execution.live.providers.sofaproxy import SofaProxyProvider
+    from execution.live.providers.sofaproxy import (
+        DEFAULT_CATEGORIES, SofaProxyProvider,
+    )
     from execution.live.providers.polymarket_odds import PolymarketOddsSource
     from execution.live.runtime import LiveRuntime
     from execution.live.scanner import ScanFilter
 
-    prov = SofaProxyProvider(poll_s=poll_s)
+    # BOARD_CATEGORIES=all covers every tour including ITF. Off by default
+    # because those draws are mostly players outside the rankings file, so the
+    # model has no prior and the rows are unpriced padding — but the STORE
+    # captures them regardless, so nothing is lost by not displaying them.
+    raw_cats = os.getenv("BOARD_CATEGORIES", "").strip().lower()
+    if raw_cats in ("all", "*"):
+        cats = frozenset({"atp", "wta", "challenger", "wta-125",
+                          "itf-men", "itf-women"})
+    elif raw_cats:
+        cats = frozenset(c.strip() for c in raw_cats.split(",") if c.strip())
+    else:
+        cats = DEFAULT_CATEGORIES
+    prov = SofaProxyProvider(poll_s=poll_s, categories=cats)
     rt = LiveRuntime(provider=prov)
     odds = PolymarketOddsSource()
 
@@ -434,6 +449,45 @@ def cmd_points(needle: Optional[str] = None, games: int = 8) -> int:
     return 0
 
 
+def cmd_stats(needle: Optional[str] = None) -> int:
+    """Every statistic captured for a match — the full published snapshot."""
+    from execution.pointstore import PointStore
+
+    store = PointStore()
+    rows = store.conn.execute(
+        "SELECT s.fs_id, m.p1 AS home, m.p2 AS away, m.tour, MAX(s.ts) last "
+        "FROM match_stats s LEFT JOIN matches m ON m.fs_id = s.fs_id "
+        "GROUP BY s.fs_id ORDER BY last DESC LIMIT 40").fetchall()
+    if needle:
+        low = needle.lower()
+        rows = [r for r in rows if low in str(r["fs_id"]).lower()
+                or low in str(r["home"] or "").lower()
+                or low in str(r["away"] or "").lower()]
+    rows = rows[:3]
+
+    if not rows:
+        print("\nNo statistics captured yet."
+              "\nThe collector fills this:  python -m execution.pointstore\n")
+        return 1
+
+    for r in rows:
+        age = int(time.time() - (r["last"] or 0))
+        print(f"\n{r['home'] or '?'} vs {r['away'] or '?'}   [{r['tour'] or '?'}]"
+              f"   captured {age}s ago")
+        print(f"  {'':<12}{'':<28}{'HOME':>14}  {'AWAY':<14}")
+        print("-" * 74)
+        last_grp = None
+        for st in store.latest_stats(r["fs_id"]):
+            grp = st["grp"] or ""
+            label = grp if grp != last_grp else ""
+            last_grp = grp
+            print(f"  {label:<12}{st['name']:<28}{str(st['home_raw']):>14}  "
+                  f"{str(st['away_raw']):<14}")
+    print()
+    store.close()
+    return 0
+
+
 def cmd_board(poll_s: float, price_s: float, min_edge: float) -> int:
     try:
         asyncio.run(_run_board(poll_s, price_s, min_edge))
@@ -455,6 +509,8 @@ def main(argv: list) -> int:
         return cmd_calibrate()
     if cmd == "smoke":
         return cmd_smoke()
+    if cmd == "stats":
+        return cmd_stats(argv[2] if len(argv) > 2 else None)
     if cmd == "points":
         return cmd_points(argv[2] if len(argv) > 2 else None)
     if cmd == "board":
