@@ -89,13 +89,33 @@ def test_alternation_does_nothing_before_an_anchor():
 
 
 def test_reanchor_is_requested_after_enough_games():
-    t = ServeTracker(reanchor_every=3)
+    clock = [1000.0]
+    t = ServeTracker(reanchor_every=3, min_anchor_interval_s=15,
+                     now=lambda: clock[0])
     t.observe_statistics("m1", stats(0, 0))
+    clock[0] += 20
     t.observe_statistics("m1", stats(4, 0))
+    clock[0] += 20
     assert not t.needs_anchor("m1")
     for _ in range(3):
         t.observe_game_completed("m1")
     assert t.needs_anchor("m1"), "drift must be correctable"
+
+
+def test_anchor_attempts_are_throttled():
+    """Anchoring needs a delta, so two reads must be separated in time.
+
+    Without the throttle an unanchored match costs a statistics request on
+    every poll — and since points arrive ~30s apart, most of those re-read an
+    unchanged counter to learn nothing.
+    """
+    clock = [1000.0]
+    t = ServeTracker(min_anchor_interval_s=15, now=lambda: clock[0])
+    assert t.needs_anchor("m1")
+    t.observe_statistics("m1", stats(5, 5))
+    assert not t.needs_anchor("m1"), "asked again too soon"
+    clock[0] += 16
+    assert t.needs_anchor("m1")
 
 
 def test_an_unanchored_match_always_wants_an_anchor():

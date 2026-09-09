@@ -6,6 +6,7 @@
     python -m execution.live calibrate        # reliability diagram + fit
     python -m execution.live smoke            # probe the real provider endpoint
     python -m execution.live board            # PERSONAL: live board off the local proxy
+    python -m execution.live points [match]   # point-by-point, grouped by game
 
 WHY `doctor` EXISTS
     This system has several independent reasons to be silent — no provider key,
@@ -374,6 +375,65 @@ def _print_board(rt, min_edge: float) -> None:
         print(f"\n  {len(unpriced)} live match(es) without a tradeable edge or price")
 
 
+_W = {1: "P1", 2: "P2", None: "?"}
+
+
+def cmd_points(needle: Optional[str] = None, games: int = 8) -> int:
+    """Every point recorded so far, grouped into the game it was played in.
+
+    Reads the stored corpus rather than memory, so it survives a restart and
+    covers the whole time the collector has been watching — not just this
+    process's uptime.
+    """
+    from execution.pointstore import PointStore
+
+    store = PointStore()
+    rows = store.conn.execute(
+        "SELECT p.fs_id, m.p1 AS home, m.p2 AS away, m.tour, COUNT(*) n, MAX(p.ts) last "
+        "FROM points p LEFT JOIN matches m ON m.fs_id = p.fs_id "
+        "GROUP BY p.fs_id ORDER BY last DESC LIMIT 40").fetchall()
+
+    if needle:
+        low = needle.lower()
+        rows = [r for r in rows
+                if low in str(r["fs_id"]).lower()
+                or low in str(r["home"] or "").lower()
+                or low in str(r["away"] or "").lower()]
+    rows = rows[:5]
+
+    if not rows:
+        print("\nNothing recorded yet."
+              "\n\nThe collector is what fills this:  python -m execution.pointstore"
+              "\n(or the in.tennisalpha.pointstore launchd agent)\n")
+        return 1
+
+    for r in rows:
+        label = f"{r['home'] or '?'} vs {r['away'] or '?'}"
+        age = int(time.time() - (r["last"] or 0))
+        print(f"\n{label}   [{r['tour'] or '?'}]   {r['n']} points   "
+              f"last {age}s ago")
+        print("-" * 78)
+        for g in store.games(r["fs_id"], limit_games=games):
+            srv = {1: "P1", 2: "P2", None: "?"}[g["server"]]
+            head = f"  set {g['set']}  @{g['games'][0]}-{g['games'][1]}  serving {srv}"
+            print(head)
+            line = []
+            for pt in g["points"]:
+                # A gapped observation could not be chained to the one before
+                # it, so its winner is a guess the store refuses to make.
+                mark = "*" if pt["gap"] else ""
+                if pt["won_game"]:
+                    line.append(f"GAME>{_W[pt['winner']]}{mark}")
+                else:
+                    line.append(f"{pt['score']}>{_W[pt['winner']]}{mark}")
+            print("      " + ("  ".join(line) if line else "(no points chained)"))
+    print("\n  * observation could not be chained to the previous one — winner unknown")
+    print("  Points begin when the collector started watching; earlier history is")
+    print("  not recoverable from these sources.\n")
+    store.close()
+    return 0
+
+
 def cmd_board(poll_s: float, price_s: float, min_edge: float) -> int:
     try:
         asyncio.run(_run_board(poll_s, price_s, min_edge))
@@ -395,6 +455,8 @@ def main(argv: list) -> int:
         return cmd_calibrate()
     if cmd == "smoke":
         return cmd_smoke()
+    if cmd == "points":
+        return cmd_points(argv[2] if len(argv) > 2 else None)
     if cmd == "board":
         return cmd_board(
             poll_s=float(os.getenv("BOARD_POLL_S", "3")),

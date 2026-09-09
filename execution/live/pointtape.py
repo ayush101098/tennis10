@@ -36,6 +36,7 @@ WHAT IT WILL NOT DO
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -76,13 +77,21 @@ class ServeState:
     games_since_anchor: int = 0
     last_served: tuple = (None, None)     # (home, away) points served
     source: str = "unknown"               # "statistics" | "alternation"
+    last_anchor_attempt: float = 0.0
 
 
 class ServeTracker:
     """Infers the server per match and keeps it current by alternation."""
 
-    def __init__(self, *, reanchor_every: int = REANCHOR_EVERY_GAMES):
+    def __init__(self, *, reanchor_every: int = REANCHOR_EVERY_GAMES,
+                 min_anchor_interval_s: float = 15.0, now=None):
         self.reanchor_every = reanchor_every
+        # Anchoring needs a DELTA, so it needs two reads separated in time.
+        # Points arrive roughly every 30s, so asking more often than this
+        # mostly re-reads an unchanged counter and spends a request to learn
+        # nothing.
+        self.min_anchor_interval_s = min_anchor_interval_s
+        self._now = now or time.time
         self._state: dict[str, ServeState] = {}
 
     def state(self, match_id: str) -> ServeState:
@@ -91,6 +100,8 @@ class ServeTracker:
     def needs_anchor(self, match_id: str) -> bool:
         """Whether it is worth spending a statistics request on this match."""
         st = self.state(match_id)
+        if self._now() - st.last_anchor_attempt < self.min_anchor_interval_s:
+            return False
         return (not st.anchored) or st.games_since_anchor >= self.reanchor_every
 
     def observe_statistics(self, match_id: str, stats_payload: dict) -> Optional[str]:
@@ -101,6 +112,7 @@ class ServeTracker:
         played no points between polls stays unknown rather than guessing.
         """
         st = self.state(match_id)
+        st.last_anchor_attempt = self._now()
         h, a = served_counts(stats_payload)
         if h is None or a is None:
             return st.server

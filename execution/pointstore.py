@@ -203,6 +203,63 @@ class PointStore:
         return self.conn.execute(
             "SELECT * FROM points WHERE fs_id = ? ORDER BY id", (fs_id,)).fetchall()
 
+    def games(self, fs_id: str, limit_games: int = 12) -> list:
+        """The stored points, grouped into the games they were played in.
+
+        A game is identified by (set, games score): every point observed while
+        the scoreboard read 3-2 in set 2 belongs to the game played at 3-2. That
+        makes "show me the points in each game" answerable from this table
+        without a game id we never had.
+
+        THE BOUNDARY ROW. When a game ends, the observation that records it
+        carries the NEW games score but a winner belonging to the point that
+        just ENDED the previous game. Filing it under the new game — which the
+        naive grouping does — puts a phantom first point in every game and
+        credits it to the wrong player. It is attributed to the game it
+        finished, and marked as the game-winning point.
+
+        Newest game first: the game in progress is the one being watched.
+        """
+        rows = self.conn.execute(
+            "SELECT set_index, games_p1, games_p2, point_p1, point_p2, winner, "
+            "       server, ts, gap "
+            "FROM points WHERE fs_id = ? ORDER BY id", (fs_id,)).fetchall()
+
+        out: list = []
+        prev_key = None
+        for r in rows:
+            key = (r["set_index"], r["games_p1"], r["games_p2"])
+            entry = {
+                "score": f"{r['point_p1']}-{r['point_p2']}",
+                "winner": r["winner"], "ts": r["ts"], "gap": bool(r["gap"]),
+                "won_game": False,
+            }
+
+            if prev_key is not None and key != prev_key and out:
+                # This row crossed a game boundary: its winner closed the game
+                # we were already in.
+                if r["winner"] is not None:
+                    closer = dict(entry)
+                    closer["won_game"] = True
+                    closer["score"] = "game"
+                    out[-1]["points"].append(closer)
+                prev_key = key
+                out.append({"key": key, "set": r["set_index"],
+                            "games": (r["games_p1"], r["games_p2"]),
+                            "server": r["server"], "points": []})
+                continue
+
+            if not out or key != prev_key:
+                out.append({"key": key, "set": r["set_index"],
+                            "games": (r["games_p1"], r["games_p2"]),
+                            "server": r["server"], "points": []})
+            prev_key = key
+            if out[-1]["server"] is None and r["server"] is not None:
+                out[-1]["server"] = r["server"]
+            out[-1]["points"].append(entry)
+
+        return out[-limit_games:][::-1]
+
     def close(self) -> None:
         self.conn.close()
 
@@ -309,6 +366,22 @@ class ProxyFeed:
         self.base = base.rstrip("/")
         self.timeout = timeout
 
+    def statistics(self, fs_id: str) -> dict:
+        """Per-event statistics — the serve anchor. See live/pointtape.py.
+
+        Returns {} on failure: no anchor is a supported state, and a collector
+        that dies because one match has no stats is worse than one that records
+        a point with an unknown server.
+        """
+        raw = fs_id.split(":", 1)[1] if ":" in fs_id else fs_id
+        try:
+            req = urllib.request.Request(f"{self.base}/event/{raw}/statistics",
+                                         headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            return {}
+
     def live_matches(self, with_points: bool = True) -> list:
         req = urllib.request.Request(f"{self.base}/sport/tennis/events/live",
                                      headers={"Accept": "application/json"})
@@ -334,8 +407,16 @@ def collect(poll_s: float = 8.0, db_path: Path | str = DEFAULT_DB,
     only when the proxy is down.
     """
     from execution.flashscore import FlashscoreClient, PointStream
+    from execution.live.pointtape import ServeTracker
 
     store = PointStore(db_path)
+    # `server` has been NULL on every row since SofaScore started refusing this
+    # IP — Flashscore renders it as an icon, so the field simply is not there.
+    # The tracker reconstructs it from the statistics endpoint, which still
+    # answers. Without it the corpus records who won each point but not who was
+    # serving, which is the axis almost every serve analytic needs.
+    serve = ServeTracker()
+    last_games: dict = {}
     if source == "flashscore":
         client = FlashscoreClient()
     else:
@@ -357,6 +438,26 @@ def collect(poll_s: float = 8.0, db_path: Path | str = DEFAULT_DB,
                 # in the corpus even before it yields its first point.
                 for m in client.live_matches(with_points=True):
                     store.upsert_match(m)
+
+                    # Serve alternates on a completed game; anchor from
+                    # statistics only when the tracker actually needs one, so
+                    # this stays a handful of requests rather than one per
+                    # match per poll.
+                    games = (m.home_games and m.home_games[-1],
+                             m.away_games and m.away_games[-1])
+                    if last_games.get(m.fs_id) not in (None, games):
+                        serve.observe_game_completed(m.fs_id)
+                    last_games[m.fs_id] = games
+
+                    if m.server is None and serve.needs_anchor(m.fs_id):
+                        getter = getattr(client, "statistics", None)
+                        if getter is not None:
+                            serve.observe_statistics(m.fs_id, getter(m.fs_id) or {})
+                    if m.server is None:
+                        known = serve.server(m.fs_id)
+                        if known is not None:
+                            m.server = 1 if known == "p1" else 2
+
                     p = stream.observe(m)
                     # fs_id is "<upstream>:<id>", so the row records which
                     # provider actually produced the observation rather than a

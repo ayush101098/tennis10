@@ -104,6 +104,35 @@ failure, so it is not allowed to happen quietly.
 An empty board with the proxy up usually just means no tour-level matches are
 in play. `matches N` in the header tells you which it is.
 
+## Seeing the points, and where they are stored
+
+```bash
+python -m execution.live points              # every live match, newest games first
+python -m execution.live points rybakina     # one match, by player or id
+```
+
+```
+Zheng Q. vs Rybakina E.   [WTA]   23 points   last 34s ago
+------------------------------------------------------------------------------
+  set 3  @4-4  serving P1
+      30-40>P1  40-40>P1  40-A>P2
+  set 3  @4-3  serving P2
+      15-0>P1  15-15>P2  30-15>P1  GAME>P1
+```
+
+`GAME>P1` is the point that won the game. A `*` marks an observation that could
+not be chained to the one before it, so its winner is unknown — the store
+refuses to guess rather than filling it in.
+
+**It reads the database, not memory**, so it survives restarts and covers the
+whole time the collector has been watching. The corpus currently holds ~90,000
+points across ~3,000 matches in `tennis_points.db`, filled continuously by the
+`in.tennisalpha.pointstore` launchd agent (`python -m execution.pointstore` to
+run it by hand).
+
+Two honest limits: the tape starts when the collector started watching, and
+points before that are not recoverable from these sources.
+
 ## The server and the point tape are RECONSTRUCTED
 
 SofaScore is currently challenging this IP — every path 403s and `sofa_proxy`
