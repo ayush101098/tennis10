@@ -27,6 +27,32 @@
  */
 
 const STORE = "sofa";
+
+/**
+ * Negative cache for paths upstream reliably refuses.
+ *
+ * SofaScore 403s point-by-point and the per-event odds endpoints outright —
+ * verified again 2026-09-09 direct against the local proxy, so it is their
+ * block and not our plumbing. Without this we re-ask on every cycle: 214
+ * doomed upstream round trips in one short session, each ~300ms, each logging
+ * a failure that looks like an incident and is not.
+ *
+ * Short TTL on purpose. A 403 here is usually a persistent block on that
+ * endpoint class, but it has lifted before, so this re-probes every few
+ * minutes rather than giving up for the life of the process.
+ */
+const NEGATIVE_TTL_MS = 5 * 60 * 1000;
+const negative = new Map();   // path -> epoch ms when it was refused
+
+function recentlyRefused(p) {
+  const at = negative.get(p);
+  if (at === undefined) return false;
+  if (Date.now() - at > NEGATIVE_TTL_MS) {
+    negative.delete(p);
+    return false;
+  }
+  return true;
+}
 const MAX_CACHE_AGE_MS = 30 * 60 * 1000;   // served with a warning past this
 
 const { store: sharedStore, blobStatus } = require("./_store");
@@ -138,7 +164,7 @@ exports.handler = async (event) => {
 
   // ── 1. upstream ──
   const upstream = process.env.SOFA_PROXY_URL;
-  if (upstream) {
+  if (upstream && !recentlyRefused(sofaPath)) {
     try {
       const res = await fetch(`${upstream.replace(/\/$/, "")}/${sofaPath}`, {
         headers: { Accept: "application/json" },
@@ -157,6 +183,10 @@ exports.handler = async (event) => {
           "Cache-Control": cacheFor(sofaPath),
           "x-sofa-source": "upstream",
         });
+      }
+      if (res.status === 403 || res.status === 404) {
+        // Their block, not our plumbing — stop re-asking for a few minutes.
+        negative.set(sofaPath, Date.now());
       }
       console.warn(`[sofa-proxy] upstream ${res.status} for ${sofaPath}`);
     } catch (err) {

@@ -7,11 +7,22 @@ it is the same engine reading the proxy that is already running on your Mac.
 
 ```bash
 cd ~/tennis10
-source .venv/bin/activate
-python -m execution.live board
+./run-local.sh            # web UI    -> http://localhost:3000
+./run-local.sh board      # terminal board (EdgeScore, market reaction)
 ```
 
-That is the whole thing. Ctrl-C stops it.
+The script checks `sofa_proxy` first and tells you how to start it if it is
+down — an unexplained empty board is the least diagnosable failure, so it is
+not allowed to happen quietly. Ctrl-C stops either.
+
+**The web UI needs `SOFA_PROXY_URL` set**, which the script does for you.
+Without it the page loads but reads the cloud blob cache and looks stale.
+Confirm with:
+
+```bash
+curl -sD- -o /dev/null http://localhost:3000/api/sofa/sport/tennis/events/live | grep x-sofa-source
+# x-sofa-source: upstream   <- reading your local proxy, no cloud hop
+```
 
 ```
 14:07:59   matches 6   priced 5   events 11
@@ -92,6 +103,28 @@ failure, so it is not allowed to happen quietly.
 
 An empty board with the proxy up usually just means no tour-level matches are
 in play. `matches N` in the header tells you which it is.
+
+## What does not work locally, and why
+
+Two SofaScore endpoints are **refused outright** — verified direct against the
+local proxy, so it is their block and not your setup:
+
+| Endpoint | Status |
+|---|---|
+| `event/<id>/statistics` | works |
+| `event/<id>/point-by-point` | **403** |
+| `event/<id>/odds/1/all` | **403** |
+
+Consequences worth knowing:
+
+- **Live momentum is unavailable in the web UI.** It is computed from
+  point-by-point, which is blocked. The terminal board is unaffected: it builds
+  its own point tape by polling.
+- **Per-match SofaScore odds are unavailable**, which is why prices come from
+  Polymarket.
+
+The proxy now remembers a refusal for five minutes instead of re-asking every
+cycle, so these show up as a handful of log lines rather than hundreds.
 
 ## What the numbers do and do not mean
 
