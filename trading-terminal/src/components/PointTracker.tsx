@@ -17,7 +17,11 @@ interface MatchState {
   sets: { p1: number; p2: number }[];
   currentSet: SetScore;
   currentGame: GameScore;
-  server: 1 | 2;
+  // null when the feed does not say who is serving — common whenever the proxy
+  // falls back to Flashscore, which renders the server as an icon. Consumers
+  // must show it as unknown rather than defaulting to P1: a guessed server
+  // puts the hold read on the wrong player.
+  server: 1 | 2 | null;
   tiebreak: boolean;
   matchOver: boolean;
   winner?: 1 | 2;
@@ -188,8 +192,12 @@ function breakOppProb(
   stats?: LiveMatchStats | null,
 ): number {
   if (state.tiebreak || state.matchOver) return 0;
-  const server = state.server;
-  const returner = server === 1 ? 2 : 1;
+  // A break probability is a statement about a specific server. Without one
+  // there is no number to give, and 0 is the honest answer rather than a
+  // figure computed for a guessed player.
+  if (state.server !== 1 && state.server !== 2) return 0;
+  const server: 1 | 2 = state.server;
+  const returner: 1 | 2 = server === 1 ? 2 : 1;
   const gs = state.currentGame;
   const cs = state.currentSet;
 
@@ -288,6 +296,11 @@ function computePositionSignals(
 ): PositionSignal[] {
   const signals: PositionSignal[] = [];
   if (state.matchOver) return signals;
+  // Serve-conditioned signals (hold, break, serving-for-the-set) are the bulk
+  // of what follows and all of them are attributed to a server. Emitting them
+  // against a guessed one is how "likely to hold" ends up on the wrong player.
+  if (state.server !== 1 && state.server !== 2) return signals;
+  const srvNow: 1 | 2 = state.server;
 
   const probShift = currentP1Prob - preMatchP1Prob;
   const p1Mom = ewmaMomentum(ewma, 1);
@@ -383,8 +396,8 @@ function computePositionSignals(
     if (totalGamesInSet >= 2) {
       // Determine who served first in this set from current server + games played
       const firstServerInSet: 1 | 2 = totalGamesInSet % 2 === 0
-        ? state.server
-        : (state.server === 1 ? 2 : 1);
+        ? srvNow
+        : (srvNow === 1 ? 2 : 1);
       // Expected game diff if all service games were held
       const p1SrvGames = firstServerInSet === 1
         ? Math.ceil(totalGamesInSet / 2)
@@ -612,7 +625,7 @@ function computePositionSignals(
     const totalGamesInSet = cs.p1 + cs.p2;
     if (totalGamesInSet >= 3) {
       const firstServerInSet: 1 | 2 = totalGamesInSet % 2 === 0
-        ? state.server : (state.server === 1 ? 2 : 1);
+        ? srvNow : (srvNow === 1 ? 2 : 1);
       const p1SrvGames = firstServerInSet === 1
         ? Math.ceil(totalGamesInSet / 2) : Math.floor(totalGamesInSet / 2);
       const expectedDiff = p1SrvGames - (totalGamesInSet - p1SrvGames);
@@ -992,7 +1005,10 @@ function buildStateFromLiveScore(
   const tiebreak = currentSet.p1 === 6 && currentSet.p2 === 6;
   // Analytics need a concrete server; fall back to P1 only for the math when the
   // feed omits it (the schedule board's serve icon stays hidden in that case).
-  const server: 1 | 2 = liveScore.server ?? 1;
+  // Unknown server is shown as unknown, never assumed — a guessed server
+  // puts the hold read on the wrong player.
+  const server: 1 | 2 | null =
+    liveScore.server === 1 || liveScore.server === 2 ? liveScore.server : null;
 
   // Point score from SofaScore
   let currentGame = { p1: 0, p2: 0 };
@@ -1033,7 +1049,11 @@ function buildGameLog(
   let totalGamesPlayed = 0;
   for (const s of liveScore.completedSets) totalGamesPlayed += s.p1 + s.p2;
   totalGamesPlayed += liveScore.currentSetGames.p1 + liveScore.currentSetGames.p2;
-  const srv0: 1 | 2 = liveScore.server ?? 1;
+  // Every row in this log is attributed to a server. Without one there is
+  // nothing truthful to build, so it returns empty rather than attributing the
+  // whole match to P1.
+  if (liveScore.server !== 1 && liveScore.server !== 2) return entries;
+  const srv0: 1 | 2 = liveScore.server;
   const startServer: 1 | 2 = (totalGamesPlayed % 2 === 0) ? srv0 : (srv0 === 1 ? 2 : 1);
 
   const allSets = [...liveScore.completedSets, liveScore.currentSetGames];
@@ -1214,6 +1234,13 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
 
   const logPoint = useCallback((winner: 1 | 2) => {
     if (state.matchOver) return;
+    // A recorded point carries a server, and `isBreak` below is derived from
+    // it. Recording against a guessed server would put fake breaks in the
+    // history the analytics then read back.
+    if (state.server !== 1 && state.server !== 2) return;
+    // Captured before the closure: TypeScript cannot carry the narrowing above
+    // across the setState callback boundary.
+    const pointServer: 1 | 2 = state.server;
     const scoreBefore = formatScore(state);
     const isBreakOpp = state.server !== winner;
     const newState = advancePoint(state, winner);
@@ -1227,7 +1254,7 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
     const gd = newState.currentGame.p1 + newState.currentGame.p2;
 
     setHistory(prev => [...prev, {
-      id: prev.length + 1, winner, server: state.server, scoreBefore, scoreAfter,
+      id: prev.length + 1, winner, server: pointServer, scoreBefore, scoreAfter,
       p1WinProb: newP1Prob, timestamp: Date.now(), isBreak, isSetPoint: false,
       isMatchPoint: newState.matchOver, ewma1: newEwma.fast1, ewma2: newEwma.fast2,
       fatigue1: fatigueIndex(newFatigue, 1), fatigue2: fatigueIndex(newFatigue, 2),

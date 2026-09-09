@@ -1661,11 +1661,28 @@ async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
 function attachBreakHoldSignals(match: ScheduledMatch): void {
   if (!match.liveScore) return;
   const ls = match.liveScore;
+  // NO SERVER, NO SERVE-CONDITIONED SIGNALS.
+  //
+  // This used to fall back to P1 "for the math only", on the reasoning that the
+  // serve INDICATOR stayed hidden. But the math is the signal: hold and break
+  // probabilities, the pressure read and the whole break radar are computed
+  // from who is serving, and attributing them to P1 when the feed does not say
+  // makes them wrong for the away server — half the time, confidently.
+  //
+  // It bites hardest exactly when it is least visible: whenever the proxy falls
+  // back to Flashscore, which renders the server as an icon rather than a feed
+  // field, EVERY live match has an unknown server and every hold signal was
+  // being computed for P1. Reported from live ATP matches, 2026-09-09.
+  //
+  // Silence is the correct output here, and the rest of the product already
+  // treats an unknown server that way (game_ladder, setengine).
+  if (ls.server !== 1 && ls.server !== 2) {
+    ls.breakHoldSignals = undefined;
+    return;
+  }
+
   try {
-    // Serve-conditioned analytics need a concrete server; when the feed omits it
-    // (server undefined) fall back to P1 for the math only — the displayed serve
-    // indicator stays hidden rather than pointing at a guessed player.
-    const srv: 1 | 2 = ls.server ?? 1;
+    const srv: 1 | 2 = ls.server;
     ls.breakHoldSignals = computeBreakHoldSignals(
       srv,
       ls.pointScore,
