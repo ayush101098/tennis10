@@ -340,9 +340,22 @@ def _fetch_upstream(url: str) -> tuple[int, bytes]:
 
 
 def _bg_refresh(url: str, path: str):
-    """Background thread: re-fetch one URL and update the cache."""
+    """Background thread: re-fetch one URL and update the cache.
+
+    FALLS BACK EXACTLY LIKE THE SYNCHRONOUS PATH, and must. Without it this
+    refresh could only ever succeed from an origin that answers 403 to this IP,
+    so every background refresh failed, the entry was served stale until it
+    aged out, and two reads inside the stale window returned byte-identical
+    bodies. That silently broke server detection, which works by comparing the
+    service-point counters BETWEEN two reads: identical bodies means no delta,
+    and no delta means the server is never anchored.
+    """
     try:
         status, body = _fetch_upstream(url)
+        if status != 200:
+            fb = _fallback(path)
+            if fb:
+                status, body = fb
         with _cache_lock:
             if status == 200:
                 _cache[url] = {"ts": time.time(), "data": body, "refreshing": False}

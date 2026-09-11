@@ -72,10 +72,21 @@ class PolymarketOddsSource:
     and a crossed one, none of which can be requested from a live venue.
     """
 
-    def __init__(self, *, client=None, fetch_book: Optional[Callable] = None):
+    # The Gamma event list is the same for every match, and fetching it is the
+    # expensive half of a lookup (paginated, ~550-900ms). Shared across all
+    # lookups in a window rather than refetched per match — with eight live
+    # matches that was eight full paginated fetches to answer one question.
+    EVENTS_TTL_S = 60.0
+
+    def __init__(self, *, client=None, fetch_book: Optional[Callable] = None,
+                 events_ttl_s: Optional[float] = None):
         self._client = client
         self._fetch_book = fetch_book
+        self.events_ttl_s = events_ttl_s if events_ttl_s is not None else self.EVENTS_TTL_S
+        self._events: Optional[list] = None
+        self._events_at = 0.0
         self.requests = 0
+        self.event_fetches = 0
         self.last_error: Optional[str] = None
 
     def _ensure_client(self):
@@ -116,6 +127,27 @@ class PolymarketOddsSource:
             self.last_error = f"{type(e).__name__}: {e}"[:200]
         return view
 
+    def events(self, *, force: bool = False) -> list:
+        """Open tennis events, cached for `events_ttl_s`.
+
+        Markets do not appear and vanish inside a minute, so re-fetching the
+        catalogue per match spends most of a second to learn nothing.
+        """
+        client = self._ensure_client()
+        if client is None:
+            return []
+        fresh = self._events is not None and (time.time() - self._events_at) < self.events_ttl_s
+        if fresh and not force:
+            return self._events or []
+        try:
+            self._events = client.fetch_tennis_events() or []
+            self._events_at = time.time()
+            self.event_fetches += 1
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"[:200]
+            return self._events or []      # stale beats nothing
+        return self._events
+
     def find_tokens(self, player1: str, player2: str) -> Optional[tuple[str, str, str]]:
         """Locate a match market, returning (token_p1, token_p2, condition_id).
 
@@ -127,7 +159,9 @@ class PolymarketOddsSource:
         if client is None:
             return None
         try:
-            markets = client.find_match_markets(player1, player2)
+            # Pass the cached catalogue: without it find_match_markets refetches
+            # the whole paginated list for every single lookup.
+            markets = client.find_match_markets(player1, player2, events=self.events())
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"[:200]
             return None

@@ -308,43 +308,96 @@ async def _run_board(poll_s: float, price_s: float, min_edge: float) -> None:
     odds = PolymarketOddsSource()
 
     await prov.connect()
+    # Load the model here rather than letting it happen inside the first render
+    # cycle. It is a one-time ~1.6s cost either way, but paid at startup it is
+    # a line of text, and paid mid-loop it is the board freezing on its first
+    # frame — the exact moment the user is deciding whether this thing is fast.
+    print("loading model…", end="", flush=True)
+    t_warm = time.time()
+    await asyncio.get_running_loop().run_in_executor(None, rt.model._ensure)
+    print(f" {time.time() - t_warm:.1f}s")
     print(f"live board — scoreboard {poll_s:.0f}s · prices {price_s:.0f}s · "
           f"min edge {min_edge:.0%}   (ctrl-c to stop)\n")
 
-    tokens: dict = {}          # match_id -> (token_p1, token_p2)
-    last_price = 0.0
+    tokens: dict = {}          # match_id -> (token_p1, token_p2) | None
     loop = asyncio.get_running_loop()
+    pricer = asyncio.create_task(_price_loop(rt, odds, tokens, price_s))
+
+    try:
+        while True:
+            t0 = time.time()
+            events = await loop.run_in_executor(None, prov.poll_events)
+
+            for ev in events:
+                mid, r = ev.match_id, ev.raw
+                if mid not in rt.contexts:
+                    rt.register_match(mid, player1=r["home"], player2=r["away"],
+                                      surface=_surface(r.get("surface")))
+                await rt.handle_event(ev)
+
+            _print_board(rt, min_edge, pricing=not pricer.done())
+            await asyncio.sleep(max(0.2, poll_s - (time.time() - t0)))
+    finally:
+        pricer.cancel()
+
+
+# A match whose market cannot be found is retried on this interval rather than
+# never: markets for later matches are listed as the day goes on, and a single
+# early miss used to mean that match stayed unpriced for the whole session.
+MISS_RETRY_S = 300.0
+# Concurrent CLOB book fetches. The venue is fine with this and it is the
+# difference between 2N serial round-trips and about two.
+PRICE_CONCURRENCY = 8
+
+
+async def _price_loop(rt, odds, tokens: dict, price_s: float) -> None:
+    """Prices every match on its own beat, off the render path.
+
+    WHY THIS IS NOT IN THE SCOREBOARD LOOP
+        It used to be, and it was the reason the board felt slow. Each
+        unresolved match cost a gamma lookup and each priced one cost two CLOB
+        round-trips, all serial, all inside the loop that redraws the screen —
+        so a cycle with eight live matches blocked the display for seconds at a
+        time while the score on it was already stale. The scoreboard now
+        redraws on its own cadence no matter how slow the venue is, and prices
+        land whenever they land.
+    """
+    loop = asyncio.get_running_loop()
+    misses: dict = {}
+    sem = asyncio.Semaphore(PRICE_CONCURRENCY)
+
+    async def price_one(mid: str, ctx) -> None:
+        if mid not in tokens:
+            if time.time() - misses.get(mid, 0.0) < MISS_RETRY_S:
+                return
+            async with sem:
+                found = await loop.run_in_executor(
+                    None, odds.find_tokens, ctx.player1, ctx.player2)
+            if found:
+                tokens[mid] = found[:2]
+            else:
+                misses[mid] = time.time()
+                return
+        tk = tokens.get(mid)
+        if not tk:
+            return
+        async with sem:
+            await loop.run_in_executor(
+                None, lambda: odds.update(ctx.view(mid, "match_winner"),
+                                          token_p1=tk[0], token_p2=tk[1]))
 
     while True:
         t0 = time.time()
-        events = await loop.run_in_executor(None, prov.poll_events)
-
-        for ev in events:
-            mid, r = ev.match_id, ev.raw
-            if mid not in rt.contexts:
-                rt.register_match(mid, player1=r["home"], player2=r["away"],
-                                  surface=_surface(r.get("surface")))
-            await rt.handle_event(ev)
-
-        # Prices on their own beat.
-        if time.time() - last_price >= price_s:
-            last_price = time.time()
-            for mid, ctx in rt.contexts.items():
-                if mid not in tokens:
-                    # Resolved once per match, not per cycle — the gamma lookup
-                    # is the expensive half and the market does not change id.
-                    found = await loop.run_in_executor(
-                        None, odds.find_tokens, ctx.player1, ctx.player2)
-                    tokens[mid] = found[:2] if found else None
-                tk = tokens.get(mid)
-                if not tk:
-                    continue
-                await loop.run_in_executor(
-                    None, lambda c=ctx, m=mid, t=tk: odds.update(
-                        c.view(m, "match_winner"), token_p1=t[0], token_p2=t[1]))
-
-        _print_board(rt, min_edge)
-        await asyncio.sleep(max(0.5, poll_s - (time.time() - t0)))
+        # Warm the shared catalogue once, so the lookups below hit the cache
+        # instead of each paying for the same paginated fetch.
+        await loop.run_in_executor(None, odds.events)
+        snapshot = list(rt.contexts.items())      # contexts mutate as matches start
+        if snapshot:
+            await asyncio.gather(
+                *(price_one(mid, ctx) for mid, ctx in snapshot),
+                return_exceptions=True,
+            )
+        await asyncio.sleep(max(1.0, price_s - (time.time() - t0)))
 
 
 def _surface(ground: str) -> str:
@@ -356,14 +409,15 @@ def _surface(ground: str) -> str:
     return "Hard"
 
 
-def _print_board(rt, min_edge: float) -> None:
+def _print_board(rt, min_edge: float, *, pricing: bool = True) -> None:
     from execution.live.scanner import ScanFilter
     rows = rt.opportunities(filt=ScanFilter(min_edge=min_edge), limit=20)
     summary = rt.scanner_summary()
 
     print("\033[2J\033[H", end="")          # clear, so the board updates in place
     print(f"{time.strftime('%H:%M:%S')}   matches {len(rt.contexts)}   "
-          f"priced {summary['count']}   events {rt.processed}")
+          f"priced {summary['count']}   events {rt.processed}"
+          f"{'' if pricing else '   [pricing stopped]'}")
     lag = rt.lag.reaction_stats()
     if lag["n"]:
         print(f"market reaction: median {lag['median_ms']}ms over {lag['n']} moves")
@@ -515,7 +569,7 @@ def main(argv: list) -> int:
         return cmd_points(argv[2] if len(argv) > 2 else None)
     if cmd == "board":
         return cmd_board(
-            poll_s=float(os.getenv("BOARD_POLL_S", "3")),
+            poll_s=float(os.getenv("BOARD_POLL_S", "2")),
             price_s=float(os.getenv("BOARD_PRICE_S", "10")),
             min_edge=float(os.getenv("BOARD_MIN_EDGE", "0.02")),
         )

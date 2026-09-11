@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
 import time
 import urllib.request
 from dataclasses import replace
@@ -174,6 +175,10 @@ class SofaProxyProvider(TennisDataProvider):
         self.connected = False
         self.polls = 0
         self.last_error: Optional[str] = None
+        # Statistics are fetched OFF the poll path — see `_request_anchors`.
+        self._stats_pool = None
+        self._stats_inflight: set = set()
+        self._stats_done: "queue.Queue" = queue.Queue()
         self._seq: dict[str, int] = {}
         self._last: dict[str, tuple] = {}
         # SofaScore is challenging this IP, so the feed carries no server and no
@@ -229,6 +234,75 @@ class SofaProxyProvider(TennisDataProvider):
     def _fingerprint(self, ev: LiveEvent) -> tuple:
         return (ev.score.sets, ev.score.games, ev.score.points, ev.server)
 
+    # Enough to cover a full board in one wave without hammering the proxy.
+    STATS_CONCURRENCY = 8
+
+    def _stats_many(self, match_ids: list) -> dict:
+        """Statistics for several matches concurrently.
+
+        Returns a mid -> payload map; a match whose fetch fails is simply
+        absent, which the caller already treats as "no anchor this poll".
+        """
+        if not match_ids:
+            return {}
+        if len(match_ids) == 1:
+            return {match_ids[0]: self._stats(match_ids[0])}
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(self.STATS_CONCURRENCY,
+                                                len(match_ids))) as pool:
+            return dict(zip(match_ids, pool.map(self._stats, match_ids)))
+
+    def _drain_anchors(self) -> None:
+        """Apply statistics that finished since the last poll.
+
+        Results are applied HERE, on the polling thread, rather than in the
+        worker that fetched them — so the serve tracker is only ever touched
+        from one thread and needs no lock.
+        """
+        while True:
+            try:
+                mid, stats = self._stats_done.get_nowait()
+            except queue.Empty:
+                return
+            self._stats_inflight.discard(mid)
+            if stats is not None:
+                self.serve.observe_statistics(mid, stats)
+
+    def _request_anchors(self, match_ids: list) -> None:
+        """Ask for statistics in the background and return immediately.
+
+        WHY THIS IS NOT ALLOWED TO BLOCK
+            The statistics endpoint is the slowest thing the proxy serves —
+            measured live at eight seconds for one wave. Fetching it inside
+            poll_events meant the scoreboard froze for eight seconds to learn
+            who was serving, while the scores it was already holding sat
+            unrendered. The server is worth waiting for; the SCOREBOARD is not
+            worth stalling for it. So the answer lands a poll or two later and
+            the board never stops moving.
+
+            An in-flight match is not re-requested, which is what keeps a slow
+            wave from queueing a second one behind it.
+        """
+        pending = [m for m in match_ids if m not in self._stats_inflight]
+        if not pending:
+            return
+        if self._stats_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            self._stats_pool = ThreadPoolExecutor(
+                max_workers=self.STATS_CONCURRENCY, thread_name_prefix="anchor")
+        self._stats_inflight.update(pending)
+
+        def work(mids=tuple(pending)):
+            try:
+                got = self._stats_many(list(mids))
+            except Exception as e:                # a worker must never die silently
+                self.last_error = f"{type(e).__name__}: {e}"[:200]
+                got = {}
+            for m in mids:
+                self._stats_done.put((m, got.get(m)))
+
+        self._stats_pool.submit(work)
+
     def poll_events(self) -> list:
         """One poll into the events that represent real changes."""
         self.polls += 1
@@ -238,7 +312,9 @@ class SofaProxyProvider(TennisDataProvider):
             self.last_error = f"{type(e).__name__}: {e}"[:200]
             return []
 
-        out = []
+        # PASS 1 — parse and advance the serve alternation. No network here, so
+        # the cost is microseconds per event.
+        parsed = []
         for e in (data.get("events") or []):
             cat = (((e.get("tournament") or {}).get("category")) or {}).get("slug", "")
             if self.categories and cat not in self.categories:
@@ -258,18 +334,22 @@ class SofaProxyProvider(TennisDataProvider):
                 continue
 
             # ── reconstruct the server ──
-            # A completed game flips it; otherwise anchor from statistics,
-            # which is the one per-event endpoint that still answers.
+            # A completed game flips it; anchoring from statistics happens
+            # below, in one concurrent batch.
             prev_games = self._games.get(mid)
             if prev_games is not None and prev_games != ev.score.games:
                 self.serve.observe_game_completed(mid)
             self._games[mid] = ev.score.games
+            parsed.append((mid, ev))
 
-            if ev.server is None and self.serve.needs_anchor(mid):
-                stats = self._stats(mid)
-                if stats is not None:
-                    self.serve.observe_statistics(mid, stats)
+        # ── anchor the server, without ever blocking the scoreboard ──────────
+        self._drain_anchors()
+        self._request_anchors([mid for mid, ev in parsed
+                               if ev.server is None and self.serve.needs_anchor(mid)])
 
+        # PASS 2 — apply what we learned and emit real changes.
+        out = []
+        for mid, ev in parsed:
             if ev.server is None:
                 known = self.serve.server(mid)
                 if known is not None:
