@@ -176,3 +176,47 @@ def test_a_refresh_with_no_fallback_leaves_the_stale_entry_serveable():
     finally:
         sp._fetch_upstream, sp._fallback = orig_up, orig_fb
         sp._cache.pop(url, None)
+
+
+# ── the gateway socket ───────────────────────────────────────────────────────
+
+def test_the_match_socket_accepts_rather_than_closing():
+    """The gateway's only real endpoint, which was silently unreachable.
+
+    `from __future__ import annotations` makes every annotation a string, and
+    FastAPI resolves those against MODULE globals. `WebSocket` was imported
+    inside create_app, so the name was invisible there, FastAPI treated the
+    `ws` parameter as a QUERY PARAMETER, and every connection was closed with
+    1008 "field required" before accept — which uvicorn reports as a bare 403.
+
+    /health stayed green throughout, which is why this needs a test: nothing
+    else in the system could tell you the socket was dead. Driven at the ASGI
+    level so it needs no server, no client library and no network.
+    """
+    import asyncio
+
+    import pytest
+    pytest.importorskip("fastapi")
+    from execution.live.gateway import RoomRegistry, create_app
+
+    app = create_app(RoomRegistry())
+    scope = {
+        "type": "websocket", "path": "/match/123", "raw_path": b"/match/123",
+        "headers": [], "query_string": b"", "scheme": "ws", "http_version": "1.1",
+        "asgi": {"version": "3.0"}, "client": ("127.0.0.1", 1),
+        "server": ("127.0.0.1", 8080), "subprotocols": [], "root_path": "",
+    }
+    sent = []
+
+    async def receive():
+        return ({"type": "websocket.connect"} if not sent
+                else {"type": "websocket.disconnect", "code": 1000})
+
+    async def send(m):
+        sent.append(m)
+
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=10))
+
+    kinds = [m["type"] for m in sent]
+    assert "websocket.accept" in kinds, f"socket refused the connection: {sent}"
+    assert "websocket.close" not in kinds[:1]

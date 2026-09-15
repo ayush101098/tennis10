@@ -22,6 +22,21 @@ WHY BROADCASTS ARE THROTTLED BY FIELD AND NOT GLOBALLY
 
 from __future__ import annotations
 
+# MUST be module level, despite FastAPI being an optional dependency below.
+# `from __future__ import annotations` turns every annotation into a string,
+# and FastAPI resolves those against MODULE globals. Imported only inside
+# create_app, the name `WebSocket` is invisible there, so the annotation on
+# the socket handler failed to resolve and FastAPI fell back to treating `ws`
+# as a QUERY PARAMETER -- closing every connection with 1008 "field required"
+# before accept, which uvicorn reports as a bare 403. The gateway's only real
+# endpoint was unreachable and /health said nothing was wrong.
+# Guarded so the module still imports with no FastAPI installed, which is the
+# reason the import was local in the first place.
+try:                                          # pragma: no cover - env dependent
+    from fastapi import WebSocket
+except ImportError:                           # pragma: no cover
+    WebSocket = None                          # type: ignore[assignment]
+
 import asyncio
 import time
 from dataclasses import dataclass, field
@@ -198,7 +213,7 @@ def create_app(registry: Optional[RoomRegistry] = None, *, runtime=None):
     installed. The registry and payload logic are the parts worth testing, and
     they have no web dependency at all.
     """
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, WebSocketDisconnect
 
     reg = registry or RoomRegistry()
     app = FastAPI(title="TennisAlpha Live Market Engine")

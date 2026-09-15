@@ -54,6 +54,19 @@ def _build_provider():
     Returning None is still supported: the gateway serves, `doctor` reports,
     and the failure is one line in /health rather than a crash at import.
     """
+    # An explicit choice wins over the preference order below. This exists for
+    # the personal local run: sofa_proxy is on this machine, it already
+    # reconstructs the server from statistics deltas, and livesport cannot see
+    # the server at all — so without this the gateway would serve strictly
+    # worse data than the board running beside it.
+    want = os.getenv("LIVE_PROVIDER", "").strip().lower()
+    if want in ("sofaproxy", "proxy"):
+        try:
+            from execution.live.providers.sofaproxy import SofaProxyProvider
+            return SofaProxyProvider(poll_s=float(os.getenv("BOARD_POLL_S", "2"))), None
+        except Exception as e:
+            return None, f"{type(e).__name__}: {e}"
+
     key = os.getenv("LIVETENNIS_API_KEY")
     if key:
         try:
@@ -175,7 +188,12 @@ def cmd_serve(port: int) -> int:
         async def _start():
             asyncio.create_task(runtime.run())
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    # 0.0.0.0 stays the default because a container needs it to be reachable
+    # at all. A personal run on a laptop does not, and binding every interface
+    # there publishes the gateway to whatever network the machine is on —
+    # coffee-shop wifi included. run-all-local.sh sets this to 127.0.0.1.
+    host = os.getenv("LIVE_HOST", "0.0.0.0")
+    uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
 
 
