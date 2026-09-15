@@ -330,9 +330,16 @@ async def _run_board(poll_s: float, price_s: float, min_edge: float) -> None:
     # cycle. It is a one-time ~1.6s cost either way, but paid at startup it is
     # a line of text, and paid mid-loop it is the board freezing on its first
     # frame — the exact moment the user is deciding whether this thing is fast.
+    # ON THIS THREAD, NOT IN AN EXECUTOR. The model opens a SQLite connection,
+    # and SQLite objects may only be used on the thread that created them — so
+    # warming it in a worker made every later price() call raise
+    # ProgrammingError, which price() catches and reports as "no opinion".
+    # Result: a board that ran perfectly and priced nothing, with the cause
+    # visible only in an unavailable_reason nothing printed. Blocking here is
+    # free anyway: it is startup, and nothing else is running yet.
     print("loading model…", end="", flush=True)
     t_warm = time.time()
-    await asyncio.get_running_loop().run_in_executor(None, rt.model._ensure)
+    rt.model._ensure()
     print(f" {time.time() - t_warm:.1f}s")
     print(f"live board — scoreboard {poll_s:.0f}s · prices {price_s:.0f}s · "
           f"min edge {min_edge:.0%}   (ctrl-c to stop)\n")

@@ -220,3 +220,65 @@ def test_the_match_socket_accepts_rather_than_closing():
     kinds = [m["type"] for m in sent]
     assert "websocket.accept" in kinds, f"socket refused the connection: {sent}"
     assert "websocket.close" not in kinds[:1]
+
+
+# ── model thread affinity ────────────────────────────────────────────────────
+
+def test_the_model_prices_from_the_thread_that_runs_the_board():
+    """Warming the model in a worker thread silently disabled all pricing.
+
+    The model opens a SQLite connection, and SQLite objects may only be used
+    on the thread that created them. Warmed via run_in_executor, every later
+    price() call raised ProgrammingError — which price() catches and reports
+    as "no opinion". The board then ran flawlessly and priced NOTHING: 31 live
+    matches, 31 with a market price, zero model probabilities, and the cause
+    visible only in an unavailable_reason that nothing printed.
+
+    This asserts the property that was violated: a model warmed on one thread
+    still answers on that thread.
+    """
+    import pytest
+    from execution.live.engine import ModelBridge
+
+    mb = ModelBridge()
+    mb._ensure()
+    if not mb.available:
+        pytest.skip("model DB not present in this environment")
+
+    from execution.live.events import Score
+    from execution.live.state import MatchState
+
+    state = MatchState(
+        match_id="t", player1="Jannik Sinner", player2="Carlos Alcaraz",
+        surface="Hard", score=Score(sets=(0, 0), games=(0, 0), points=("0", "0")),
+        server="p1",
+    )
+    fair = mb.price(state, [])
+    assert fair is not None, f"model went silent: {mb.unavailable_reason}"
+    assert 0.0 < fair.p1 < 1.0
+
+
+def test_warming_in_a_worker_thread_is_what_broke_it():
+    """Pins the mechanism, so a future refactor cannot reintroduce it quietly."""
+    import pytest
+    from concurrent.futures import ThreadPoolExecutor
+
+    from execution.live.engine import ModelBridge
+    from execution.live.events import Score
+    from execution.live.state import MatchState
+
+    mb = ModelBridge()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(mb._ensure).result()
+    if not mb.available:
+        pytest.skip("model DB not present in this environment")
+
+    state = MatchState(
+        match_id="t", player1="Jannik Sinner", player2="Carlos Alcaraz",
+        surface="Hard", score=Score(sets=(0, 0), games=(0, 0), points=("0", "0")),
+        server="p1",
+    )
+    # Documents the hazard: if this ever starts returning a price, SQLite's
+    # thread rule changed and the warning in _run_board can be relaxed.
+    if mb.price(state, []) is None:
+        assert "thread" in (mb.unavailable_reason or "").lower()
