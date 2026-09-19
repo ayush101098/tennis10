@@ -1,4 +1,3 @@
-import { PLANS } from "@/lib/plans";
 
 /**
  * Structured data.
@@ -35,13 +34,17 @@ export function SoftwareApplicationLd() {
       url: SITE,
       description:
         "Live win-probability model for professional tennis — neural network prior re-priced by a score-conditioned Markov engine on every point, compared against de-vigged bookmaker odds, with ¼-Kelly staking and hedge timing.",
-      offers: PLANS.map(p => ({
+      // One free offer, not the three priced tiers. Structured data that
+      // advertises a $19/$99/$999 ladder for a product that costs nothing is
+      // a price shown in search results that nobody is charged — and the kind
+      // of mismatch that gets rich results pulled.
+      offers: {
         "@type": "Offer",
-        name: p.label,
-        price: String(p.usd),
+        name: "Full access",
+        price: "0",
         priceCurrency: "USD",
         url: `${SITE}/terminal`,
-      })),
+      },
       publisher: { "@type": "Organization", name: "Nexxore Labs", url: SITE },
     }} />
   );

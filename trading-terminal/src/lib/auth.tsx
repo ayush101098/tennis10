@@ -3,11 +3,13 @@
 /**
  * Client-side auth, tiers and payment verification.
  *
- * Tiers:
+ * Tiers, as of TERMINAL_FREE (below):
  *   public — not signed in: match list + full analysis of ONE match per day
- *   free   — signed in:    pre-match model probabilities on every match
- *   pro    — $99:          full trading terminal (live True P, edge, Kelly,
- *                          hedge signals, Value Board, bet tracker)
+ *   signed in — everything. The whole terminal, free, for any address.
+ *
+ * The three-tier ladder underneath is intact and is what returns the moment
+ * TERMINAL_FREE goes false:
+ *   public / free (pre-match probabilities) / pro ($99, the full terminal).
  *
  * ADMIN_EMAILS are always pro, forever, at no charge.
  *
@@ -80,6 +82,29 @@ export const TRIAL_LENGTH = TRIAL_DAYS === 1 ? "24 hours" : `${TRIAL_DAYS} days`
  * server refuses to grant.
  */
 export const TRIALS_ENABLED = true;
+
+/**
+ * THE TERMINAL IS FREE. One switch, and the only thing that decides it.
+ *
+ * Operator decision, 2026-09-17: the paywall comes down. Anyone who gives an
+ * email gets the whole terminal — live True P, the edge board, Kelly staking,
+ * hedge signals, the bet journal — with no payment, no plan and no expiry. The
+ * email is still asked for, because knowing who is using the product is worth
+ * one field; it is not a gate, since every address is accepted instantly.
+ *
+ * Everything that used to decide access still exists and still works:
+ * payments, grants, trials, TIME_GRANTS, the plan tiers in lib/plans.ts and the
+ * Stripe/PayPal/Razorpay/crypto routes are all untouched on disk. They are
+ * simply not consulted while this is true, and not offered anywhere in the UI.
+ * Setting it to false restores the paid product exactly as it was — that is why
+ * this is a flag and not a deletion.
+ *
+ * NOTE: this is a CLIENT flag, so it is visible and editable in devtools. That
+ * is fine while it grants MORE access than the server would. If it is ever
+ * flipped back to false, the server-side entitlement checks are what actually
+ * hold the line — as they did before.
+ */
+export const TERMINAL_FREE = true;
 export const FREE_BET_LIMIT = 0;              // 0 = no free trial; every user must hold an active subscription
 
 // Stablecoins we can price 1:1 for the payment-amount guardrail (mainnet).
@@ -133,6 +158,65 @@ export function activeGrantExpiry(email: string): number | null {
   return exp !== undefined && Date.now() < exp ? exp : null;
 }
 
+/* ── The free day ──────────────────────────────────────────────────────────
+ *
+ * Typing an email IS the sign-up, and it opens the full terminal for
+ * TRIAL_DAYS. The grant is written here, on the client, the moment the address
+ * is entered — the server (netlify/functions/account.js) still records it, but
+ * it no longer DECIDES it.
+ *
+ * That inversion is the fix for the lockout: the trial used to be issued only
+ * if the blob store answered, so an unconfigured store (every local run), an
+ * exhausted quota or a 503 turned a signup that promises 24 hours of access
+ * into an immediate paywall. Storage failing must cost us bookkeeping, not the
+ * customer's first impression.
+ *
+ * One trial per EMAIL, not per device. Device gating was what stopped anyone
+ * who had ever looked at the product from seeing it again; an invented address
+ * defeats this, which is the accepted price of a frictionless look.
+ */
+const TRIALS_LS_KEY = "tt_trials_v1";   // email -> expiry epoch-ms
+
+function readTrials(): Record<string, number> {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(localStorage.getItem(TRIALS_LS_KEY) || "{}") as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+/** Expiry of this email's free day, or 0 if it never started one. */
+export function trialExpiry(email: string): number {
+  return readTrials()[normEmail(email)] || 0;
+}
+
+/** True while the free day is still running. */
+export function trialActive(email: string): boolean {
+  return trialExpiry(email) > Date.now();
+}
+
+/**
+ * Start the free day, unless this email already used one.
+ *
+ * Returns the expiry — the EXISTING one if the trial was already taken, which
+ * is usually in the past and is what makes it un-repeatable. Never extends a
+ * running trial, so re-entering the address does not roll the clock forward.
+ */
+export function startTrial(email: string): number {
+  // Nothing to trial while the terminal is free — and starting one anyway
+  // would spend every visitor's one-per-address trial on access they already
+  // have, so the day the paywall goes back up nobody would have one left.
+  if (TERMINAL_FREE || !TRIALS_ENABLED || typeof window === "undefined") return 0;
+  const e = normEmail(email);
+  const trials = readTrials();
+  if (!trials[e]) {
+    trials[e] = Date.now() + TRIAL_DAYS * 86400000;
+    try { localStorage.setItem(TRIALS_LS_KEY, JSON.stringify(trials)); } catch { return 0; }
+  }
+  return trials[e];
+}
+
 export type Tier = "public" | "free" | "pro";
 
 export interface Session {
@@ -150,14 +234,25 @@ function normEmail(e: string): string {
   return e.trim().toLowerCase();
 }
 
-/** True if this session currently has PAID access: admin, an active comp grant,
- *  or a subscription payment whose 30-day window hasn't lapsed. */
+/** True if this session currently has FULL access: admin, an active comp grant,
+ *  a running free day, or a subscription payment whose window hasn't lapsed. */
 export function subActive(s: Session | null): boolean {
   if (!s) return false;
+  // Free terminal: a session IS access. Checked before everything else so no
+  // expiry, lapsed comp or failed payment lookup can take it away.
+  if (TERMINAL_FREE) return true;
   const e = normEmail(s.email);
   if (s.isAdmin || ADMIN_EMAILS.has(e)) return true;
   if (activeGrantExpiry(e)) return true;
+  if (trialActive(e)) return true;
   return typeof s.paidUntil === "number" && s.paidUntil > Date.now();
+}
+
+/** When full access ends — subscription, comp or free day, whichever is later.
+ *  0 when there is none. Used for the countdown; subActive is the gate. */
+export function accessUntil(s: Session | null): number {
+  if (!s) return 0;
+  return Math.max(s.paidUntil || 0, activeGrantExpiry(s.email) || 0, trialExpiry(s.email));
 }
 
 export function loadSession(): Session | null {
@@ -190,7 +285,7 @@ function saveSession(s: Session | null): void {
   else localStorage.removeItem(LS_KEY);
 }
 
-export function signIn(email: string): Session {
+export function signIn(email: string, source?: string): Session {
   seatLost = false;   // signing in claims the seat for this device
   const e = normEmail(email);
   const isAdmin = ADMIN_EMAILS.has(e);
@@ -206,6 +301,15 @@ export function signIn(email: string): Session {
     paidUntil: samePrev?.paidUntil,
     since: Date.now(),
   };
+  // The free day — granted the instant a valid address is entered, before any
+  // network call, so the terminal is open by the time the modal closes.
+  //
+  // Not for anyone who already has access: an admin or a live subscriber would
+  // otherwise burn their one trial on a routine sign-in and have nothing left
+  // the day the subscription lapses.
+  if (!isAdmin && !activeGrantExpiry(e) && !(s.paidUntil && s.paidUntil > Date.now())) {
+    startTrial(e);
+  }
   s.tier = subActive(s) ? "pro" : "free";
   saveSession(s);
   // Remembered separately so a redirect-based payment return (PayPal) can still
@@ -218,7 +322,7 @@ export function signIn(email: string): Session {
   // Record the login in the account database (fire-and-forget: sign-in must
   // never block on it). Without this, logins existed only in this browser's
   // localStorage and there was no way to see who was actually using the app.
-  recordLogin(e);
+  recordLogin(e, source);
   return s;
 }
 
@@ -276,9 +380,19 @@ export function recordLogin(email: string, source?: string): void {
   // trial — was missing from the leads list and from the Google Sheet mirror,
   // which reads /api/subscribe. Two stores, two purposes: accounts answers
   // "who has access", leads answers "who gave us their address".
+  //
+  // Goes through lib/leadQueue, not captureLead directly. This IS the primary
+  // sign-up path now (every AccessModal submission calls signIn -> here), and
+  // it is fire-and-forget by necessity — sign-in must never block on a network
+  // round trip. Fire-and-forget was exactly how a failed capture used to
+  // disappear without a trace: this file's own captureLead answers ok:true
+  // even when the write only reached a per-container memory fallback that
+  // evaporates on the next cold start (confirmed happening in production,
+  // 2026-09-20 — the blob store is suspended, every write 403s). The queue is
+  // what turns "silently gone" into "retried until it actually lands".
   try {
-    void import("./subscribe")
-      .then(m => m.captureLead(normEmail(email), source || "signup"))
+    void import("./leadQueue")
+      .then(m => m.captureLeadDurably(normEmail(email), source || "signup"))
       .catch(() => {});
   } catch { /* never block sign-in */ }
 
@@ -294,7 +408,10 @@ export function recordLogin(email: string, source?: string): void {
         // one is refused outright. Without this the client would keep granting
         // admin locally from ADMIN_EMAILS — which is in the public bundle —
         // and the server check would be decoration.
-        if (data?.deviceRejected) {
+        // An admin address is never signed out by the device check. These are
+        // the accounts that must always be able to get in, and a stale binding
+        // in the store was locking the operator out of their own terminal.
+        if (data?.deviceRejected && !ADMIN_EMAILS.has(normEmail(email))) {
           seatLost = true;
           signOut();
           try { localStorage.setItem("tt_device_locked", "1"); } catch { /* cosmetic */ }
@@ -323,6 +440,8 @@ export function recordLogin(email: string, source?: string): void {
  * paying customers out. Only an explicit `deviceOk: false` evicts.
  */
 export async function deviceStillValid(email: string): Promise<boolean> {
+  // Admins always hold their seat, on every device.
+  if (ADMIN_EMAILS.has(normEmail(email))) return true;
   try {
     const res = await fetch(
       `/api/account?email=${encodeURIComponent(normEmail(email))}&deviceId=${encodeURIComponent(deviceId())}`,
@@ -525,6 +644,7 @@ export function consumeFreeBet(email: string): number {
  */
 export function canAccessTerminal(s: Session | null): boolean {
   if (!s) return false;
+  if (TERMINAL_FREE) return true;
   return subActive(s) || freeBetsRemaining(s.email) > 0;
 }
 
@@ -567,6 +687,11 @@ export function TierProvider({ children }: { children: ReactNode }) {
     // Server is authoritative — reconcile on load so a spoofed localStorage
     // entitlement is corrected before the terminal renders as unlocked.
     syncEntitlement().then((s) => s && setSession(s)).catch(() => {});
+
+    // Retry any email capture that was not confirmed durable — see
+    // lib/leadQueue. Every page load is a free chance to notice the blob
+    // outage has cleared and finally land an address that has been waiting.
+    import("./leadQueue").then(m => m.flushPendingLeads()).catch(() => {});
 
     // One email, one device. Checked on load and every 2 minutes, so a seat
     // taken elsewhere ends this session rather than running both in parallel.

@@ -22,8 +22,14 @@
  * the same file that builds them (see PREFETCH_KEYS in scheduleService).
  */
 
-// Category ids: ATP, WTA, Challenger, ITF Men, ITF Women — mirrors SOFA_CAT_URLS.
-const CATEGORY_IDS = [3, 6, 72, 785, 213];
+// Category ids: ATP, WTA, Challenger, ITF Men, ITF Women, WTA 125, Davis Cup —
+// mirrors SOFA_CAT_URLS. 76 (Davis Cup) and 871 (WTA 125) were added there
+// 2026-09-20 — Davis Cup is SofaScore's own top-level category, entirely
+// separate from ATP (3), which is why every Davis Cup tie was invisible until
+// then regardless of live status. Kept in sync here too: falling behind
+// doesn't break anything (scheduleService fetches them either way), it just
+// means those two categories load a beat slower than the rest.
+const CATEGORY_IDS = [3, 6, 72, 785, 213, 76, 871];
 
 const SCRIPT = `
 (function () {
@@ -35,7 +41,8 @@ const SCRIPT = `
     var urls = ${JSON.stringify(CATEGORY_IDS)}.map(function (c) {
       return "/api/sofa/category/" + c + "/scheduled-events/" + day;
     });
-    urls.push("/api/sofa/sport/tennis/odds/1/" + day);
+    var oddsUrl = "/api/sofa/sport/tennis/odds/1/" + day;
+    urls.push(oddsUrl);
     var store = {};
     urls.forEach(function (u) {
       // Kept as a promise, not a value: the consumer awaits whatever state this
@@ -45,9 +52,19 @@ const SCRIPT = `
           // Record how stale the cache behind this response is, so a warmed
           // request still reports it. Without this the prefetch path silently
           // dropped x-sofa-age-ms and the staleness warning never fired.
+          //
+          // SCORES AND ODDS ARE COUNTED SEPARATELY, and must be. SofaScore
+          // 403s the odds endpoints but still serves scheduled-events, so the
+          // odds file is hours old while every schedule is current. Folding
+          // both into one number made the odds age speak for the whole feed:
+          // the board announced "Challenger and ITF are 20 h old" over fixtures
+          // fetched seconds earlier, and — because that flag also means "don't
+          // trust anything it calls live" — the home page counted 0 live
+          // matches while 8 were in play.
           var a = Number(r.headers.get("x-sofa-age-ms"));
           if (isFinite(a) && a > 0) {
-            window.__ttFeedAge = Math.max(window.__ttFeedAge || 0, a);
+            var key = u === oddsUrl ? "__ttOddsAge" : "__ttFeedAge";
+            window[key] = Math.max(window[key] || 0, a);
           }
           return r.ok ? r.json() : null;
         })

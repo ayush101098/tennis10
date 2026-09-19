@@ -30,6 +30,71 @@
 
 const VERCEL_TOKEN = () => process.env.BLOB_READ_WRITE_TOKEN;
 
+/* ── Local filesystem store ──────────────────────────────────────────────────
+ *
+ * The backend used when running on a developer's machine.
+ *
+ * Why this exists: with only a remote backend, `npm run dev` shares the LIVE
+ * store. Every local page load wrote real accounts and real leads into it — the
+ * test signups from an afternoon's work land in the customer roster — and every
+ * local read paid a network round trip for data the local sofa_proxy already
+ * serves. Worse, when the remote store stopped answering (2026-09-17: the
+ * Vercel Blob store is SUSPENDED, so reads and writes both 403) localhost had
+ * no store at all: sign-ups recorded nowhere, no trial grants, an empty /admin
+ * roster, and the sofa cache gone.
+ *
+ * Same interface, same layout as the blob backend — `<store>/<key>.json` under
+ * .localstore/ — so nothing above this file knows which one it is talking to,
+ * and a document copied between them needs no conversion.
+ */
+const path = require("path");
+const fs = require("fs");
+
+/** True when this is someone's machine rather than a deployment. */
+function isLocal() {
+  return !(process.env.VERCEL || process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+/**
+ * Where local state lives. Under the project, not /tmp, so it survives a
+ * reboot and can be inspected — it is the local answer to "who signed up".
+ * It holds real email addresses, so it is git-ignored.
+ */
+const LOCAL_DIR = () => process.env.LOCAL_STORE_DIR || path.join(process.cwd(), ".localstore");
+
+function fileStore(storeName) {
+  const fileFor = (key) => path.join(LOCAL_DIR(), pathFor(storeName, key));
+  return {
+    async get(key, opts) {
+      try {
+        const text = fs.readFileSync(fileFor(key), "utf8");
+        return opts?.type === "json" ? JSON.parse(text) : text;
+      } catch (e) {
+        // A miss is a normal answer — same contract as the blob backend.
+        if (e && e.code === "ENOENT") return null;
+        throw e;
+      }
+    },
+    async setJSON(key, value) {
+      const f = fileFor(key);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      // Write-then-rename: a crash mid-write leaves the previous document
+      // intact rather than a truncated one. These are whole-document
+      // read-modify-writes, so a torn file loses every account in it.
+      const tmp = `${f}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+      fs.renameSync(tmp, f);
+    },
+    async set(key, value) {
+      const f = fileFor(key);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      const tmp = `${f}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, String(value));
+      fs.renameSync(tmp, f);
+    },
+  };
+}
+
 /* ── Vercel Blob ─────────────────────────────────────────────────────────── */
 
 let vercelBlob = null;
@@ -135,7 +200,26 @@ function isAuthError(e) {
     || /unauthor|forbidden/i.test(m);
 }
 
+/**
+ * A SUSPENDED store also answers 403, and saying "credential rejected" for it
+ * sends whoever is debugging to rotate a token that was never the problem —
+ * which is exactly what happened on 2026-09-17. The suspension is a billing or
+ * usage state on the store itself; no token fixes it, so it must be named.
+ */
+function isSuspended(e) {
+  return /suspended/i.test(String((e && e.message) || e));
+}
+
 function noteFailure(e) {
+  if (isSuspended(e)) {
+    breakerUntil = Date.now() + BREAKER_COOLDOWN_MS;
+    lastError = "the blob store is SUSPENDED — every read and write returns 403. "
+      + "This is a state on the store (usage or billing), not a bad token: "
+      + "rotating BLOB_READ_WRITE_TOKEN will not help. Re-enable the store in "
+      + "the Vercel dashboard, or unset BLOB_READ_WRITE_TOKEN to fall back to "
+      + "Netlify Blobs.";
+    return;
+  }
   if (!isAuthError(e)) return;
   authFailures += 1;
   if (authFailures >= AUTH_FAIL_LIMIT) {
@@ -168,6 +252,13 @@ function guarded(inner) {
 }
 
 function store(name) {
+  // Local machine -> local files. Opt out with USE_REMOTE_STORE=1 when you
+  // genuinely need to read or repair production data from here; that is a
+  // deliberate act, not the default, because the default used to be writing
+  // test signups into the live customer roster.
+  if (isLocal() && process.env.USE_REMOTE_STORE !== "1") {
+    return fileStore(name);
+  }
   if (!configured()) {
     lastError = "no blob backend configured (set NETLIFY_API_TOKEN + SITE_ID, "
       + "or BLOB_READ_WRITE_TOKEN) — running without a cache";
@@ -191,7 +282,9 @@ function store(name) {
 }
 
 const provider = () =>
-  !configured() ? "none" : (VERCEL_TOKEN() ? "vercel-blob" : "netlify-blobs");
+  (isLocal() && process.env.USE_REMOTE_STORE !== "1") ? "local-files"
+  : !configured() ? "none"
+  : (VERCEL_TOKEN() ? "vercel-blob" : "netlify-blobs");
 const storeStatus = () => ({ provider: provider(), lastError });
 
 // blobStatus is the name the diagnostics in sofa-proxy already call. Kept so

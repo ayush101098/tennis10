@@ -1,16 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
-import SchedulePanel from "@/components/SchedulePanel";
+import LiveGrid from "@/components/LiveGrid";
 import BetTracker from "@/components/BetTracker";
-import PricingModal from "@/components/PricingModal";
-import TrialBanner from "@/components/TrialBanner";
+import AccessModal from "@/components/AccessModal";
 import { DonatePrompt } from "@/components/Donate";
 import LiveUsers from "@/components/LiveUsers";
 import { useTier, signIn, signOut, subActive, grantPro } from "@/lib/auth";
-import { planById } from "@/lib/plans";
 import { confirmStripeSession, capturePaypal } from "@/lib/entitlement";
 import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnection } from "@/lib/pmTrading";
 
@@ -32,11 +30,9 @@ export default function TerminalPage() {
   const paid = subActive(session);
   const email = session?.email || "guest";
 
-  const remaining = paid ? null : 0;
-  // The terminal is the expensive page — it polls the board continuously. It
-  // is now for subscribers and trials only; free visitors get the three-match
-  // board on the homepage and a trial offer, instead of a timed preview that
-  // cost a paying customer's bandwidth for every casual visitor.
+  // The terminal is the expensive page — it polls the board continuously — so
+  // it is still mounted only for a session. That session now costs nothing: the
+  // paywall is gone (TERMINAL_FREE) and `paid` means no more than "signed in".
   const expired = !paid;
 
   // Return from Stripe Checkout: confirm the session server-side and unlock.
@@ -98,7 +94,21 @@ export default function TerminalPage() {
   }, [refresh, session?.email]);
 
   // the moment the preview runs out, put the subscription ask in front of them
-  useEffect(() => { if (expired) setPricingOpen(true); }, [expired]);
+  //
+  // …but take it back down once access is confirmed. The session is read from
+  // localStorage in an effect, so the first render of every page load has no
+  // session and looks exactly like an expired one: an admin or a subscriber
+  // landing here got the paywall thrown over their own terminal a frame before
+  // their session loaded, and nothing ever closed it again.
+  //
+  // Only an ASK this effect raised is withdrawn — autoOpened. A trial user
+  // counts as paid, so a blanket "close whenever paid" would slam the modal
+  // shut the instant they clicked KEEP FULL ACCESS.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (expired) { autoOpened.current = true; setPricingOpen(true); }
+    else if (autoOpened.current) { autoOpened.current = false; setPricingOpen(false); }
+  }, [expired]);
 
   return (
     // 100dvh, not 100vh: on iOS the URL bar is counted in vh, so a vh-sized
@@ -137,28 +147,18 @@ export default function TerminalPage() {
           </span>
           <LiveUsers />
           {session && <PmStatus email={session.email} />}
-          {!paid && remaining !== null && (
-            <span className={`font-mono font-bold px-1.5 py-0.5 rounded ${remaining <= 30 ? "bg-terminal-red/20 text-terminal-red" : "bg-terminal-border text-slate-300"}`}
-              title="Free preview time remaining — subscribe for unlimited access">
-              ⏱ {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}
-            </span>
-          )}
           {session ? (
             <>
               <span className="text-terminal-muted">{session.email}</span>
+              {/* No PREVIEW state and nothing to upgrade to: signed in IS full
+                  access. ADMIN stays because it opens /admin, which PRO does
+                  not — that distinction is still real. */}
               <span className={`font-bold px-1.5 py-0.5 rounded ${
                 session.isAdmin ? "bg-terminal-red/20 text-terminal-red"
-                  : paid ? "bg-terminal-green/20 text-terminal-green"
-                  : "bg-terminal-border text-slate-300"
+                  : "bg-terminal-green/20 text-terminal-green"
               }`}>
-                {session.isAdmin ? "ADMIN" : paid ? "PRO" : "PREVIEW"}
+                {session.isAdmin ? "ADMIN" : "FULL ACCESS"}
               </span>
-              {!paid && (
-                <button onClick={() => setPricingOpen(true)}
-                  className="inline-flex items-center min-h-[36px] font-bold px-2.5 rounded bg-terminal-green text-black hover:opacity-90">
-                  GO PRO
-                </button>
-              )}
               <button onClick={() => { signOut(); refresh(); }} className="inline-flex items-center min-h-[36px] px-1 text-terminal-muted hover:text-slate-300">
                 sign out
               </button>
@@ -183,14 +183,6 @@ export default function TerminalPage() {
         </div>
       )}
 
-      {/* Rendered unconditionally: TrialBanner decides for itself — offer,
-          countdown, or nothing for a real subscriber. Gating it on !paid hid
-          the countdown from the trial users it exists for, since a trial IS
-          paid access as far as the tier logic is concerned. */}
-      <div className="px-3 py-2 border-b border-terminal-border shrink-0 empty:hidden">
-        <TrialBanner onStart={() => setPricingOpen(true)} />
-      </div>
-
       {checkoutMsg && (
         <div className="px-4 py-1.5 text-[11px] font-bold text-center bg-terminal-green/15 text-terminal-green border-b border-terminal-green/40 shrink-0">
           {checkoutMsg}
@@ -202,30 +194,35 @@ export default function TerminalPage() {
         {view === "tracker" ? (
           <BetTracker />
         ) : (
-          // Not mounted when locked: an overlay over a polling board still
-          // makes every request, which is exactly the cost being removed.
-          paid ? <SchedulePanel tier="pro" onUpgrade={() => setPricingOpen(true)} /> : <div />
+          // Still not mounted for a signed-out visitor: the board polls
+          // continuously, and an overlay over a polling board makes every one
+          // of those requests for someone who cannot see it.
+          paid ? <LiveGrid /> : <div />
         )}
 
-        {/* ── Preview expired: lock overlay + subscription ask ── */}
-        {expired && !paid && (
+        {/* ── Signed out: the door, not a paywall ──
+            There is no price to state and nothing to upgrade to; the terminal
+            is free (TERMINAL_FREE). All that is left is the email, and this
+            says so rather than dressing a one-field form as a purchase. */}
+        {!paid && (
           <div className="absolute inset-0 z-30 bg-terminal-bg/90 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-center px-6">
-            <div className="text-3xl">⏱</div>
-            <div className="text-sm font-bold text-slate-100">Members only</div>
+            <div className="text-3xl">🎾</div>
+            <div className="text-sm font-bold text-slate-100">Leave an email and the terminal opens</div>
             <div className="text-[11px] text-terminal-muted max-w-[420px]">
-              The terminal — live True P, the edge board, trade tickets and the bet journal —
-              is for subscribers. From <b className="text-slate-200">${planById("day").usd} for a day</b> to
-              ${planById("year").usd} for the year. Today&apos;s matches stay free to view on the home page.
+              Live True P, the edge board, ¼-Kelly staking, hedge signals and the
+              bet journal — all of it, free. The address is your sign-in and how
+              your bet journal follows you between devices.
             </div>
             <button onClick={() => setPricingOpen(true)}
               className="mt-2 px-5 py-2.5 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-              GO PRO — FROM ${planById("day").usd}
+              OPEN THE TERMINAL →
             </button>
           </div>
         )}
       </div>
 
-      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} onDone={refresh} />
+      <AccessModal open={pricingOpen} onClose={() => setPricingOpen(false)} onDone={refresh}
+        variant="signin" source="terminal" />
       <DonatePrompt />
     </div>
   );

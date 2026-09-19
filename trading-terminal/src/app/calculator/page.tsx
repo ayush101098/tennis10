@@ -9,7 +9,7 @@ import { BreadcrumbLd } from "@/components/JsonLd";
 import { fetchScheduleClient } from "@/lib/scheduleService";
 import type { ScheduleData, ScheduledMatch } from "@/lib/scheduleService";
 import { useTier } from "@/lib/auth";
-import PricingModal from "@/components/PricingModal";
+import AccessModal from "@/components/AccessModal";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import {
   portfolioTiers,
@@ -139,7 +139,7 @@ export default function CalculatorPage() {
         </footer>
       </main>
 
-      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} onDone={() => {}} />
+      <AccessModal open={pricingOpen} onClose={() => setPricingOpen(false)} variant="signin" source="calculator" />
     </div>
   );
 }
@@ -249,13 +249,13 @@ function LockedBoard({ onUpgrade }: { onUpgrade: () => void }) {
   return (
     <div className="border border-terminal-border rounded-lg bg-terminal-panel/30 p-8 flex flex-col items-center justify-center gap-3 text-center min-h-[260px]">
       <div className="text-3xl">🔒</div>
-      <div className="text-terminal-green font-bold text-sm">PRO FEATURE</div>
+      <div className="text-terminal-green font-bold text-sm">SIGN IN TO SEE THIS</div>
       <div className="text-[11px] text-slate-300 max-w-[360px] leading-relaxed">
         The live board sizes every match on today&apos;s schedule against the model&apos;s edge for your exact portfolio.
-        The what-if calculator on the right is free — try it with any odds and probability.
+        It is free — it just needs a session. The what-if calculator on the right needs nothing at all.
       </div>
       <button onClick={onUpgrade} className="mt-1 px-4 py-2 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90">
-        GO PRO — $99
+        OPEN THE TERMINAL — FREE
       </button>
     </div>
   );

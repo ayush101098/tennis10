@@ -18,7 +18,6 @@ const { daysForAmount } = require("./_plans");
 
 const STORE = "accounts";
 const KEY = "byEmail";
-const TRIALS_KEY = "trialsByDevice";   // deviceId -> { email, ts }
 const TRIAL_DAYS = 1;   // 24 hours of the full terminal on first sign-up
 /**
  * Free trials are ON: 24 hours of the full terminal, granted once on the first
@@ -28,11 +27,12 @@ const TRIAL_DAYS = 1;   // 24 hours of the full terminal on first sign-up
  * This is the authority — the client flag in src/lib/auth.tsx only controls
  * copy.
  *
- * NOTE ON REACH: trialsByDevice was kept while trials were off, so a device
- * that already used one before 2026-08-14 still cannot take a second. "Everyone"
- * therefore means every new sign-up on a device that has not had a trial — not
- * a fresh 24 hours for people who already used theirs. Clearing trialsByDevice
- * would reset that, at the cost of letting one device farm trials forever.
+ * NOTE ON REACH: the trial is keyed on the EMAIL alone. The device gate
+ * (trialsByDevice) was removed — it meant any browser that had ever taken a
+ * trial could never see the product again, including the operator's own
+ * machines, and it was the single biggest reason a sign-up ended on a paywall.
+ * An invented address defeats this; that is the accepted price of letting
+ * someone look at the terminal without paying first.
  */
 const TRIALS_ENABLED = true;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -198,10 +198,12 @@ exports.handler = async (event) => {
       // deviceOk is true when no device is bound yet, so an account that
       // predates this feature is never locked out of its own seat.
       const deviceOk = !deviceId || !acct.deviceId || acct.deviceId === deviceId;
-      // A protected account on the wrong device is not merely "not the current
-      // seat" — it must be reported as locked so the client drops admin.
-      const locked = !deviceOk && isProtected(email);
-      return reply(200, { active: locked ? false : paidUntil > now, paidUntil: locked ? 0 : paidUntil, deviceOk, locked });
+      // `locked` is gone. It reported a protected account on an unrecognised
+      // device as having no entitlement at all, which is what signed the
+      // operator out of their own terminal on every new browser. deviceOk still
+      // says which device currently holds the seat; entitlement is answered
+      // independently of it.
+      return reply(200, { active: paidUntil > now, paidUntil, deviceOk, locked: false });
     }
     const token = process.env.LEADS_ADMIN_TOKEN;
     const hdr = event.headers["x-admin-token"] || event.headers["X-Admin-Token"];
@@ -284,18 +286,13 @@ exports.handler = async (event) => {
   // logic all treat it like any other — nothing downstream needs to know a
   // trial is special.
   //
-  // Gated on the DEVICE, not just the email: an email costs nothing to invent,
-  // so email-only gating is an unlimited free product. One device, one trial,
-  // ever. Someone determined can still clear storage — this is the same
-  // deterrent trade-off as the single-device seat, not a wall.
-  async function maybeGrantTrial(acct, device) {
+  // Keyed on the EMAIL: one address, one trial, ever. It is not gated on the
+  // device any more — that gate turned every returning visitor, and every
+  // cleared browser, into someone who could never see the product again.
+  function maybeGrantTrial(acct) {
     if (!TRIALS_ENABLED) return false;                // members only — see TRIALS_ENABLED
     if (acct.trialStartedAt) return false;            // already had one
     if (acct.payments.length || acct.grants.length) return false;  // paying or comped
-    if (!device) return false;                        // no device id, no trial
-    let trials = {};
-    try { trials = (await s.get(TRIALS_KEY, { type: "json" })) || {}; } catch { /* fall through */ }
-    if (trials[device]) return false;                 // this device already used its trial
     acct.trialStartedAt = now;
     acct.grants.push({
       until: now + TRIAL_DAYS * DAY,
@@ -303,8 +300,6 @@ exports.handler = async (event) => {
       by: "system",
       ts: now,
     });
-    trials[device] = { email: acct.email, ts: now };
-    try { await s.setJSON(TRIALS_KEY, trials); } catch { /* best effort */ }
     return true;
   }
 
@@ -319,49 +314,47 @@ exports.handler = async (event) => {
   if (!db[email]) db[email] = blank(email, now);
   const deviceId = String(body.deviceId || "").slice(0, 64);
   let evicted = false;
-  let deviceRejected = false;
 
   if (deviceId) {
     const bound = db[email].deviceId;
     const changing = bound && bound !== deviceId;
 
-    if (changing && isProtected(email)) {
-      // PROTECTED (admin) accounts are FIRST-device-wins, not last.
+    if (changing) {
+      // Protected (admin) accounts used to be FIRST-device-wins: a new device
+      // was refused with a 403 and the binding never moved, so a new browser,
+      // a cleared profile or a second machine locked the operator out of their
+      // own terminal with no recovery short of hand-editing the store. Access
+      // now always follows the latest sign-in, for every account.
       //
-      // The admin addresses ship inside the public JavaScript bundle — they
-      // have to, the client checks them — so anyone can read one and type it
-      // in. Under the normal last-device-wins rule that stranger would take
-      // the seat and the real owner would be signed out of their own account.
-      // For these accounts a new device is refused instead, and the binding
-      // does not move. Recovery is deliberate: clear deviceId in the store.
-      deviceRejected = true;
-      db[email].deviceRejections = (db[email].deviceRejections || 0) + 1;
-      db[email].lastRejectedAt = now;
-    } else {
-      if (changing) {
-        evicted = true;
-        db[email].deviceChangedAt = now;
-        db[email].deviceChanges = (db[email].deviceChanges || 0) + 1;
-      }
-      db[email].deviceId = deviceId;
-      db[email].deviceSeenAt = now;
+      // What this gives up: the admin addresses ship in the public bundle, so
+      // anyone who reads one and types it in now gets the PRO view for free.
+      // What it does NOT give up is the operator console — /admin's data is
+      // behind LEADS_ADMIN_TOKEN, which is never in the bundle, so a stranger
+      // typing the address still sees no leads, no revenue and no grant button
+      // that works. The proper fix is to stop deriving admin from a list of
+      // emails at all and require that token to claim the flag.
+      //
+      // The change is still counted: deviceChanges is what /admin reads to spot
+      // a shared password, and an admin is not reported as evicted, since
+      // nothing was taken from them.
+      evicted = !isProtected(email);
+      db[email].deviceChangedAt = now;
+      db[email].deviceChanges = (db[email].deviceChanges || 0) + 1;
     }
-  }
-
-  if (deviceRejected) {
-    await save(s, db);
-    return reply(403, {
-      ok: false,
-      email,
-      deviceRejected: true,
-      reason: "This account is locked to another device.",
-    });
+    db[email].deviceId = deviceId;
+    db[email].deviceSeenAt = now;
   }
   db[email].lastLogin = now;
   db[email].loginCount += 1;
   if (body.source && !db[email].source) db[email].source = String(body.source);
 
-  const trialGranted = s ? await maybeGrantTrial(db[email], deviceId) : false;
+  // Still conditional on the store, but for the opposite reason to before: a
+  // grant that cannot be WRITTEN cannot be remembered either, so issuing one
+  // with no backend would hand the same address a fresh 24 hours on every
+  // sign-in, forever. The customer does not lose by this — the client grants
+  // the free day itself (startTrial in src/lib/auth.tsx) and keeps its own
+  // record — so a store outage costs us bookkeeping, not the first impression.
+  const trialGranted = s ? maybeGrantTrial(db[email]) : false;
 
   db[email].paidUntil = recompute(db[email]);
   await save(s, db);

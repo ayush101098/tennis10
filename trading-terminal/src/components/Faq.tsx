@@ -1,8 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { PLANS, planById } from "@/lib/plans";
-import { UPI_ID, USD_INR } from "@/lib/auth";
 
 /**
  * FAQ accordion.
@@ -19,15 +17,13 @@ import { UPI_ID, USD_INR } from "@/lib/auth";
 
 interface QA { q: string; a: React.ReactNode }
 
-const day = planById("day"), month = planById("month"), year = planById("year");
-
 const FAQS: QA[] = [
   {
     q: "What is Tennis Alpha?",
-    a: <>A live win-probability model for professional tennis. A neural network trained on
-      41,750 tour matches sets the pre-match prior; a score-conditioned Markov engine re-prices
-      the match as the score changes. That probability is compared against de-vigged bookmaker
-      odds to find edge, and turned into a ¼-Kelly stake. It covers ATP, WTA, Challenger, W125
+    a: <>A live win chance for every professional tennis match, updated as the points are
+      played, alongside the moments that decide matches — repeated break points, a player
+      who has just been broken, a set getting away from someone. Where a market exists we
+      show what it is charging, so you can see when the two disagree. It covers ATP, WTA, Challenger, W125
       and ITF — men&apos;s and women&apos;s — every match day.</>,
   },
   {
@@ -67,51 +63,27 @@ const FAQS: QA[] = [
   },
   {
     q: "What does it cost?",
-    a: <>{PLANS.map((p, i) => (
-      <span key={p.id}>{i > 0 ? " · " : ""}<b>${p.usd}</b> {p.label.toLowerCase()}</span>
-    ))}. No auto-charging — access simply lapses unless you pay again.</>,
+    a: <>Nothing. The terminal is free — the whole of it, with no plan, no card and
+      no trial that runs out. Leave an email and it opens.</>,
   },
   {
-    q: `Is there a free trial?`,
-    a: <>Not at the moment. The terminal is for subscribers only. You can see the
-      model working on the home page before you pay — one live match, with its
-      probability — and the day pass exists so you can try the full thing for a
-      day without committing to a month.</>,
+    q: "What is the email for, then?",
+    a: <>It is your sign-in, and it is how your bet journal follows you from your
+      laptop to your phone. It also tells us who is actually using this, which is
+      the only thing we ask for in return. It is not sold or passed on, and one
+      line to the address in the footer removes it.</>,
   },
   {
-    q: "What do I get for free?",
-    a: <>One of today&apos;s matches on the home page, with the model&apos;s probability
-      on it. Everything else — the full board, edge against the book, ¼-Kelly stakes,
-      live re-pricing, hedge timing and the bet journal — is behind the subscription.</>,
-  },
-  {
-    q: "How do I pay?",
-    a: <>Three ways: <b>UPI</b> (scan the QR or pay <span className="mono">{UPI_ID}</span> from
-      any UPI app), <b>PayPal</b>, or <b>crypto</b> (ETH, USDC, USDT or DAI on Ethereum
-      mainnet). Crypto unlocks automatically once the transaction confirms on-chain. UPI and
-      PayPal are confirmed by hand, so message us on X or Telegram after paying and access goes
-      on the same day.</>,
-  },
-  {
-    q: "Can I pay with UPI from India?",
-    a: <>Yes. The payment screen shows a UPI QR with the amount already filled in, and the ID
-      <span className="mono"> {UPI_ID}</span> if you would rather type it — GPay, PhonePe, Paytm
-      or any UPI app works. The rupee amount is converted at ₹{USD_INR} to the dollar, which is
-      a display rate rather than a live one, so it may sit slightly above the day&apos;s market
-      rate.</>,
-  },
-  {
-    q: "How long until my access is switched on after paying?",
-    a: <>Crypto is automatic — paste the transaction hash and the terminal unlocks once it
-      confirms on-chain. UPI and PayPal have no callback we can verify, so they are switched on
-      by hand: message us on X or Telegram with the name you paid under and it is done the same
-      day. If you want access the instant you pay, use crypto.</>,
+    q: "What do I get without signing in?",
+    a: <>Today&apos;s board — every live and upcoming match across ATP, WTA, Challenger
+      and ITF, with the model&apos;s probability on each. What stays blurred is the
+      actionable layer: edge against the market, ¼-Kelly stakes, live re-pricing,
+      hedge timing and the bet journal. An email lifts it.</>,
   },
   {
     q: "Can I use one account on several devices?",
-    a: <>One subscription covers one device. Signing in somewhere else moves your access to
-      that device and signs the previous one out — so changing phone is fine, but sharing an
-      account with a friend means the two of you keep logging each other out.</>,
+    a: <>Yes. Sign in with the same address anywhere — the account follows the email,
+      and your bet journal comes with it.</>,
   },
   {
     q: "Is sports betting legal where I am?",
@@ -158,7 +130,7 @@ export default function Faq() {
     <section id="faq" className="marketing px-4 sm:px-6 pb-14 max-w-[820px] mx-auto">
       <h2 className="text-center text-lg font-bold text-slate-100 mb-1">Frequently asked questions</h2>
       <p className="text-center text-[11px] text-terminal-muted mb-6">
-        Methodology, pricing and the limits of what a model can tell you.
+        Methodology, access and the limits of what a model can tell you.
       </p>
       <div className="border border-terminal-border rounded-lg overflow-hidden bg-terminal-panel/20">
         {FAQS.map((qa, i) => (

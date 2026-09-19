@@ -6,8 +6,10 @@
 const LIVE_POLL_MS = 15_000;
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { hasStat } from "@/lib/scheduleService";
 import { fetchScheduleClient, refreshLiveMatches, probToOdds, kellyFraction,
-  qualifies, quarterKellyStake, EDGE_FLOOR, tourRank, FEED_STALE_MS } from "@/lib/scheduleService";
+  qualifies, quarterKellyStake, EDGE_FLOOR, tourRank, FEED_STALE_MS,
+  ODDS_STALE_MS } from "@/lib/scheduleService";
 import type { ScheduledMatch, ScheduleData, BreakHoldSignals } from "@/lib/scheduleService";
 import { resolveTourAvgs } from "@/lib/breakHoldEngine";
 import PointTracker from "@/components/PointTracker";
@@ -15,6 +17,8 @@ import ValueBoard from "@/components/ValueBoard";
 import TradeTicket, { type TicketTarget } from "@/components/TradeTicket";
 import { usePolymarket } from "@/hooks/usePolymarket";
 import { fixtureKey } from "@/lib/polymarket";
+import { pmDecimalOdds } from "@/lib/pmValue";
+import LiveSignal from "@/components/LiveSignal";
 
 export type PanelTier = "public" | "free" | "pro" | "preview";
 
@@ -217,7 +221,7 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
             onSelectMatch={m => { setSelectedId(m.id); setView("matches"); onSelectMatch?.(m); }}
           />
         ) : (
-          <ProLock onUpgrade={onUpgrade} feature="The Value Board ranks every match on the schedule by model edge vs the de-vigged bookmaker market, with ¼-Kelly stakes and hedge alerts." />
+          <ProLock onUpgrade={onUpgrade} feature="The Value Board ranks every match on the schedule by model edge vs the de-vigged market, with ¼-Kelly stakes and hedge alerts." />
         )
       )}
 
@@ -229,7 +233,8 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
           {loading && !data && (
             <div className="flex items-center justify-center h-full text-terminal-muted text-xs animate-pulse">Loading ESPN data…</div>
           )}
-          <StaleBanner ageMs={data?.feedAgeMs} fallback={data?.fallbackActive} />
+          <StaleBanner ageMs={data?.feedAgeMs} fallback={data?.fallbackActive}
+            oddsAgeMs={data?.oddsAgeMs} oddsDown={data?.oddsDown} />
           {Object.entries(grouped).map(([t, ms]) => (
             <div key={t}>
               <div className="px-3 py-1 bg-terminal-panel/50 border-b border-terminal-border sticky top-0 z-10 flex items-center gap-2">
@@ -291,7 +296,7 @@ export default function SchedulePanel({ onSelectMatch, tier = "pro", onUpgrade }
               ) : isPro ? (
                 <PointTracker match={selected} />
               ) : (
-                <ProLock onUpgrade={onUpgrade} feature="The point-by-point tracker with live momentum and trading signals is a Pro feature." />
+                <ProLock onUpgrade={onUpgrade} feature="The point-by-point tracker, live momentum and the trading signals that run off it." />
               )}
             </div>
           </div>
@@ -311,15 +316,29 @@ function ProLock({ feature, onUpgrade }: { feature: string; onUpgrade?: () => vo
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center h-full">
       <div className="text-3xl">🔒</div>
-      <div className="text-terminal-green font-bold text-sm">PRO FEATURE</div>
+      {/* Nothing here costs anything any more (TERMINAL_FREE) — the lock is
+          on being signed OUT, not on being unpaid. Naming a price over a free
+          feature loses the person who would have given an email. */}
+      <div className="text-terminal-green font-bold text-sm">SIGN IN TO SEE THIS</div>
       <div className="text-[11px] text-slate-300 max-w-[360px] leading-relaxed">{feature}</div>
       <button onClick={onUpgrade}
         className="mt-2 px-4 py-2 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 transition">
-        UNLOCK FULL TERMINAL — $99
+        OPEN THE TERMINAL — FREE
       </button>
     </div>
   );
 }
+
+/**
+ * Hedge alerts are opt-in.
+ *
+ * They are only meaningful against a position that exists, and nothing in the
+ * app knows whether one does — the alert was being shown on every live match to
+ * every viewer. Kept behind a flag rather than deleted, because the trigger
+ * logic in breakHoldEngine is sound and belongs in the paid calculator, where
+ * the user has told us what they are holding.
+ */
+const SHOW_HEDGE = false;
 
 export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
   match: ScheduledMatch; tier?: PanelTier; onUpgrade?: () => void;
@@ -338,20 +357,51 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
   const p2Prob = liveTrueP?.p2MatchProb ?? m.p2_win_prob;
   const probSource = liveTrueP ? `Live Markov · ${m.tour}` : m.prob_method;
 
-  const [odds1, setOdds1] = useState(() => bookOdds?.p1 || probToOdds(p1Prob));
-  const [odds2, setOdds2] = useState(() => bookOdds?.p2 || probToOdds(p2Prob));
-  const [bankroll, setBankroll] = useState(1000);
-  const [ticket, setTicket] = useState<TicketTarget | null>(null);
   const pmIndex = usePolymarket();
   const pmFixture = pmIndex.get(fixtureKey(m.player1, m.player2));
 
-  // Recalc when match changes — prefer real bookmaker odds
+  /**
+   * The market price this panel measures its edge against.
+   *
+   * Order matters. The bookmaker feed is preferred when it is live, but
+   * SofaScore has been 403ing its odds endpoints and stale quotes are now
+   * refused upstream (see ODDS_STALE_MS), so on most matches bookOdds is simply
+   * absent. The old fallback was probToOdds(p1Prob) — the model's own number
+   * turned back into odds, which prices the model against itself and makes
+   * every edge read zero. Polymarket is live and is where these trades
+   * actually execute, so it takes that place; the model-derived number stays
+   * only as the last resort that keeps the inputs populated.
+   */
+  const pmOdds = pmDecimalOdds(pmFixture, m.player1, m.player2);
+  const marketOdds = bookOdds ?? pmOdds;
+  const oddsSource: "book" | "pm" | "model" = bookOdds ? "book" : pmOdds ? "pm" : "model";
+
+  const [odds1, setOdds1] = useState(() => marketOdds?.p1 || probToOdds(p1Prob));
+  const [odds2, setOdds2] = useState(() => marketOdds?.p2 || probToOdds(p2Prob));
+  const [bankroll, setBankroll] = useState(1000);
+  const [ticket, setTicket] = useState<TicketTarget | null>(null);
+  /**
+   * Whether a REAL price backs the numbers on screen — a live market, or odds
+   * the viewer typed in by hand. Without either, odds1/odds2 default to
+   * probToOdds(p1Prob): the model's own probability, round-tripped back into
+   * odds. Feeding that into "Edge" and "Value bet signals" produced a specific-
+   * looking number — "+0.2%" — that is pure rounding noise from the round trip,
+   * not a discovered opportunity, on a match with no market at all. The section
+   * header already said "NO LIVE MARKET"; the numbers below it did not agree.
+   */
+  const [oddsEdited, setOddsEdited] = useState(false);
+  const hasRealMarket = oddsSource !== "model" || oddsEdited;
+
+  // Recalc when the match or the market moves. Keyed on the odds VALUES, not
+  // on the fixture object: usePolymarket rebuilds its index every 60s, so
+  // depending on the object would overwrite a hand-typed price once a minute
+  // even when the market had not moved.
   useEffect(() => {
-    const bk = m.liveScore?.bookmakerOdds || m.prematchOdds;
-    setOdds1(bk?.p1 || probToOdds(p1Prob));
-    setOdds2(bk?.p2 || probToOdds(p2Prob));
+    setOdds1(marketOdds?.p1 || probToOdds(p1Prob));
+    setOdds2(marketOdds?.p2 || probToOdds(p2Prob));
+    setOddsEdited(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [m.id, p1Prob, p2Prob, m.liveScore?.bookmakerOdds, m.prematchOdds]);
+  }, [m.id, p1Prob, p2Prob, marketOdds?.p1, marketOdds?.p2]);
 
   const imp1 = odds1 > 0 ? 1 / odds1 : 0;
   const imp2 = odds2 > 0 ? 1 / odds2 : 0;
@@ -388,8 +438,16 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
         )}
       </div>
 
-      {/* ═══ HEDGE ALERT ═══ */}
-      {pro && hedge?.shouldHedge && (
+      {/* ═══ WHAT IS HAPPENING — the answer, before any of the workings ═══ */}
+      <LiveSignal match={m} />
+
+      {/* ═══ HEDGE ALERT ═══
+          Off the default view. Hedging is a position-management tool for
+          someone who already holds a trade; showing it to everyone who opens a
+          match put the most alarming thing on the page in front of the people
+          least able to act on it. It now appears only when hedge alerts are
+          switched on — see SHOW_HEDGE. */}
+      {SHOW_HEDGE && pro && hedge?.shouldHedge && (
         <div className={`p-2 rounded border ${
           hedge.urgency === "IMMEDIATE" ? "border-terminal-red bg-terminal-red/15 animate-pulse"
             : "border-terminal-yellow bg-terminal-yellow/10"
@@ -432,20 +490,25 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
         </div>
         <div className="text-[9px] text-terminal-muted mt-1 text-center">
           Method: {probSource} · Fair odds: {probToOdds(p1Prob).toFixed(2)} / {probToOdds(p2Prob).toFixed(2)}
-          {bookOdds && <span className="text-terminal-yellow"> · Book: {bookOdds.p1.toFixed(2)} / {bookOdds.p2.toFixed(2)}</span>}
+          {/* Name the venue the edge is measured against. "Book" on a number
+              that came from Polymarket — or from the model itself — is how
+              someone ends up staking against a price that does not exist. */}
+          {oddsSource === "book" && <span className="text-terminal-yellow"> · Book: {marketOdds!.p1.toFixed(2)} / {marketOdds!.p2.toFixed(2)}</span>}
+          {oddsSource === "pm" && <span className="text-terminal-cyan"> · Polymarket: {marketOdds!.p1.toFixed(2)} / {marketOdds!.p2.toFixed(2)}</span>}
+          {oddsSource === "model" && <span className="text-terminal-muted"> · No live market — edge needs a price</span>}
           {m.p1_rank > 0 && m.p2_rank > 0 && ` · Rank #${m.p1_rank} vs #${m.p2_rank}`}
         </div>
       </Section>
 
-      {/* ═══ PRO-ONLY: edge, Kelly, live signals ═══ */}
+      {/* ═══ Signed out: edge, Kelly, live signals ═══ */}
       {!showPro && (
         <div className="border border-terminal-green/30 bg-terminal-green/5 rounded p-3 text-center space-y-1.5">
           <div className="text-sm">🔒</div>
-          <div className="text-[10px] font-bold text-terminal-green">EDGE vs BOOKMAKER · KELLY STAKES · LIVE SIGNALS · HEDGE TIMING</div>
-          <div className="text-[9px] text-terminal-muted">Live score-conditioned True P, de-vigged market edge, ¼-Kelly staking, break/hold engine and hedge alerts are Pro features.</div>
+          <div className="text-[10px] font-bold text-terminal-green">EDGE vs MARKET · KELLY STAKES · LIVE SIGNALS · HEDGE TIMING</div>
+          <div className="text-[9px] text-terminal-muted">Live score-conditioned True P, de-vigged market edge, ¼-Kelly staking, break/hold engine and hedge alerts. All free — they just need a session.</div>
           <button onClick={onUpgrade}
             className="mt-1 px-3 py-1.5 rounded bg-terminal-green text-black text-[10px] font-bold hover:opacity-90 transition">
-            UNLOCK — $99
+            OPEN — FREE
           </button>
         </div>
       )}
@@ -453,36 +516,55 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
       {/* Odds input + edge calculator */}
       {showPro && (
       <Locked on={preview} onUpgrade={onUpgrade}>
-      <Section title="BOOKMAKER ODDS & EDGE">
+      {/* Named for the venue actually behind the numbers. With the bookmaker
+          feed down these are Polymarket prices, and a heading that says
+          "bookmaker" over them invites someone to go looking for a book that
+          is quoting 4.44 and find nothing. */}
+      <Section title={oddsSource === "pm" ? "POLYMARKET ODDS & EDGE"
+        : oddsSource === "model" ? "ODDS & EDGE — NO LIVE MARKET"
+        : "BOOKMAKER ODDS & EDGE"}>
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div>
             <label className="text-[9px] text-terminal-muted block mb-0.5">{m.player1} odds</label>
             <input type="number" step="0.01" min="1.01" value={odds1}
-              onChange={e => setOdds1(parseFloat(e.target.value) || 1.01)}
+              onChange={e => { setOdds1(parseFloat(e.target.value) || 1.01); setOddsEdited(true); }}
               className="w-full bg-terminal-bg border border-terminal-border rounded px-2 py-1 text-[11px] text-slate-200 focus:border-terminal-cyan outline-none" />
           </div>
           <div>
             <label className="text-[9px] text-terminal-muted block mb-0.5">{m.player2} odds</label>
             <input type="number" step="0.01" min="1.01" value={odds2}
-              onChange={e => setOdds2(parseFloat(e.target.value) || 1.01)}
+              onChange={e => { setOdds2(parseFloat(e.target.value) || 1.01); setOddsEdited(true); }}
               className="w-full bg-terminal-bg border border-terminal-border rounded px-2 py-1 text-[11px] text-slate-200 focus:border-terminal-cyan outline-none" />
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[10px]">
-          <KV label="Implied P1" value={pct(imp1)} />
-          <KV label="Implied P2" value={pct(imp2)} />
-          <KV label="Edge P1" value={edgeFmt(edge1)} color={edge1 > 0 ? "green" : edge1 < -0.02 ? "red" : "muted"} />
-          <KV label="Edge P2" value={edgeFmt(edge2)} color={edge2 > 0 ? "green" : edge2 < -0.02 ? "red" : "muted"} />
-          <KV label="Overround" value={pct(vig)} color={vig > 0.08 ? "red" : "muted"} />
-          <KV label="Margin" value={`${(vig * 100).toFixed(1)}%`} />
-        </div>
+        {hasRealMarket ? (
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[10px]">
+            <KV label="Implied P1" value={pct(imp1)} />
+            <KV label="Implied P2" value={pct(imp2)} />
+            <KV label="Edge P1" value={edgeFmt(edge1)} color={edge1 > 0 ? "green" : edge1 < -0.02 ? "red" : "muted"} />
+            <KV label="Edge P2" value={edgeFmt(edge2)} color={edge2 > 0 ? "green" : edge2 < -0.02 ? "red" : "muted"} />
+            <KV label="Overround" value={pct(vig)} color={vig > 0.08 ? "red" : "muted"} />
+            <KV label="Margin" value={`${(vig * 100).toFixed(1)}%`} />
+          </div>
+        ) : (
+          // No real price behind the inputs above — they are the model's own
+          // number, round-tripped. Showing "Edge +0.2%" here would be showing
+          // rounding noise as a finding. Paste a real price in and it computes.
+          <div className="text-[10px] text-terminal-muted leading-relaxed">
+            No market to measure against. The fields above show our estimate as
+            odds — type in a real price you see elsewhere and the edge below
+            will use it.
+          </div>
+        )}
       </Section>
       </Locked>
       )}
 
-      {/* Value bet signals */}
-      {showPro && (
+      {/* Value bet signals — withheld with no real market, for the same
+          reason: without a price to compare against, there is no edge to
+          signal, only the model disagreeing with itself. */}
+      {showPro && hasRealMarket && (
       <Locked on={preview} onUpgrade={onUpgrade}>
       <Section title="VALUE BET SIGNALS">
         <ValueSignal label={`${m.player1} ML`} edge={edge1} odds={odds1} prob={p1Prob} />
@@ -592,8 +674,11 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
         </Section>
       )}
 
-      {/* Live match statistics */}
-      {pro && m.status === "live" && m.liveScore?.stats && (
+      {/* Live match statistics — only what the feed actually reported.
+          A 0 here used to mean "not sent": the block rendered 0% first serve
+          next to 3 aces, which is not a scoreline tennis can produce, and read
+          as a live stat because it was laid out like one. */}
+      {pro && m.status === "live" && m.liveScore?.stats?.provided?.length ? (
         <Section title="📊 LIVE STATS">
           <div className="grid grid-cols-3 gap-y-1 text-[10px] text-center">
             <span className="text-terminal-muted text-left">Stat</span>
@@ -601,32 +686,32 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
             <span className="text-slate-300 font-bold">{m.player2.split(' ').pop()}</span>
 
             <span className="text-terminal-muted text-left">Aces</span>
-            <StatVal v={m.liveScore.stats.p1_aces} o={m.liveScore.stats.p2_aces} />
-            <StatVal v={m.liveScore.stats.p2_aces} o={m.liveScore.stats.p1_aces} />
+            <StatVal v={m.liveScore.stats.p1_aces} o={m.liveScore.stats.p2_aces} on={hasStat(m.liveScore.stats, "Aces")} />
+            <StatVal v={m.liveScore.stats.p2_aces} o={m.liveScore.stats.p1_aces} on={hasStat(m.liveScore.stats, "Aces")} />
 
             <span className="text-terminal-muted text-left">Double Faults</span>
-            <StatVal v={m.liveScore.stats.p1_doubleFaults} o={m.liveScore.stats.p2_doubleFaults} lower />
-            <StatVal v={m.liveScore.stats.p2_doubleFaults} o={m.liveScore.stats.p1_doubleFaults} lower />
+            <StatVal v={m.liveScore.stats.p1_doubleFaults} o={m.liveScore.stats.p2_doubleFaults} lower on={hasStat(m.liveScore.stats, "Double faults")} />
+            <StatVal v={m.liveScore.stats.p2_doubleFaults} o={m.liveScore.stats.p1_doubleFaults} lower on={hasStat(m.liveScore.stats, "Double faults")} />
 
             <span className="text-terminal-muted text-left">1st Serve %</span>
-            <StatVal v={m.liveScore.stats.p1_firstServePercent} o={m.liveScore.stats.p2_firstServePercent} pct />
-            <StatVal v={m.liveScore.stats.p2_firstServePercent} o={m.liveScore.stats.p1_firstServePercent} pct />
+            <StatVal v={m.liveScore.stats.p1_firstServePercent} o={m.liveScore.stats.p2_firstServePercent} pct on={hasStat(m.liveScore.stats, "First serve percentage")} />
+            <StatVal v={m.liveScore.stats.p2_firstServePercent} o={m.liveScore.stats.p1_firstServePercent} pct on={hasStat(m.liveScore.stats, "First serve percentage")} />
 
             <span className="text-terminal-muted text-left">1st Serve Won</span>
-            <StatVal v={m.liveScore.stats.p1_firstServeWon} o={m.liveScore.stats.p2_firstServeWon} pct />
-            <StatVal v={m.liveScore.stats.p2_firstServeWon} o={m.liveScore.stats.p1_firstServeWon} pct />
+            <StatVal v={m.liveScore.stats.p1_firstServeWon} o={m.liveScore.stats.p2_firstServeWon} pct on={hasStat(m.liveScore.stats, "First serve points won")} />
+            <StatVal v={m.liveScore.stats.p2_firstServeWon} o={m.liveScore.stats.p1_firstServeWon} pct on={hasStat(m.liveScore.stats, "First serve points won")} />
 
             <span className="text-terminal-muted text-left">2nd Serve Won</span>
-            <StatVal v={m.liveScore.stats.p1_secondServeWon} o={m.liveScore.stats.p2_secondServeWon} pct />
-            <StatVal v={m.liveScore.stats.p2_secondServeWon} o={m.liveScore.stats.p1_secondServeWon} pct />
+            <StatVal v={m.liveScore.stats.p1_secondServeWon} o={m.liveScore.stats.p2_secondServeWon} pct on={hasStat(m.liveScore.stats, "Second serve points won")} />
+            <StatVal v={m.liveScore.stats.p2_secondServeWon} o={m.liveScore.stats.p1_secondServeWon} pct on={hasStat(m.liveScore.stats, "Second serve points won")} />
 
             <span className="text-terminal-muted text-left">Break Points</span>
-            <span className="text-slate-200 font-mono">{m.liveScore.stats.p1_breakPointsConverted}</span>
-            <span className="text-slate-200 font-mono">{m.liveScore.stats.p2_breakPointsConverted}</span>
+            <span className="text-slate-200 font-mono">{hasStat(m.liveScore.stats, "Break points won") ? m.liveScore.stats.p1_breakPointsConverted : "—"}</span>
+            <span className="text-slate-200 font-mono">{hasStat(m.liveScore.stats, "Break points won") ? m.liveScore.stats.p2_breakPointsConverted : "—"}</span>
 
             <span className="text-terminal-muted text-left">Points Won</span>
-            <StatVal v={m.liveScore.stats.p1_totalPointsWon} o={m.liveScore.stats.p2_totalPointsWon} />
-            <StatVal v={m.liveScore.stats.p2_totalPointsWon} o={m.liveScore.stats.p1_totalPointsWon} />
+            <StatVal v={m.liveScore.stats.p1_totalPointsWon} o={m.liveScore.stats.p2_totalPointsWon} on={hasStat(m.liveScore.stats, "Total points won")} />
+            <StatVal v={m.liveScore.stats.p2_totalPointsWon} o={m.liveScore.stats.p1_totalPointsWon} on={hasStat(m.liveScore.stats, "Total points won")} />
           </div>
           {(() => {
             const s = m.liveScore!.stats!;
@@ -658,7 +743,7 @@ export function EdgePanel({ match: m, tier = "pro", onUpgrade }: {
             );
           })()}
         </Section>
-      )}
+      ) : null}
 
       {/* ═══ BREAK/HOLD SIGNAL ENGINE ═══ */}
       {pro && m.status === "live" && m.liveScore?.breakHoldSignals && (
@@ -1032,7 +1117,12 @@ function KV({ label, value, color }: { label: string; value: string; color?: str
 }
 
 /** Stat value cell — highlights who has the better stat (green = better, red = worse) */
-function StatVal({ v, o, lower, pct: isPct }: { v: number; o: number; lower?: boolean; pct?: boolean }) {
+function StatVal({ v, o, lower, pct: isPct, on = true }: {
+  v: number; o: number; lower?: boolean; pct?: boolean;
+  /** False when the feed never reported this stat — the 0 is a default. */
+  on?: boolean;
+}) {
+  if (!on) return <span className="font-mono text-terminal-muted" title="Not reported by the live feed">—</span>;
   const better = lower ? v < o : v > o;
   const worse = lower ? v > o : v < o;
   const color = better ? "text-terminal-green font-bold" : worse ? "text-terminal-red" : "text-slate-200";
@@ -1049,16 +1139,50 @@ function StatVal({ v, o, lower, pct: isPct }: { v: number; o: number; lower?: bo
  * is the one failure mode this product must never hide, so it says so here
  * instead of letting someone stake against a number that stopped moving.
  */
-function StaleBanner({ ageMs, fallback }: { ageMs?: number; fallback?: boolean }) {
-  if (!ageMs || ageMs < FEED_STALE_MS) return null;
-  const mins = Math.round(ageMs / 60000);
-  const age = mins < 90 ? `${mins} min` : `${Math.round(mins / 60)} h`;
+function StaleBanner({ ageMs, fallback, oddsAgeMs, oddsDown }: {
+  ageMs?: number; fallback?: boolean; oddsAgeMs?: number; oddsDown?: boolean;
+}) {
+  const fmt = (ms: number) => {
+    const mins = Math.round(ms / 60000);
+    return mins < 90 ? `${mins} min` : `${Math.round(mins / 60)} h`;
+  };
+  const scoresStale = !!ageMs && ageMs >= FEED_STALE_MS;
+  const oddsStale = (!!oddsAgeMs && oddsAgeMs >= ODDS_STALE_MS) || !!oddsDown;
+
+  // The odds feed and the score feed fail independently — SofaScore 403s the
+  // odds endpoints for days at a time while the scoreboard runs normally — so
+  // this reports whichever is actually stale. It used to report one age for
+  // both, which meant a dead odds file put a "Challenger and ITF are 20 h old"
+  // warning over fixtures fetched seconds earlier. A warning that is wrong
+  // about what it is warning about gets ignored, including on the day the
+  // scores really are stale.
+  if (!scoresStale && !oddsStale) return null;
+
+  if (!scoresStale) {
+    return (
+      <div className="px-3 py-2 border-b border-terminal-yellow/40 bg-terminal-yellow/10">
+        <div className="text-[11px] font-bold text-terminal-yellow">
+          {oddsDown
+            ? "⚠ Bookmaker feed down — pricing from Polymarket only"
+            : `⚠ No live market — bookmaker odds are ${fmt(oddsAgeMs!)} old`}
+        </div>
+        <div className="text-[10px] text-terminal-muted mt-0.5">
+          Scores and model probabilities are live. The bookmaker odds feed is not,
+          so its prices are withheld rather than shown at their last value. Edges
+          below are measured against Polymarket, which is where these trades
+          execute; a match with no Polymarket market shows no edge at all.
+        </div>
+      </div>
+    );
+  }
+
+  const age = fmt(ageMs!);
   return (
     <div className="px-3 py-2 border-b border-terminal-yellow/40 bg-terminal-yellow/10">
       <div className="text-[11px] font-bold text-terminal-yellow">
         {fallback
           ? "⚠ Primary feed down — ATP & WTA on backup source"
-          : `⚠ Feed delayed — data is ${age} old`}
+          : `⚠ Feed delayed — scores are ${age} old`}
       </div>
       <div className="text-[10px] text-terminal-muted mt-0.5">
         {fallback ? (
@@ -1097,8 +1221,9 @@ function TourBadge({ t }: { t?: string }) {
     "ITF W": "text-rose-300 bg-rose-300/10",
     CHALLENGER: "text-amber-400 bg-amber-400/10",
     W125: "text-fuchsia-400 bg-fuchsia-400/10",
+    "DAVIS CUP": "text-sky-400 bg-sky-400/10",
   };
-  const shortLabel: Record<string, string> = { CHALLENGER: "CHAL" };
+  const shortLabel: Record<string, string> = { CHALLENGER: "CHAL", "DAVIS CUP": "DC" };
   return <span className={`text-[7px] font-bold px-1 rounded ${c[t || ""] || "text-terminal-muted bg-terminal-muted/10"}`}>{shortLabel[t || ""] || t}</span>;
 }
 

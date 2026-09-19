@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useTier, subActive, signIn, type Session } from "@/lib/auth";
+import { useTier, subActive, signIn, accessUntil, TRIAL_LENGTH, type Session } from "@/lib/auth";
 
 /**
  * The trial prompt, and the trial countdown.
@@ -33,7 +33,10 @@ export default function TrialBanner({ onStart }: { onStart: () => void }) {
   }, []);
 
   const paid = subActive(session);
-  const until = session?.paidUntil || 0;
+  // accessUntil, not paidUntil: the free day is granted client-side and never
+  // touches paidUntil (the server owns that field), so reading paidUntil showed
+  // a trial user a countdown of "0h" — or no banner at all.
+  const until = accessUntil(session);
   const trialing = onTrial(session) && until > now;
 
   if (paid && !trialing) return null;   // real subscriber — say nothing
@@ -59,20 +62,20 @@ export default function TrialBanner({ onStart }: { onStart: () => void }) {
     );
   }
 
-  // Trials are off (see TRIALS_ENABLED). An existing trial still counts down
-  // above until it lapses, but nobody is offered a new one — so this must ask
-  // for the subscription rather than advertise a free window that no longer
-  // exists. Copy that promises access the server will not grant is the fastest
-  // way to lose the person who took it at its word.
+  // Signed out, or a trial that has already run out. The offer is the whole
+  // pitch — an email, and the terminal opens — so it says exactly that rather
+  // than leading with the price.
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 rounded border border-terminal-green/40 bg-terminal-green/[0.07]">
       <span className="text-[12px] text-slate-200">
-        The terminal is for members — subscribe to unlock full access.
+        {session
+          ? "Your free day has ended — subscribe to keep full access."
+          : <>Enter your email for <b>{TRIAL_LENGTH} of the full terminal</b>, free. No card.</>}
       </span>
       <button
         onClick={onStart}
         className="inline-flex items-center min-h-[36px] px-4 rounded bg-terminal-green text-black text-[11px] font-bold hover:opacity-90">
-        GET ACCESS
+        {session ? "GET ACCESS" : `START MY FREE ${TRIAL_LENGTH.toUpperCase()}`}
       </button>
     </div>
   );

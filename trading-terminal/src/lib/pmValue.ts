@@ -46,6 +46,35 @@ function devigged(fixture: PmFixture, p1: string, p2: string): { m1: number; m2:
 }
 
 /**
+ * The Polymarket match price as decimal odds for both players.
+ *
+ * The board used to take its price only from SofaScore's bookmaker feed. That
+ * feed has been 403 for days (it answers from a blob cache that was 20 h old
+ * when measured), and now that stale quotes are refused rather than shown, a
+ * board with no bookmaker price falls back to converting the model's own
+ * probability into odds — which prices the model against itself and reports an
+ * edge of zero on every match.
+ *
+ * Polymarket is the venue these trades actually execute on and the one price
+ * that is live, so it is the right fallback rather than a decorative one. It is
+ * de-vigged the same way the bookmaker path is, so an edge computed against it
+ * means the same thing.
+ */
+export function pmDecimalOdds(
+  fixture: PmFixture | undefined,
+  p1: string,
+  p2: string,
+): { p1: number; p2: number } | null {
+  if (!fixture) return null;
+  const d = devigged(fixture, p1, p2);
+  if (!d) return null;
+  // A de-vigged probability of 0 or 1 is a settled or untradeable market; its
+  // reciprocal is not a price anyone can take.
+  if (d.m1 <= 0.01 || d.m2 <= 0.01) return null;
+  return { p1: round3(1 / d.m1), p2: round3(1 / d.m2) };
+}
+
+/**
  * Best-side value for a match, priced from Polymarket.
  * Returns null when the match cannot be priced or the model has no opinion.
  */

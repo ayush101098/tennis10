@@ -157,12 +157,19 @@ export default function MajorsBoard({
           </>
         )}
 
+        {/* The explainer, in the words a viewer already has. The version this
+            replaces opened with "Platt-calibrated neural network ⊕ Elo" — true,
+            and unreadable to everyone who is not already building one. The
+            mechanics live in the FAQ for anyone who wants them. */}
         <footer className="px-4 py-3 text-xs text-content-muted leading-relaxed border-t border-border">
-          True P: Platt-calibrated neural network ⊕ Elo pre-match, re-priced by a tour-aware Markov engine on
-          every game once the match is live. Edge = True P − de-vigged market price, live prices for live
-          matches. Stake = ¼ Kelly capped at {Math.round(MAX_BANKROLL_FRACTION * 100)}% of bankroll; nothing
-          under the {Math.round(EDGE_FLOOR * 100)}% floor is a bet. Edges over 20% are quarantined as bad data,
-          not free money.
+          <b className="text-content">Win chance</b> is our estimate that the player wins, updated
+          as the match is played. <b className="text-content">Edge</b> is how far that sits from what
+          the market is charging, after stripping out the bookmaker&apos;s margin.
+          {" "}<b className="text-content">Stake</b> is what we would risk per {" "}
+          {Math.round(MAX_BANKROLL_FRACTION * 100)}% of a bankroll — nothing under a{" "}
+          {Math.round(EDGE_FLOOR * 100)}% edge is worth betting, and anything over 20% is
+          treated as a data error rather than free money.{" "}
+          <a href="/#faq" className="underline underline-offset-2 hover:text-content">How we work →</a>
         </footer>
       </Panel>
     </div>
@@ -240,7 +247,7 @@ function ValueRow({ row, isPro, onSelect, onUpgrade, parlayIds, onToggleParlay }
         <span className="flex items-center gap-4 sm:gap-3 pl-16 sm:pl-0">
           <span className="w-12 sm:w-14 shrink-0 text-left sm:text-right">
             <span className="block font-mono tabular-nums text-sm text-content">{pct(v.trueP, 0)}</span>
-            <span className="block text-micro uppercase text-content-muted">true p</span>
+            <span className="block text-micro uppercase text-content-muted">win chance</span>
           </span>
           <span className="w-12 shrink-0 text-left sm:text-right">
             <span className="block font-mono tabular-nums text-sm text-content">{fmtOdds(v.odds)}</span>

@@ -5,3 +5,11 @@ entitlements.local.json
 accounts.local.json
 .vercel
 .env*
+# …except the committed dev defaults. Every value in it is a localhost address
+# and none is a secret; it exists so `npm run dev` points at the local sofa
+# proxy without anyone having to know that it must. .env.local still overrides
+# it and stays ignored, so real credentials cannot ride along.
+!.env.development
+
+# Local dev store — real email addresses, never committed.
+.localstore/

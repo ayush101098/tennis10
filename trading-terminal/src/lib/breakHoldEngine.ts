@@ -15,6 +15,7 @@
  */
 
 import type { LiveMatchStats } from "./scheduleService";
+import { gameTree, gameStateKey } from "./gameTree";
 
 // ─── Output Types ────────────────────────────────────────────────────────────
 
@@ -337,26 +338,51 @@ interface ServeBreakdown {
   aceRate: number;
 }
 
+/**
+ * Serve breakdown, falling back to the tour baseline for anything the feed has
+ * not reported.
+ *
+ * The `!stats` guard was not enough. Every field in LiveMatchStats defaults to
+ * 0, so a partial payload — one carrying Aces and nothing else, which is what
+ * the Flashscore fallback produces — arrived as a fully-populated object
+ * reading 0% first serve and 0% first-serve-won. Those zeros went straight into
+ * computeSER, which rated the player CRISIS and pushed the break probability up
+ * accordingly, for a server who had simply not been measured yet.
+ *
+ * `provided` records what the feed really sent; anything missing takes the tour
+ * average, which is the same thing this already did for a match with no stats
+ * at all.
+ */
 function computeServeBreakdown(server: 1 | 2, stats: LiveMatchStats | null, avgs: TourAvgs): ServeBreakdown {
-  if (!stats) {
-    return {
-      firstServeIn: avgs.firstServeIn,
-      firstServeWon: avgs.firstServeWon,
-      secondServeWon: avgs.secondServeWon,
-      doubleFaultRate: avgs.dfRate,
-      aceRate: avgs.aceRate,
-    };
-  }
+  const fallback: ServeBreakdown = {
+    firstServeIn: avgs.firstServeIn,
+    firstServeWon: avgs.firstServeWon,
+    secondServeWon: avgs.secondServeWon,
+    doubleFaultRate: avgs.dfRate,
+    aceRate: avgs.aceRate,
+  };
+  if (!stats) return fallback;
+
+  const has = (k: string) => stats.provided?.includes(k) ?? false;
+  const pick = (k: string, p1: number, p2: number, dflt: number) =>
+    has(k) ? (server === 1 ? p1 : p2) : dflt;
 
   const totalPts = Math.max(1, stats.p1_totalPointsWon + stats.p2_totalPointsWon);
   const srvPts = Math.max(1, totalPts / 2); // approximate service points
+  // Rates need a points denominator to mean anything; without it they are a
+  // count divided by an invented number.
+  const rateOk = has("Total points won") || has("Total Points Won");
 
   return {
-    firstServeIn: server === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent,
-    firstServeWon: server === 1 ? stats.p1_firstServeWon : stats.p2_firstServeWon,
-    secondServeWon: server === 1 ? stats.p1_secondServeWon : stats.p2_secondServeWon,
-    doubleFaultRate: (server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults) / srvPts * 4, // per service game (~4 pts)
-    aceRate: (server === 1 ? stats.p1_aces : stats.p2_aces) / srvPts * 4,
+    firstServeIn: pick("First serve percentage", stats.p1_firstServePercent, stats.p2_firstServePercent, fallback.firstServeIn),
+    firstServeWon: pick("First serve points won", stats.p1_firstServeWon, stats.p2_firstServeWon, fallback.firstServeWon),
+    secondServeWon: pick("Second serve points won", stats.p1_secondServeWon, stats.p2_secondServeWon, fallback.secondServeWon),
+    doubleFaultRate: has("Double faults") && rateOk
+      ? (server === 1 ? stats.p1_doubleFaults : stats.p2_doubleFaults) / srvPts * 4
+      : fallback.doubleFaultRate,
+    aceRate: has("Aces") && rateOk
+      ? (server === 1 ? stats.p1_aces : stats.p2_aces) / srvPts * 4
+      : fallback.aceRate,
   };
 }
 
@@ -929,16 +955,26 @@ function generateSignals(
 //  MARKOV CHAIN — Exact recursive game/tiebreak probability
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * P(server wins the game from this point score). Delegates to the joint engine
+ * in lib/gameTree so there is exactly one implementation of this fact.
+ *
+ * FIXES A LIVE BUG. The version that stood here returned 0 for advantage-
+ * returner (40-A): the deuce branch handled d === 0 and d === +1 and fell
+ * through to `return 0` for d === -1, which asserts the server cannot possibly
+ * hold from 40-A. The server wins that point with probability p and is back at
+ * deuce, so the true hold is p·p²/(p²+q²) — 0.50 for a 0.65 server, not 0.
+ *
+ * The visible effect was breakProb = 1 at Ad-Out, clamped to 0.99 by the
+ * adjustment step below and rendered as a 99% break on what is closer to a coin
+ * flip. That is the single worst state to be wrong in: it is a break point, a
+ * position is usually open, and a 99% reading argues for dumping it at the
+ * exact moment the model should be saying the game is even.
+ *
+ * An identical copy of the same bug lived in components/PointTracker.tsx.
+ */
 function gameWinProb(p: number, pts1: number, pts2: number): number {
-  if (pts1 >= 4 && pts1 - pts2 >= 2) return 1;
-  if (pts2 >= 4 && pts2 - pts1 >= 2) return 0;
-  if (pts1 >= 3 && pts2 >= 3) {
-    const d = pts1 - pts2;
-    if (d === 0) return (p * p) / (p * p + (1 - p) * (1 - p));
-    if (d === 1) return p + (1 - p) * (p * p) / (p * p + (1 - p) * (1 - p));
-    return 0;
-  }
-  return p * gameWinProb(p, pts1 + 1, pts2) + (1 - p) * gameWinProb(p, pts1, pts2 + 1);
+  return gameTree(p, pts1, pts2).pServer;
 }
 
 function tbWinProb(p: number, a: number, b: number): number {
@@ -1061,11 +1097,28 @@ export interface TrueProbabilities {
   p2MatchProb: number;
   /** P(player1 wins the set currently in progress) */
   p1SetProb: number;
+  /**
+   * P(player1 wins the CURRENT game). When the server is known this is exact
+   * (p1Hold if P1 is serving, 1-p2Hold if P2 is). When it is not, it is the
+   * average over both possibilities — the same principled averaging used for
+   * p1MatchProb in computeLiveMatchProbNoServer, just one level down. This is
+   * the number a GAME-level "who's favoured" indicator should read, in either
+   * case; gameHoldProb below is about the server specifically, not about P1.
+   */
+  p1GameProb: number;
   /** P(current server holds this game) — same number as BreakHoldSignals.holdProb */
   gameHoldProb: number;
   /** Which tour baseline was used */
   tour: string;
-  method: "markov-tour-aware";
+  /**
+   * "markov-tour-aware" knows who is serving right now, so gameHoldProb is
+   * attributed to that player. "markov-no-server" does not — the feed omitted
+   * it — so gameHoldProb is the average hold rate across both players instead
+   * of either one's; p1MatchProb and p1SetProb are UNAFFECTED by this, because
+   * neither ever depended on knowing the current server (see the note on
+   * matchWinProbFromScore's unused p1Serving parameter, below).
+   */
+  method: "markov-tour-aware" | "markov-no-server";
 }
 
 /**
@@ -1073,11 +1126,20 @@ export interface TrueProbabilities {
  * available, else from the pre-match Elo prior — same formula the engine
  * already used for the *current server*, generalised to either player so we
  * can run the Markov set/match recursion (which needs both players' rates).
+ *
+ * Gated on `stats.provided`, the same fix already applied to
+ * computeServeBreakdown and for the identical reason: every numeric field on
+ * LiveMatchStats defaults to 0 when the feed omits it, and a partial payload —
+ * one stat sent, the rest absent — used to read as measured zeros here too.
+ * `stats` itself is usually null right now (the endpoint it comes from is
+ * blocked), so this rarely fires, but it is the same latent trap and costs
+ * nothing to close.
  */
 function pointWinRateFor(
   player: 1 | 2, stats: LiveMatchStats | null, p1WinProb: number,
 ): number {
-  if (stats) {
+  const has = (k: string) => stats?.provided?.includes(k) ?? false;
+  if (stats && has("First serve percentage") && (has("First serve points won") || has("Second serve points won"))) {
     const firstPct = (player === 1 ? stats.p1_firstServePercent : stats.p2_firstServePercent) || 60;
     const firstWon = (player === 1 ? stats.p1_firstServeWon : stats.p2_firstServeWon) || 65;
     const secondWon = (player === 1 ? stats.p1_secondServeWon : stats.p2_secondServeWon) || 45;
@@ -1086,6 +1148,47 @@ function pointWinRateFor(
   }
   const prob = player === 1 ? p1WinProb : 1 - p1WinProb;
   return clamp(0.55 + (prob - 0.5) * 0.3, 0.45, 0.75);
+}
+
+/**
+ * The server-independent core: match and set win probability from the score.
+ *
+ * matchWinProbFromScore takes a `p1Serving` flag but never reads it — the
+ * match-level number is the standard sports-analytics simplification of
+ * averaging each player's OWN hold rate over the whole match, which by
+ * construction does not care which specific game either of them is serving
+ * right now. That only matters one level down, for "does the CURRENT server
+ * hold THIS game" — which is what gameHoldProb and BreakHoldSignals are for,
+ * and why they are the two things this function does not compute.
+ *
+ * Extracted so both computeTrueProbabilities (knows the server, attributes
+ * gameHoldProb to them) and computeLiveMatchProbNoServer (does not) share one
+ * implementation instead of two copies drifting apart.
+ */
+function matchAndSetProb(
+  currentSetGames: { p1: number; p2: number },
+  completedSets: { p1: number; p2: number }[],
+  bestOf: number,
+  p1PointWin: number,
+  p2PointWin: number,
+): { p1MatchProb: number; p1SetProb: number; p1Hold: number; p2Hold: number; avgHold: number } {
+  const setsP1 = completedSets.filter((s) => s.p1 > s.p2).length;
+  const setsP2 = completedSets.filter((s) => s.p2 > s.p1).length;
+
+  const p1MatchProb = matchWinProbFromScore(
+    setsP1, setsP2, currentSetGames.p1, currentSetGames.p2,
+    true, p1PointWin, p2PointWin, bestOf,
+  );
+
+  const p1Hold = gameHoldFromPointProb(p1PointWin);
+  const p2Hold = gameHoldFromPointProb(p2PointWin);
+  // P(win the current set) from the LIVE game score — exact games-race
+  // recursion (symmetric), not the un-normalized closed form + a ±2pp nudge.
+  const avgHold = clamp((p1Hold + (1 - p2Hold)) / 2, 0.05, 0.95);
+  const pTbSet = clamp(0.5 + 0.8 * (avgHold - 0.5), 0.05, 0.95);
+  const p1SetProb = clamp(setWinFromGames(currentSetGames.p1, currentSetGames.p2, avgHold, pTbSet), 0.05, 0.95);
+
+  return { p1MatchProb, p1SetProb, p1Hold, p2Hold, avgHold };
 }
 
 /**
@@ -1104,35 +1207,223 @@ export function computeTrueProbabilities(
 ): TrueProbabilities {
   const p1PointWin = pointWinRateFor(1, stats, p1WinProb);
   const p2PointWin = pointWinRateFor(2, stats, p1WinProb);
-
-  const setsP1 = completedSets.filter((s) => s.p1 > s.p2).length;
-  const setsP2 = completedSets.filter((s) => s.p2 > s.p1).length;
-
-  const p1MatchProb = matchWinProbFromScore(
-    setsP1, setsP2, currentSetGames.p1, currentSetGames.p2,
-    server === 1, p1PointWin, p2PointWin, bestOf,
-  );
-
-  const p1Hold = gameHoldFromPointProb(p1PointWin);
-  const p2Hold = gameHoldFromPointProb(p2PointWin);
-  // P(win the current set) from the LIVE game score — exact games-race
-  // recursion (symmetric), not the un-normalized closed form + a ±2pp nudge.
-  const pGameSet = clamp((p1Hold + (1 - p2Hold)) / 2, 0.05, 0.95);
-  const pTbSet = clamp(0.5 + 0.8 * (pGameSet - 0.5), 0.05, 0.95);
-  const p1SetProb = clamp(setWinFromGames(currentSetGames.p1, currentSetGames.p2, pGameSet, pTbSet), 0.05, 0.95);
-
-  const gameHoldProb = server === 1 ? p1Hold : p2Hold;
+  const r = matchAndSetProb(currentSetGames, completedSets, bestOf, p1PointWin, p2PointWin);
 
   return {
-    p1MatchProb,
-    p2MatchProb: 1 - p1MatchProb,
-    p1SetProb,
-    gameHoldProb,
+    p1MatchProb: r.p1MatchProb,
+    p2MatchProb: 1 - r.p1MatchProb,
+    p1SetProb: r.p1SetProb,
+    // Exact: P1 is either serving this game (their own hold prob) or
+    // receiving it (one minus the server's hold prob).
+    p1GameProb: server === 1 ? r.p1Hold : 1 - r.p2Hold,
+    gameHoldProb: server === 1 ? r.p1Hold : r.p2Hold,
     tour,
     method: "markov-tour-aware",
   };
 }
 
+/**
+ * Live match probability when the feed does not say who is serving.
+ *
+ * This is the number that used to not exist at all: attachBreakHoldSignals
+ * refused to compute ANY live probability once the server field was unknown,
+ * on the reasoning that hold/break attribution would be wrong for whichever
+ * player was guessed. That reasoning is correct for gameHoldProb and for
+ * BreakHoldSignals — both need to know who is serving THIS game — but it
+ * never applied to p1MatchProb or p1SetProb, which matchAndSetProb computes
+ * without a server at all. The withholding was throwing away a real,
+ * server-independent number for a field it never actually needed.
+ *
+ * `momentumP1`, when supplied, is lib/liveTelemetry's SCORE-DERIVED recent-
+ * form signal (fastP1 - slowP1) — it needs no server either, since it comes
+ * from differencing the point score the feed already sends. Folded in as a
+ * small, capped nudge to both players' point-win rate: enough that a real run
+ * of form moves the number, not enough that a handful of noisy points swing it
+ * on their own (liveTelemetry itself withholds momentum below 12 observed
+ * points, so this only ever sees a value once there is something to see).
+ */
+export function computeLiveMatchProbNoServer(
+  currentSetGames: { p1: number; p2: number },
+  completedSets: { p1: number; p2: number }[],
+  stats: LiveMatchStats | null,
+  bestOf: number,
+  p1WinProb: number,
+  tour: string = "ATP",
+  momentumP1?: number,
+): TrueProbabilities {
+  let p1PointWin = pointWinRateFor(1, stats, p1WinProb);
+  let p2PointWin = pointWinRateFor(2, stats, p1WinProb);
+
+  if (momentumP1 !== undefined && Number.isFinite(momentumP1)) {
+    const nudge = clamp(momentumP1, -0.2, 0.2) * 0.2;   // capped at ±4pp of point-win rate
+    p1PointWin = clamp(p1PointWin + nudge, 0.3, 0.9);
+    p2PointWin = clamp(p2PointWin - nudge, 0.3, 0.9);
+  }
+
+  const r = matchAndSetProb(currentSetGames, completedSets, bestOf, p1PointWin, p2PointWin);
+
+  return {
+    p1MatchProb: r.p1MatchProb,
+    p2MatchProb: 1 - r.p1MatchProb,
+    p1SetProb: r.p1SetProb,
+    // r.avgHold = (p1Hold + (1-p2Hold)) / 2 — which is exactly the average of
+    // "P1 wins if P1 serves" and "P1 wins if P2 serves" under a 50/50 prior on
+    // who actually is. So it doubles as p1GameProb here with no extra work.
+    p1GameProb: r.avgHold,
+    gameHoldProb: r.avgHold,   // not attributed to either player — see the field's doc
+    tour,
+    method: "markov-no-server",
+  };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  HOLDS & BREAKS — a real per-player tally, when a server reading exists
+//
+//  A game's WINNER is unambiguous straight from the score (see
+//  lib/liveTelemetry's gameLog). Whether that was a HOLD or a BREAK is not —
+//  it depends on who was serving THAT game, and the only anchor for that is a
+//  server reading. But serve alternates strictly, game to game, all the way
+//  through the match (a tiebreak does not reset it — the player who received
+//  first in the breaker serves first next set, which is exactly what strict
+//  alternation already predicts). So ONE known server, at ANY point in the
+//  match, is enough to derive who served every game before it, by counting
+//  backward. This is what makes that count.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface HoldsAndBreaks {
+  p1Holds: number;
+  p1Breaks: number;   // games P1 won while P2 was serving
+  p2Holds: number;
+  p2Breaks: number;
+  /** Games this could not attribute — always 0 today; kept for completeness
+   *  if gameLog is ever fed a match that changed format mid-stream. */
+  unattributed: number;
+}
+
+/**
+ * @param gameLog     Winner of each COMPLETED game, in order (lib/liveTelemetry).
+ * @param nextServer  Who is serving the game IN PROGRESS — i.e. the game AFTER
+ *                     the last entry in gameLog. This is the one live reading
+ *                     the whole tally is anchored on.
+ */
+export function holdsAndBreaks(gameLog: (1 | 2)[], nextServer: 1 | 2): HoldsAndBreaks {
+  const out: HoldsAndBreaks = { p1Holds: 0, p1Breaks: 0, p2Holds: 0, p2Breaks: 0, unattributed: 0 };
+  let server = nextServer;
+  // Walk backward from the game just before the one in progress: each step
+  // back flips the server, since that is what "alternates every game" means.
+  for (let i = gameLog.length - 1; i >= 0; i--) {
+    server = server === 1 ? 2 : 1;
+    const winner = gameLog[i];
+    if (winner === server) {
+      if (winner === 1) out.p1Holds++; else out.p2Holds++;
+    } else {
+      if (winner === 1) out.p1Breaks++; else out.p2Breaks++;
+    }
+  }
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TOTAL GAMES PREDICTED — expected length of the match from here
+//
+//  Needs only the score (sets, current games, best-of) and the same hold-rate
+//  estimate matchAndSetProb already derives — no server, same as the win
+//  probabilities above. This is an EXPECTATION, not a probability: the
+//  recursion below computes the average number of games a match like this one
+//  takes to finish from this exact state, weighting every possible path by how
+//  likely it is, the same way the probability recursions in lib/gameTree do.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** E[games remaining in a set from (g1,g2)], given a symmetric per-game hold rate. */
+function expectedGamesInSet(g1: number, g2: number, pGame: number): number {
+  if (g1 >= 6 && g1 - g2 >= 2) return 0;
+  if (g2 >= 6 && g2 - g1 >= 2) return 0;
+  if (g1 === 6 && g2 === 6) return 1;   // the tiebreak — one more "game" by scoreline convention
+  if (g1 === 5 && g2 === 5) return expectedGamesInSet(6, 5, pGame) * pGame + expectedGamesInSet(5, 6, pGame) * (1 - pGame) + 1;
+  return 1 + pGame * expectedGamesInSet(g1 + 1, g2, pGame) + (1 - pGame) * expectedGamesInSet(g1, g2 + 1, pGame);
+}
+
+/** E[sets remaining] given each player still needs p1Need / p2Need more sets. */
+function expectedSetsRemaining(p1Need: number, p2Need: number, p1SetProb: number): number {
+  if (p1Need <= 0 || p2Need <= 0) return 0;
+  return 1
+    + p1SetProb * expectedSetsRemaining(p1Need - 1, p2Need, p1SetProb)
+    + (1 - p1SetProb) * expectedSetsRemaining(p1Need, p2Need - 1, p1SetProb);
+}
+
+export interface GamesPrediction {
+  /** Games actually played so far this match — a real count, not an estimate. */
+  gamesSoFar: number;
+  /** E[games still to be played], from right now to the match ending. */
+  expectedRemaining: number;
+  /** gamesSoFar + expectedRemaining, rounded for display. */
+  expectedTotal: number;
+}
+
+/**
+ * Predicted total games for the WHOLE match, from the current score.
+ *
+ * The current set is walked out exactly via expectedGamesInSet. Any further
+ * sets are priced as an average full set (expectedGamesInSet(0,0,·)) times the
+ * expected number of further sets still needed — the same simplification the
+ * rest of this file already makes (one hold-rate standing in for "a typical
+ * set" of this match), rather than re-deriving a fresh estimate per
+ * hypothetical future set no one has seen yet.
+ */
+export function predictTotalGames(
+  currentSetGames: { p1: number; p2: number },
+  completedSets: { p1: number; p2: number }[],
+  stats: LiveMatchStats | null,
+  bestOf: number,
+  p1WinProb: number,
+): GamesPrediction {
+  const gamesSoFar = completedSets.reduce((n, s) => n + s.p1 + s.p2, 0) + currentSetGames.p1 + currentSetGames.p2;
+
+  const p1PointWin = pointWinRateFor(1, stats, p1WinProb);
+  const p2PointWin = pointWinRateFor(2, stats, p1WinProb);
+  const p1Hold = gameHoldFromPointProb(p1PointWin);
+  const p2Hold = gameHoldFromPointProb(p2PointWin);
+  const pGame = clamp((p1Hold + (1 - p2Hold)) / 2, 0.05, 0.95);
+
+  const setsP1 = completedSets.filter((s) => s.p1 > s.p2).length;
+  const setsP2 = completedSets.filter((s) => s.p2 > s.p1).length;
+  const setsNeeded = Math.ceil(bestOf / 2);
+  const p1Need = Math.max(0, setsNeeded - setsP1);
+  const p2Need = Math.max(0, setsNeeded - setsP2);
+
+  // The match is already decided — nothing left to play, whatever
+  // currentSetGames happens to hold (a finished match's "current set" is
+  // meaningless, and treating it as one more set in progress was exactly the
+  // bug this guard fixes: it kept predicting a phantom next set after match point).
+  if (p1Need <= 0 || p2Need <= 0) {
+    return { gamesSoFar, expectedRemaining: 0, expectedTotal: gamesSoFar };
+  }
+
+  const remainingInCurrentSet = expectedGamesInSet(currentSetGames.p1, currentSetGames.p2, pGame);
+
+  let expectedRemaining = remainingInCurrentSet;
+  if (p1Need > 0 && p2Need > 0) {
+    // Whoever doesn't win the current set still needs their full complement;
+    // the winner needs one fewer. Both are already "1 set decided" from here,
+    // so the recursion starts at (p1Need-1, p2Need) and (p1Need, p2Need-1) —
+    // matching matchProbRemaining's own convention for "the current set is
+    // spoken for, price what's left" — weighted by who is likely to win it.
+    const pTb = clamp(0.5 + 0.8 * (pGame - 0.5), 0.05, 0.95);
+    const p1SetProb = clamp(setWinFromGames(currentSetGames.p1, currentSetGames.p2, pGame, pTb), 0.05, 0.95);
+    const avgFullSet = expectedGamesInSet(0, 0, pGame);
+    const futureSetsIfP1Wins = expectedSetsRemaining(p1Need - 1, p2Need, p1SetProb);
+    const futureSetsIfP2Wins = expectedSetsRemaining(p1Need, p2Need - 1, p1SetProb);
+    const expectedFutureSets = p1SetProb * futureSetsIfP1Wins + (1 - p1SetProb) * futureSetsIfP2Wins;
+    expectedRemaining += expectedFutureSets * avgFullSet;
+  }
+
+  return {
+    gamesSoFar,
+    expectedRemaining: roundTo(expectedRemaining, 1),
+    expectedTotal: Math.round(gamesSoFar + expectedRemaining),
+  };
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  HEDGE ENGINE — when to hedge against a live position
@@ -1166,16 +1457,6 @@ const TREND_BREAKS = new Set([
 const ENTRY_ELIGIBLE_STATES = new Set(["30-15", "15-30", "30-30", "DEUCE"]);
 
 /** Mirrors ScoreState._recompute()'s game_state_key — from the SERVER's perspective. */
-function gameStateKey(srvPts: number, retPts: number, isTiebreak: boolean): string {
-  if (isTiebreak) return "TIEBREAK";
-  if (srvPts >= 3 && retPts >= 3) {
-    if (srvPts === retPts) return "DEUCE";
-    return srvPts > retPts ? "AD-IN" : "AD-OUT";
-  }
-  const m: Record<number, string> = { 0: "0", 1: "15", 2: "30", 3: "40" };
-  return `${m[srvPts] ?? "40"}-${m[retPts] ?? "40"}`;
-}
-
 interface HedgeMemory { prevStateKey?: string; referenceOdds?: number }
 const _hedgeMemory = new Map<string, HedgeMemory>();
 

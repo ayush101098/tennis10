@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   PAYMENT_ADDRESS, PAYPAL_ME_URL, PAYPAL_ID, UPI_ID, USD_INR, upiUri,
-  signIn, grantPro, useTier, subActive, loadSession,
+  signIn, grantPro, useTier, subActive, loadSession, trialActive,
+  TRIAL_LABEL, TRIAL_LENGTH,
 } from "@/lib/auth";
 import { serverVerifyPayment } from "@/lib/entitlement";
 import QrCode from "@/components/QrCode";
@@ -183,13 +184,22 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
    * Google flow and the email flow cannot drift apart.
    */
   const beginSession = (addr: string) => {
-    const s = signIn(addr);
+    const s = signIn(addr);   // starts the free day if this address never had one
     refresh();
+    const onFreeDay = !s.isAdmin && trialActive(s.email);
     setMsg({ ok: true, text: s.isAdmin ? "Welcome back, admin — full access enabled."
+      : onFreeDay ? `You're in — the full terminal, free for ${TRIAL_LENGTH}.`
       : s.tier === "pro" ? "Subscription active — full terminal unlocked."
       : "Account created — choose a plan below to open the terminal." });
-    if (s.isAdmin || s.tier === "pro") { onDone?.(); onClose(); }
-    else onDone?.();
+    if (s.isAdmin || s.tier === "pro") {
+      onDone?.();
+      onClose();
+      // Straight into the product. Leaving someone on the landing page after
+      // handing them access is where most of them stop.
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/terminal")) {
+        window.location.href = "/terminal";
+      }
+    } else onDone?.();
   };
 
   beginSessionRef.current = beginSession;
@@ -269,32 +279,36 @@ export default function PricingModal({ open, onClose, onDone }: Props) {
               placeholder="you@example.com"
               className="w-full mb-2 bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-sm text-slate-200 focus:border-terminal-cyan outline-none"
             />
-            {/* Creates the account (and captures the lead) but grants nothing:
-                the terminal is members-only. Named for what it does. */}
+            {/* The address IS the sign-up: signIn() starts the free day on the
+                spot (startTrial in lib/auth), so this button really does open
+                the terminal. Named for what it does. */}
             <button onClick={startFree} disabled={!validEmail}
-              className="w-full min-h-[44px] mb-4 rounded border border-terminal-border text-slate-200 text-xs font-bold hover:bg-terminal-panel/40 disabled:opacity-40 transition">
-              SAVE MY EMAIL →
+              className="w-full min-h-[44px] mb-4 rounded bg-terminal-green text-black text-xs font-bold hover:opacity-90 disabled:opacity-40 transition">
+              OPEN THE TERMINAL — FREE FOR {TRIAL_LENGTH.toUpperCase()} →
             </button>
 
             {/* Plans */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* FREE ACCOUNT (no terminal) */}
+              {/* FREE DAY — the full terminal, for TRIAL_LENGTH, on an email
+                  alone. This card used to advertise a $0 account that got the
+                  home page and nothing else, which is no longer what signing
+                  up does. */}
               <div className="border border-terminal-border rounded-lg p-4 flex flex-col">
-                <div className="text-slate-200 font-bold text-sm mb-1">FREE ACCOUNT</div>
+                <div className="text-slate-200 font-bold text-sm mb-1">FREE {TRIAL_LABEL.toUpperCase()}</div>
                 <div className="text-2xl font-bold text-slate-100 mb-1">$0</div>
                 <div className="text-[10px] font-bold text-terminal-muted mb-2">
-                  home page only — no terminal
+                  the whole terminal — no card
                 </div>
                 <ul className="text-[11px] text-slate-300 space-y-1.5 flex-1">
+                  <li>✓ The terminal — Live True P, edge board, Value Board</li>
+                  <li>✓ Kelly staking &amp; hedge-timing signals</li>
+                  <li>✓ Bet tracker</li>
                   <li>✓ Live scores &amp; schedules — ATP · WTA · Challenger · ITF</li>
-                  <li>✓ One free match analysis a day on the home page</li>
-                  <li className="text-terminal-muted">✗ The terminal (Live True P, edge, Value Board)</li>
-                  <li className="text-terminal-muted">✗ Kelly staking &amp; hedge-timing signals</li>
-                  <li className="text-terminal-muted">✗ Bet tracker</li>
+                  <li className="text-terminal-muted">Ends after {TRIAL_LENGTH}; one per address</li>
                 </ul>
                 <button onClick={startFree}
                   className="mt-3 w-full py-2 rounded border border-terminal-border text-slate-200 text-xs font-bold hover:bg-terminal-bg transition">
-                  START MY FREE TRIAL
+                  START MY FREE {TRIAL_LENGTH.toUpperCase()}
                 </button>
               </div>
 

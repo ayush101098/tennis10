@@ -29,7 +29,6 @@ import SsrMatchList from "@/components/SsrMatchList";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import Socials from "@/components/Socials";
-import TrialBanner from "@/components/TrialBanner";
 import Faq from "@/components/Faq";
 import SiteFooter from "@/components/SiteFooter";
 import { DonatePrompt } from "@/components/Donate";
@@ -39,22 +38,23 @@ import type { ScheduledMatch, ScheduleData } from "@/lib/scheduleService";
 import { EdgePanel } from "@/components/SchedulePanel";
 import MajorsBoard, { isMajor } from "@/components/MajorsBoard";
 import { surname as pmSurname } from "@/lib/polymarket";
-import ParlayBuilder from "@/components/ParlayBuilder";
-import type { ParlayLeg } from "@/lib/parlay";
 import EmailCapture from "@/components/EmailCapture";
 import CourtBackdrop from "@/components/CourtBackdrop";
 import VideoEmbed from "@/components/VideoEmbed";
 import { useTier } from "@/lib/auth";
 import Button, { ButtonLink } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Panel";
-import PricingModal from "@/components/PricingModal";
+import AccessModal from "@/components/AccessModal";
+import TrustSection from "@/components/TrustSection";
 
 /**
  * Landing page — the public storefront.
+ *
  * Anyone can see today's live + upcoming matches across every professional
- * tour, and open the FULL analysis for exactly one match. The second click
- * opens the pricing modal (Free = pre-match probabilities, $99 Pro = the
- * complete trading terminal).
+ * tour. The actionable layer — edge, Kelly stakes, trade signals — is blurred
+ * until there is a session, and a session costs an email and nothing else
+ * (TERMINAL_FREE in lib/auth). A welcome modal explains the product on a first
+ * visit and takes that email; every other CTA opens the same modal.
  */
 export default function LandingClient({ initialMatches = [] }: { initialMatches?: SsrMatch[] }) {
   const { session, tier } = useTier();
@@ -152,42 +152,46 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
     return [...best.values()];
   }, [data]);
 
-  // Every match opens for everyone. The gate is on the ACTIONABLE layer, not on
-  // access: edge, Kelly stakes and the trade signals render blurred for
-  // non-subscribers, so a visitor sees the shape of the answer and what it is
-  // worth. Locking whole matches instead hid the product from the people it
-  // needs to convince — and from search engines, which index this page.
+  // Every match opens for everyone. The blur is on the ACTIONABLE layer only —
+  // edge, Kelly stakes, trade signals — so a signed-out visitor sees the shape
+  // of the answer and what it is worth. It is no longer a paywall: what lifts
+  // it is an email, not a payment.
   const [pricingOpen, setPricingOpen] = useState(false);
 
   /**
-   * Parlay ticket. Keyed by match id so a match can appear at most once —
-   * two legs from one match are not independent and multiplying them is
-   * simply wrong, so the data structure refuses it rather than the UI warning
-   * about it after the fact.
+   * The welcome popup — what this is, and the one field that opens it.
+   *
+   * Shown ONCE per browser, and never to someone who already has a session.
+   * A modal that reappears on every visit stops being an introduction and
+   * becomes an obstacle, so the dismissal is remembered even though nothing
+   * else on this page needs to be.
+   *
+   * Delayed a beat rather than fired on mount: the hero and the live board
+   * paint first, so the page is visibly a product before anything is asked
+   * for. A modal over a blank page reads as a popup; over a working board it
+   * reads as an introduction.
    */
-  const [parlayLegs, setParlayLegs] = useState<ParlayLeg[]>([]);
-  const parlayIds = useMemo(() => new Set(parlayLegs.map(l => l.matchId)), [parlayLegs]);
+  const WELCOME_KEY = "tt_welcome_seen";
+  useEffect(() => {
+    if (session) return;
+    let seen = true;
+    try { seen = !!localStorage.getItem(WELCOME_KEY); } catch { /* private mode: show it */ seen = false; }
+    if (seen) return;
+    const t = setTimeout(() => setPricingOpen(true), 1200);
+    return () => clearTimeout(t);
+  }, [session]);
 
-  const toggleParlayLeg = useCallback(
-    (m: ScheduledMatch, value: NonNullable<ScheduledMatch["value"]>) => {
-      setParlayLegs(prev => {
-        if (prev.some(l => l.matchId === m.id)) return prev.filter(l => l.matchId !== m.id);
-        return [...prev, {
-          matchId: m.id,
-          player: value.player,
-          opponent: value.side === 1 ? m.player2 : m.player1,
-          tournament: m.tournament,
-          trueP: value.trueP,
-          marketP: value.marketP,
-          odds: value.odds,
-          live: value.live,
-        }];
-      });
-    }, []);
+  // Dismissal is what is remembered, not the opening — so a visitor who never
+  // saw it (slow page, immediate scroll) still gets it next time.
+  const closeWelcome = useCallback(() => {
+    setPricingOpen(false);
+    try { localStorage.setItem(WELCOME_KEY, "1"); } catch { /* it just shows again */ }
+  }, []);
 
-  const removeParlayLeg = useCallback(
-    (matchId: string) => setParlayLegs(prev => prev.filter(l => l.matchId !== matchId)), []);
-  const clearParlay = useCallback(() => setParlayLegs([]), []);
+  /* The parlay builder is no longer on this page. components/ParlayBuilder.tsx
+     and lib/parlay.ts are untouched on disk — it is a tool for someone already
+     trading, not part of a first impression, and it belongs behind "How we
+     work" or in the terminal rather than under the live board. */
   const onPick = useCallback((m: ScheduledMatch) => setSelected(m), []);
 
   return (
@@ -204,17 +208,20 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
               already hold. The waitlist CTA is for new visitors only. */}
           {session ? (
             <>
-              <Badge tone={session.isAdmin ? "danger" : isPro ? "primary" : "neutral"}>
-                {session.isAdmin ? "Admin" : isPro ? "Pro" : "Free"}
+              {/* No Free/Pro split left to show — a session is full access
+                  (TERMINAL_FREE). Admin stays: it opens /admin, which a plain
+                  session does not. */}
+              <Badge tone={session.isAdmin ? "danger" : "primary"}>
+                {session.isAdmin ? "Admin" : "Full access"}
               </Badge>
               <ButtonLink href="/terminal" variant="primary" iconAfter="arrowRight">
                 Launch terminal
               </ButtonLink>
             </>
           ) : (
-            <ButtonLink href="#waitlist" variant="primary" iconAfter="arrowRight">
-              Join waitlist
-            </ButtonLink>
+            <Button onClick={() => setPricingOpen(true)} variant="primary" iconAfter="arrowRight">
+              Open terminal
+            </Button>
           )}
         </div>
       </nav>
@@ -228,21 +235,22 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           Market intelligence for <span className="text-primary">serious tennis traders.</span>
         </h1>
         <p className="mt-5 text-content-muted max-w-[620px] mx-auto">
-          A neural network trained on 41,750 tour matches sets the pre-match prior; a
-          score-conditioned Markov engine re-prices every point, measured against real
-          exchange odds — with edge confidence, ¼-Kelly staking and hedge-timing
-          discipline built in. ATP · WTA · Challenger · W125 · ITF, every day.
+          Live win probability for every professional tennis match, updated as the
+          points are played — plus the moments that matter: who is under pressure,
+          who is about to be broken, and when a scoreline stops meaning what it
+          looks like. ATP · WTA · Challenger · W125 · ITF, every day.
         </p>
 
-        {/* Waitlist is the primary action. The email lands in the Netlify Blobs
-            `leads` store via /api/subscribe, same path the rest of the site uses,
-            and is mirrored to the waitlist sheet — so nothing new to maintain. */}
+        {/* The email is the whole sign-up. It lands in the Netlify Blobs
+            `leads` store via /api/subscribe — the same path the rest of the
+            site uses — and opens the terminal in the same action. It is no
+            longer a waitlist: there is nothing to wait for. */}
         <div id="waitlist" className="mt-7 scroll-mt-24 flex flex-col items-center gap-2">
           <div className="w-full max-w-md flex justify-center">
-            <EmailCapture source="waitlist-hero" cta="Join the waitlist" variant="waitlist" />
+            <EmailCapture source="hero" cta="Join the waitlist" />
           </div>
           <p className="text-xs text-content-muted">
-            Free while in beta · no card required · unsubscribe anytime
+            Free through beta — no card. Your email is also your sign-in.
           </p>
           {/* Deliberately a link, not a second button. The hero had three
               button-shaped things competing (nav CTA, waitlist, this) and a
@@ -252,14 +260,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
             or see today&apos;s value board
           </a>
         </div>
-        {/* Only for signed-in users. Asking a new visitor to join a waitlist and
-            to subscribe in the same eyeful gives them two different next steps
-            and so no clear one; the waitlist is the ask on this page now. */}
-        {session && (
-          <div className="mt-6 max-w-[560px] mx-auto">
-            <TrialBanner onStart={() => setPricingOpen(true)} />
-          </div>
-        )}
+
 
         {/* A stat row rather than pills: the same facts, but laid out as
             figures, which reads as a product with numbers behind it instead of
@@ -291,17 +292,6 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           document.getElementById("matches")?.scrollIntoView({ behavior: "smooth", block: "start" });
         }}
         onUpgrade={() => setPricingOpen(true)}
-        parlayIds={parlayIds}
-        onToggleParlay={toggleParlayLeg}
-      />
-
-      {/* ── Parlay builder — combines legs picked off the board above ── */}
-      <ParlayBuilder
-        legs={parlayLegs}
-        isPro={isPro}
-        onRemove={removeParlayLeg}
-        onClear={clearParlay}
-        onUpgrade={() => setPricingOpen(true)}
       />
 
       {/* ── Live board + analysis ── */}
@@ -311,7 +301,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
             <span className="text-[11px] font-bold text-terminal-yellow tracking-wider">📅 TODAY — LIVE &amp; UPCOMING</span>
             <span className="hidden xs:block text-[10px] text-terminal-muted">
               {isPro ? "every match unlocked — analyse anything"
-                : "every match on the tour — signals unlock with Pro"}
+                : "every match on the tour — signals unlock with an email"}
             </span>
           </div>
           {/* On mobile: list caps at ~55vh (scrolls), analysis flows in the
@@ -376,7 +366,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
                   <div className="text-2xl">⚡</div>
                   <div className="text-[12px] font-bold text-slate-200">Pick a match to see the full analysis</div>
                   <div className="text-[10px] text-terminal-muted max-w-[280px]">
-                    Model probability, bookmaker edge, Kelly stake, live break/hold signals and hedge timing.
+                    Live win chance, pressure signals, and what the market is charging.
                   </div>
                 </div>
               )}
@@ -392,9 +382,9 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
           <h2 className="text-slate-100">From true probability to a sized, hedged position.</h2>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-          <Feature n="01" title="TRUE P" body="A Platt-calibrated neural network (41,750 tour matches) sets the pre-match prior; a tour-aware Markov engine then re-prices the match on every game of the live score." />
-          <Feature n="02" title="EDGE" body="True P is compared against de-vigged bookmaker odds — live prices for live matches, never stale ones. Edges over 20% are quarantined as data errors, not bets." />
-          <Feature n="03" title="STAKE" body="¼-Kelly staking capped at 5% of bankroll, with a hard 2% edge floor. The discipline is the product: no edge, no bet." />
+          <Feature n="01" title="LIVE WIN CHANCE" body="A number for every match that moves with the score, not a prediction made this morning and left alone. We label it plainly: live, or pre-match." />
+          <Feature n="02" title="PRESSURE SIGNALS" body="Repeated break points, a break in the last game, a set slipping away — the sequences that say a player is in trouble, before the scoreboard shows it." />
+          <Feature n="03" title="WE SAY WHEN WE DON'T KNOW" body="Some positions are too one-sided for us to call honestly. In those, we say so and show nothing, rather than print a confident number we have not earned." />
           <Feature n="04" title="HEDGE" body="Trend-break, adverse-move and deuce-loss triggers tell you when to hedge a live position — protecting profit beats chasing it." />
         </div>
       </section>
@@ -419,7 +409,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
       <Pillar
         tag="EDGE"
         title="Find the matches the market has mispriced."
-        body="Every fixture is priced by a score-conditioned Markov engine and compared against de-vigged exchange odds. But a raw edge is not a signal — an edge on a number we do not trust is noise. Each opportunity is divided by how much our independent estimates disagree, so a clean 5% beats a shaky 9%."
+        body="Every match gets a win chance that updates as points are played. But a number is only useful if it has been checked against what actually happened, so we grade ours against finished matches and publish the result — including the states where we are not accurate enough to be worth listening to."
         points={[
           "EdgeScore = edge ÷ uncertainty, not edge alone",
           "De-vigged two-sided exchange prices, never a stale line",
@@ -527,7 +517,7 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
             ))}
             <div className="text-[9px] text-terminal-muted mt-2 leading-relaxed">
               Grey = predicted, green = actual. Gaps like these are why staking is
-              scaled by confidence instead of run at full Kelly.
+              scaled down when the numbers behind them are shakier.
             </div>
           </div>
         }
@@ -610,8 +600,13 @@ export default function LandingClient({ initialMatches = [] }: { initialMatches?
         </p>
       </section>
 
-      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
+      {/* The product explainer. Opens on its own for a first-time visitor
+          (see the effect above) and from every "open terminal" control. */}
+      <AccessModal open={pricingOpen} onClose={closeWelcome} variant="welcome" source="landing" />
       <DonatePrompt />
+
+      <TrustSection />
+
 
       <Faq />
 

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { captureLead } from "@/lib/subscribe";
+import { queueLead } from "@/lib/leadQueue";
 import { signIn } from "@/lib/auth";
 import { trackEvent } from "@/components/Analytics";
 
@@ -35,15 +36,22 @@ export default function EmailCapture({
     if (state === "loading") return;
     setState("loading");
     const res = await captureLead(email.trim(), source);
+    // ok:true does not mean SAFE — subscribe.js answers ok:true even when it
+    // fell back to per-container memory because the blob write failed (see
+    // lib/leadQueue's docstring: confirmed happening in production right now,
+    // store suspended, every write 403ing). Queue it so a later retry —
+    // automatic, on next page load — lands it durably instead of the address
+    // quietly evaporating with the container.
+    if (res.ok && res.stored !== "blobs") queueLead(email.trim(), source);
     if (res.ok) {
-      // Still creates the account: this is what puts the address in the leads
-      // store and the sheet mirror. It no longer unlocks anything — trials are
-      // off (see TRIALS_ENABLED) — so the confirmation must not imply it does.
-      signIn(email.trim().toLowerCase());
+      // Creates the account — the leads store, the sheet mirror — AND opens the
+      // terminal, because the terminal is free now (TERMINAL_FREE). There is no
+      // waitlist and no spot to wait for, so neither message may say there is:
+      // copy that holds someone back from access they already have is the
+      // fastest way to lose them at the one moment they were interested.
+      signIn(email.trim().toLowerCase(), source);
       setState("done");
-      setMsg(variant === "waitlist"
-        ? "You're on the waitlist — we'll email you when your spot opens."
-        : "You're on the list — we'll be in touch.");
+      setMsg("You're in — the terminal is open.");
       trackEvent("Signup", { source });
     } else {
       setState("error");
@@ -55,17 +63,13 @@ export default function EmailCapture({
     return (
       <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-terminal-green" role="status">
         <span><span aria-hidden>✓</span> {msg}</span>
-        {variant === "waitlist" ? (
-          <a href="#matches"
-            className="inline-flex items-center min-h-[36px] px-3 rounded border border-terminal-border text-[11px] font-bold text-slate-200 hover:bg-terminal-panel">
-            SEE TODAY&apos;S MATCHES ↓
-          </a>
-        ) : (
-          <a href="/terminal"
-            className="inline-flex items-center min-h-[36px] px-3 rounded bg-terminal-green text-black text-[11px] font-bold hover:opacity-90">
-            OPEN THE TERMINAL →
-          </a>
-        )}
+        {/* One destination either way. The waitlist variant used to offer a
+            look at today's matches instead, which was the right consolation
+            when the terminal was behind a paywall and the wrong one now. */}
+        <a href="/terminal"
+          className="inline-flex items-center min-h-[36px] px-3 rounded bg-terminal-green text-black text-[11px] font-bold hover:opacity-90">
+          OPEN THE TERMINAL →
+        </a>
       </div>
     );
   }

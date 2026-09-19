@@ -6,12 +6,17 @@
  */
 
 import {
-  computeBreakHoldSignals, computeTrueProbabilities, evaluateHedgeSignal,
-  resolveTourAvgs,
+  computeBreakHoldSignals, computeTrueProbabilities, computeLiveMatchProbNoServer, evaluateHedgeSignal,
+  resolveTourAvgs, holdsAndBreaks, predictTotalGames,
   type BreakHoldSignals, type TrueProbabilities, type HedgeAlert,
+  type HoldsAndBreaks, type GamesPrediction,
 } from "./breakHoldEngine";
 import { loadNNModel, nnMatchProb } from "./nnModel";
 import { parseGameLog, computeMomentum, type MomentumState } from "./momentumEngine";
+import { observeTelemetry, momentum as liveTelemetryMomentum, workload as liveTelemetryWorkload, forgetTelemetry,
+  type Momentum as LiveTelemetryMomentum, type Workload as LiveTelemetryWorkload,
+  type TelemetryState } from "./liveTelemetry";
+import { POINT_INDEX } from "./gameTree";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -62,8 +67,39 @@ export interface ScheduledMatch {
     edge?: { p1: number; p2: number };
     /** Hedge-timing alert evaluated against the live score + bookmaker odds */
     hedgeAlert?: HedgeAlert;
-    /** Live momentum (game-control + serve regression) from point-by-point */
+    /** Live momentum (game-control + serve regression) from point-by-point.
+     *  Needs sofaId matched to a working point-by-point endpoint — currently
+     *  blocked (SofaScore 403s that call). Prefer liveMomentum below. */
     momentum?: MomentumState;
+    /**
+     * Real, score-derived momentum from lib/liveTelemetry: recent share of
+     * points won, against this match's own baseline. Needs only the point
+     * score the live-list endpoint already sends — no sofaId, no server, no
+     * endpoint that is currently blocked — so unlike `momentum` above this
+     * populates for every live match the feed carries a point score for.
+     * Undefined until enough points have been observed to mean anything.
+     */
+    liveMomentum?: LiveTelemetryMomentum;
+    /** Real point/deuce/tiebreak counts from the same score-derived engine —
+     *  see liveMomentum's doc for why this is the one that actually populates. */
+    liveWorkload?: LiveTelemetryWorkload;
+    /**
+     * Real per-player hold/break tally for the match SO FAR. Needs an actual
+     * server reading to anchor it (see breakHoldEngine.holdsAndBreaks) — unlike
+     * liveMomentum/liveWorkload this genuinely cannot be derived from the score
+     * alone, because the same sequence of game winners means the opposite
+     * thing (holds become breaks and vice versa) depending on who served
+     * first, and there is no way to tell those two readings apart without one
+     * real data point. Undefined whenever `server` has never been reported for
+     * this match.
+     */
+    holdsAndBreaks?: HoldsAndBreaks;
+    /**
+     * Predicted TOTAL games for the whole match, from right now. Needs only
+     * the score — no server — so unlike holdsAndBreaks this is always present
+     * once a live match has a set/game score at all.
+     */
+    gamesPrediction?: GamesPrediction;
   };
   /** Pre-match bookmaker odds (from the SofaScore daily odds feed) */
   prematchOdds?: { p1: number; p2: number; source?: string; isLive?: boolean };
@@ -95,6 +131,26 @@ export interface LiveMatchStats {
   p1_secondServeWon: number; p2_secondServeWon: number;
   p1_breakPointsConverted: string; p2_breakPointsConverted: string; // e.g. "3/5"
   p1_totalPointsWon: number; p2_totalPointsWon: number;
+  /**
+   * Which stats the feed ACTUALLY sent, by parser key.
+   *
+   * Every numeric field above defaults to 0 when the feed omits it, which makes
+   * "not reported" indistinguishable from "measured zero". That is not a
+   * cosmetic problem: a payload carrying only Aces produced a full object
+   * reading 0% first serve, 0% first-serve-won, 0 points won — and the board
+   * rendered it as live statistics, while computeServeBreakdown fed the same
+   * zeros into the serve rating and came out with a CRISIS tier for a player
+   * who had simply not been measured yet.
+   *
+   * A stat absent from this list has no value, whatever the number next to it
+   * says.
+   */
+  provided: string[];
+}
+
+/** Did the feed actually report this stat, or is the 0 a default? */
+export function hasStat(stats: LiveMatchStats | null | undefined, key: string): boolean {
+  return !!stats?.provided?.includes(key);
 }
 
 export interface ScheduleData {
@@ -122,6 +178,19 @@ export interface ScheduleData {
    * numbers of being stale and people stop trusting the warning that matters.
    */
   fallbackActive?: boolean;
+  /**
+   * Age of the ODDS feed, in ms — separate from feedAgeMs because SofaScore's
+   * odds endpoints and its score endpoints fail independently, and usually do.
+   * Past ODDS_STALE_MS no price from it reaches the board at all, so this is
+   * what explains an edge column that has gone blank while the scores update.
+   */
+  oddsAgeMs?: number;
+  /**
+   * The bookmaker odds feed returned nothing at all — not stale, absent. The
+   * board is then priced from Polymarket alone, which is worth saying: an edge
+   * column with one venue behind it is a different thing from one with two.
+   */
+  oddsDown?: boolean;
 }
 
 /** Past this, the board is stale enough that a live price is not trustworthy. */
@@ -145,6 +214,35 @@ function normName(n: string): string {
     .replace(/-/g, " ")                                   // hyphens → space
     .replace(/\s+/g, " ")                                 // collapse spaces
     .trim();
+}
+
+/**
+ * A short, human display name from this feed's "Surname Initial." convention
+ * — e.g. "Kecmanovic M." -> "Kecmanovic".
+ *
+ * `.split(" ").pop()` was used at several call sites across the terminal on
+ * the assumption names were "Firstname Lastname", where the last word IS the
+ * surname. This feed's actual format is the opposite: surname first, then an
+ * abbreviated given-name initial. Every one of those call sites was therefore
+ * displaying the INITIAL, not the surname — "Kecmanovic M." shortened to "M.".
+ * It was invisible on its own, because an initial still looks like a plausible
+ * short name, right up until two players in the same match share one: two
+ * different people showing as identical labels ("A." and "A.") is what
+ * surfaced it.
+ *
+ * The fix: drop a trailing token that IS an initial (one letter + a period),
+ * rather than always dropping the last token. Surnames that are themselves
+ * multiple words ("Van De Zandschulp", "de Carvalho Damazio") are kept whole,
+ * since only the true trailing initial is stripped.
+ */
+export function displayName(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  let end = parts.length;
+  // Strip every trailing initial, not just one — some players carry two
+  // ("de Carvalho Damazio L. E."), and leaving the innermost one attached
+  // would still misdisplay as "...Damazio L." instead of the surname alone.
+  while (end > 1 && /^[A-Za-z]\.?$/.test(parts[end - 1])) end--;
+  return end < parts.length ? parts.slice(0, end).join(" ") : fullName;
 }
 
 export type RankMap = Map<string, RankEntry>;
@@ -577,7 +675,7 @@ const SOFA_SCHEDULED = "/api/sofa/sport/tennis/scheduled-events";
 
 /** SofaScore category slugs to include (all professional tennis) */
 const SOFA_INCLUDE_CATS = new Set([
-  "atp", "wta", "challenger", "wta-125", "itf-men", "itf-women",
+  "atp", "wta", "challenger", "wta-125", "itf-men", "itf-women", "davis-cup",
 ]);
 
 function sofaCatToTour(slug: string): string {
@@ -587,6 +685,7 @@ function sofaCatToTour(slug: string): string {
   if (slug === "itf-women") return "ITF W";
   if (slug === "challenger") return "CHALLENGER";
   if (slug === "wta-125") return "W125";
+  if (slug === "davis-cup") return "DAVIS CUP";
   return slug.toUpperCase();
 }
 
@@ -766,6 +865,20 @@ const SOFA_CAT_URLS: Record<string, string> = {
   "challenger": "/api/sofa/category/72/scheduled-events",
   "itf-men": "/api/sofa/category/785/scheduled-events",
   "itf-women": "/api/sofa/category/213/scheduled-events",
+  // WTA 125 was already in SOFA_INCLUDE_CATS above — allowlisted to pass
+  // through if it ever arrived — but never actually fetched, so it never did.
+  // Davis Cup is its own SofaScore category (76), entirely separate from ATP
+  // (3): a Davis Cup tie between two ATP players is filed under "Davis Cup",
+  // not "ATP", so the per-category fetch below is the only way either was
+  // ever going to be discovered. The live bulk endpoint (events/live) DOES
+  // return Davis Cup and WTA 125 matches already in progress, but that feed
+  // only refreshes matches this app already knows about (see fetchLiveScore)
+  // — it has never been what discovers a match in the first place. Without an
+  // entry here, every Davis Cup tie was invisible regardless of whether it
+  // was live, scheduled, or finished. Reported 2026-09-20: 22 live Davis Cup
+  // matches, 0 shown on the board.
+  "wta-125": "/api/sofa/category/871/scheduled-events",
+  "davis-cup": "/api/sofa/category/76/scheduled-events",
 };
 
 /* ── Daily bulk odds: one request returns match-winner odds for EVERY event on a date ── */
@@ -789,7 +902,24 @@ async function fetchSofaDailyOdds(targetDate: string): Promise<Map<number, OddsP
       ? new Response(JSON.stringify((await warmed) ?? {}), { status: 200 })
       : await fetch(apiUrl(oddsUrl), { signal: controller.signal });
     clearTimeout(timeout);
-    if (!res.ok) return cached?.data ?? map;
+    if (!res.ok) { oddsDown = true; return cached?.data ?? map; }
+    // A price that stopped moving hours ago is not a market, and an edge
+    // measured against one is fiction — the number that looks most like alpha
+    // is exactly the one nobody can trade. The proxy answers 200 from the blob
+    // cache however old the snapshot is (20 h, measured), so the age header is
+    // the only thing separating a live quote from a historical one.
+    //
+    // A warmed response carries no headers — the prefetch script consumed them
+    // and parked the age on window — so that value must be folded in HERE,
+    // before it is read. The call in fetchSchedule is too late: it runs after
+    // this function has already returned, so the warmed path measured an age of
+    // zero and handed the 20 h snapshot to the board as a live market.
+    if (warmed) adoptPrefetchedFeedAge();
+    const age = warmed ? oddsAgeMs : noteOddsAge(res);
+    if (age >= ODDS_STALE_MS) {
+      console.warn(`[sofascore] daily odds ${targetDate} are ${Math.round(age / 60000)} min old — not pricing off them`);
+      return map;   // empty: no odds at all beats odds that are not real
+    }
     const json = await res.json();
     // Shape: { odds: { "<eventId>": { choices: [{name:"1",fractionalValue},{name:"2",...}] } } }
     const odds = json.odds || {};
@@ -893,6 +1023,73 @@ let sofaSourcesOk = true;
 let feedAgeMs = 0;
 let fallbackActive = false;
 
+/**
+ * Age of the ODDS feed, tracked apart from the scores above.
+ *
+ * SofaScore 403s the odds endpoints — both the per-event market and the daily
+ * bulk file — while continuing to serve scheduled-events and the live
+ * scoreboard normally. So the two feeds fail independently and one number
+ * cannot describe both: measured 2026-09-17, every schedule was fetched live
+ * from upstream while the daily odds file was 20 h old in the blob cache.
+ *
+ * Folding that single stale response into feedAgeMs made it the high-water
+ * mark for everything, which had two visible consequences, neither of them
+ * true: the board warned that Challenger and ITF were 20 h old over fixtures
+ * seconds fresh, and fallbackActive — "don't believe anything this feed calls
+ * live" — zeroed the home page's live count while eight matches were in play.
+ */
+let oddsAgeMs = 0;
+
+/**
+ * Set when the bookmaker odds feed gave us nothing at all — a 503 from the
+ * proxy, meaning SofaScore refused it and no cached snapshot exists either.
+ *
+ * Distinct from oddsAgeMs, which describes a feed that answered with something
+ * old. Both end with no bookmaker price on the board, but only one of them is
+ * visible in an age, and the silent case is the more common one: measured
+ * 2026-09-17, the daily odds file went from a 20 h snapshot to absent within
+ * the hour, and the board stopped showing a market with nothing said about it.
+ */
+let oddsDown = false;
+
+/** Past this, a price is history, not a market. Nothing prices an edge off it. */
+export const ODDS_STALE_MS = 30 * 60 * 1000;
+
+/* ── Circuit breaker for endpoint classes upstream is refusing ──────────────
+ *
+ * SofaScore 403s the per-event endpoints — point-by-point and the per-event
+ * odds market — while serving the list endpoints normally. The proxy has a
+ * five-minute negative cache for exactly this, but the CLIENT kept asking:
+ * two requests per live match per poll cycle, every one of them a 503, for as
+ * long as the block lasts. Measured on one page load with eight live matches,
+ * that is sixteen doomed requests every cycle and a console of red that looks
+ * like an incident and is not.
+ *
+ * Same shape as the store breaker in netlify/functions/_store.js: a few
+ * consecutive failures opens it, a cooldown closes it, and one success resets
+ * the count — so the endpoint class heals on its own when the block lifts,
+ * with no redeploy.
+ */
+const BREAKER_LIMIT = 4;
+const BREAKER_COOLDOWN_MS = 5 * 60 * 1000;
+const _breakers: Record<string, { fails: number; openUntil: number }> = {};
+
+function breakerOpen(cls: string): boolean {
+  const b = _breakers[cls];
+  return !!b && Date.now() < b.openUntil;
+}
+
+function breakerNote(cls: string, ok: boolean): void {
+  const b = (_breakers[cls] ||= { fails: 0, openUntil: 0 });
+  if (ok) { b.fails = 0; b.openUntil = 0; return; }
+  b.fails += 1;
+  if (b.fails >= BREAKER_LIMIT) {
+    b.openUntil = Date.now() + BREAKER_COOLDOWN_MS;
+    b.fails = 0;
+    console.warn(`[sofascore] ${cls} refused ${BREAKER_LIMIT}× — backing off ${BREAKER_COOLDOWN_MS / 60000} min`);
+  }
+}
+
 function noteFeedAge(res: Response) {
   const raw = res.headers.get("x-sofa-age-ms");
   if (raw == null) return;               // a live upstream hit — nothing to report
@@ -901,16 +1098,38 @@ function noteFeedAge(res: Response) {
 }
 
 /**
+ * How stale the cache behind an ODDS response is, and whether it is too old to
+ * price with. Returns the age so callers can report it; Infinity for a response
+ * the proxy has already flagged as stale.
+ */
+function noteOddsAge(res: Response): number {
+  if (res.headers.get("x-sofa-stale") === "true") {
+    oddsAgeMs = Math.max(oddsAgeMs, ODDS_STALE_MS);
+    return Infinity;
+  }
+  const raw = res.headers.get("x-sofa-age-ms");
+  if (raw == null) return 0;             // upstream answered — the price is live
+  const age = Number(raw);
+  if (!Number.isFinite(age)) return 0;
+  oddsAgeMs = Math.max(oddsAgeMs, age);
+  return age;
+}
+
+/**
  * The head-inline prefetch consumes its own responses, so its headers never
  * reach fetchSofaEndpoint. It parks the age on window instead; fold that in.
  */
 function adoptPrefetchedFeedAge() {
   if (typeof window === "undefined") return;
-  const w = window as unknown as { __ttFeedAge?: number };
+  const w = window as unknown as { __ttFeedAge?: number; __ttOddsAge?: number };
   if (typeof w.__ttFeedAge === "number") feedAgeMs = Math.max(feedAgeMs, w.__ttFeedAge);
+  // The odds URL is warmed by the same script but parks its age separately —
+  // see noteOddsAge. It must not raise the SCORE feed's age.
+  if (typeof w.__ttOddsAge === "number") oddsAgeMs = Math.max(oddsAgeMs, w.__ttOddsAge);
   // Read once. Otherwise this page-load value would keep warning long after a
   // later refresh proved the feed healthy again.
   delete w.__ttFeedAge;
+  delete w.__ttOddsAge;
 }
 
 async function fetchSofaScheduled(
@@ -1007,7 +1226,11 @@ export function qualifies(edge: number, kelly: number): boolean {
  */
 export function tourRank(tour: string): number {
   const t = (tour || "").toUpperCase();
-  if (t.startsWith("ATP") || t.startsWith("WTA")) return 0;
+  // Ranked with ATP/WTA, not below Challenger: a Davis Cup tie is drawn from
+  // the same top-100 players as the main tour, just under a different
+  // SofaScore category (76, separate from ATP's 3) — the reason it went
+  // missing from the board entirely until this fetch was added.
+  if (t.startsWith("ATP") || t.startsWith("WTA") || t.includes("DAVIS CUP")) return 0;
   if (t.includes("CHALLENGER") || t.includes("W125")) return 1;
   return 2;   // ITF and anything unrecognised
 }
@@ -1042,6 +1265,8 @@ export async function fetchScheduleClient(
   // Reset before the fetches below, or the high-water mark from a past outage
   // would keep warning about staleness long after the feed recovered.
   feedAgeMs = 0;
+  oddsAgeMs = 0;
+  oddsDown = false;
   fallbackActive = false;
 
   const now = new Date();
@@ -1148,7 +1373,7 @@ export async function fetchScheduleClient(
   if (onPartial) {
     onPartial({
       today, tomorrow: [], today_date: todayStr, tomorrow_date: tomorrowStr,
-      fetched_at: Date.now(), sourcesDown: false, feedAgeMs, fallbackActive,
+      fetched_at: Date.now(), sourcesDown: false, feedAgeMs, fallbackActive, oddsAgeMs, oddsDown,
     });
   }
 
@@ -1169,7 +1394,7 @@ export async function fetchScheduleClient(
   const sourcesDown = !sofaSourcesOk && today.length === 0 && tomorrow.length === 0;
   const result: ScheduleData = {
     today, tomorrow, today_date: todayStr, tomorrow_date: tomorrowStr,
-    fetched_at: Date.now(), sourcesDown, feedAgeMs, fallbackActive,
+    fetched_at: Date.now(), sourcesDown, feedAgeMs, fallbackActive, oddsAgeMs, oddsDown,
   };
   _scheduleCache = { data: result, ts: Date.now() };
   return result;
@@ -1208,6 +1433,9 @@ export async function fetchLiveScore(matchId: string): Promise<ScheduledMatch | 
               p1_secondServeWon: stats.p2_secondServeWon, p2_secondServeWon: stats.p1_secondServeWon,
               p1_breakPointsConverted: stats.p2_breakPointsConverted, p2_breakPointsConverted: stats.p1_breakPointsConverted,
               p1_totalPointsWon: stats.p2_totalPointsWon, p2_totalPointsWon: stats.p1_totalPointsWon,
+              // Which stats exist is a property of the feed, not of which side is
+              // home, so it survives the swap unchanged.
+              provided: stats.provided,
             };
           } else {
             match.liveScore.stats = stats;
@@ -1403,8 +1631,10 @@ const PBP_TTL = 4_000;
 async function fetchGameLog(sofaId: number, sofaHomeIsP1: boolean) {
   const hit = _pbpCache.get(sofaId);
   if (hit && Date.now() - hit.ts < PBP_TTL) return hit.games;
+  if (breakerOpen("point-by-point")) return hit?.games ?? [];
   try {
     const res = await fetch(apiUrl(`/api/sofa/event/${sofaId}/point-by-point`));
+    breakerNote("point-by-point", res.ok);
     if (!res.ok) return hit?.games ?? [];
     const json = await res.json();
     const games = parseGameLog(json, sofaHomeIsP1);
@@ -1466,6 +1696,9 @@ export async function fetchSofaStats(sofaId: number): Promise<LiveMatchStats | n
     const statsGroups: any[] = allGroup.groups || [];
 
     const stats: Partial<LiveMatchStats> = {};
+    // Names of the stats the feed actually carried, so a default 0 below can be
+    // told apart from a measured 0. See LiveMatchStats.provided.
+    const provided: string[] = [];
 
     for (const group of statsGroups) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1473,6 +1706,7 @@ export async function fetchSofaStats(sofaId: number): Promise<LiveMatchStats | n
         const key = item.name as string;
         const home = item.home as string;
         const away = item.away as string;
+        if (home !== undefined && home !== null && home !== "") provided.push(key);
         switch (key) {
           case "Aces": stats.p1_aces = parseInt(home) || 0; stats.p2_aces = parseInt(away) || 0; break;
           case "Double faults": stats.p1_doubleFaults = parseInt(home) || 0; stats.p2_doubleFaults = parseInt(away) || 0; break;
@@ -1500,6 +1734,7 @@ export async function fetchSofaStats(sofaId: number): Promise<LiveMatchStats | n
       p2_breakPointsConverted: stats.p2_breakPointsConverted || "0/0",
       p1_totalPointsWon: stats.p1_totalPointsWon || 0,
       p2_totalPointsWon: stats.p2_totalPointsWon || 0,
+      provided,
     };
   } catch (e) {
     console.warn("[sofascore] stats fetch failed", e);
@@ -1530,9 +1765,16 @@ const SOFA_EVENT_ODDS_TTL = 15_000;
 async function fetchSofaOdds(sofaId: number): Promise<OddsPair | null> {
   const cached = _sofaEventOddsCache.get(sofaId);
   if (cached && Date.now() - cached.ts < SOFA_EVENT_ODDS_TTL) return cached.data;
+  if (breakerOpen("event-odds")) return null;
   try {
     const res = await fetch(apiUrl(`/api/sofa/event/${sofaId}/odds/1/all`));
+    breakerNote("event-odds", res.ok);
     if (!res.ok) return null;
+    // Same rule as the daily file: never price off a snapshot that has stopped
+    // moving. This one matters more — it is the in-play market, quoted against
+    // a live score, so a stale quote produces the largest and most inviting
+    // fake edges on the board.
+    if (noteOddsAge(res) >= ODDS_STALE_MS) return null;
     const json = await res.json();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const markets: any[] = json.markets || [];
@@ -1647,6 +1889,9 @@ async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
           p1_secondServeWon: stats.p2_secondServeWon, p2_secondServeWon: stats.p1_secondServeWon,
           p1_breakPointsConverted: stats.p2_breakPointsConverted, p2_breakPointsConverted: stats.p1_breakPointsConverted,
           p1_totalPointsWon: stats.p2_totalPointsWon, p2_totalPointsWon: stats.p1_totalPointsWon,
+          // Which stats exist is a property of the feed, not of which side is
+          // home, so it survives the swap unchanged.
+          provided: stats.provided,
         };
       } else {
         match.liveScore.stats = stats;
@@ -1661,23 +1906,76 @@ async function enrichWithSofaScore(match: ScheduledMatch): Promise<void> {
 function attachBreakHoldSignals(match: ScheduledMatch): void {
   if (!match.liveScore) return;
   const ls = match.liveScore;
-  // NO SERVER, NO SERVE-CONDITIONED SIGNALS.
+
+  // ── Score-derived telemetry: momentum, real points observed ──
   //
-  // This used to fall back to P1 "for the math only", on the reasoning that the
-  // serve INDICATOR stayed hidden. But the math is the signal: hold and break
-  // probabilities, the pressure read and the whole break radar are computed
-  // from who is serving, and attributing them to P1 when the feed does not say
-  // makes them wrong for the away server — half the time, confidently.
+  // Needs only the point score the live-list endpoint already sends — not
+  // sofaId, not the server, not any of the per-event endpoints SofaScore is
+  // currently 403ing. Runs for every live match with a point score, which
+  // right now is EVERY live match: this is the one live number that was never
+  // actually gated on the thing that is broken.
   //
-  // It bites hardest exactly when it is least visible: whenever the proxy falls
-  // back to Flashscore, which renders the server as an icon rather than a feed
-  // field, EVERY live match has an unknown server and every hold signal was
-  // being computed for P1. Reported from live ATP matches, 2026-09-09.
+  // Kept in an outer variable (not just read into ls.live*) because
+  // holdsAndBreaks needs the raw gameLog below, once a server reading exists
+  // to anchor it — see the doc on ScheduledMatch.liveScore.holdsAndBreaks.
+  let telemetry: TelemetryState | undefined;
+  if (ls.pointScore) {
+    const idx = (v: string) => POINT_INDEX[String(v).toUpperCase()];
+    const a = idx(ls.pointScore.p1), b = idx(ls.pointScore.p2);
+    if (a !== undefined && b !== undefined) {
+      telemetry = observeTelemetry({
+        matchId: match.id, p1Pts: a, p2Pts: b,
+        gamesP1: ls.currentSetGames?.p1 ?? 0, gamesP2: ls.currentSetGames?.p2 ?? 0,
+        setIndex: (ls.completedSets?.length ?? 0) + 1,
+        isTiebreak: !!ls.tiebreakScore,
+      });
+      ls.liveMomentum = liveTelemetryMomentum(telemetry) ?? undefined;
+      ls.liveWorkload = liveTelemetryWorkload(telemetry) ?? undefined;
+    }
+  }
+
+  // ── Total games predicted for the whole match ──
   //
-  // Silence is the correct output here, and the rest of the product already
-  // treats an unknown server that way (game_ladder, setengine).
+  // Score-only, like liveMomentum/liveWorkload — no server needed, so this
+  // runs unconditionally for every live match with a set/game score, ahead of
+  // the server branch below.
+  ls.gamesPrediction = predictTotalGames(
+    ls.currentSetGames || { p1: 0, p2: 0 },
+    ls.completedSets || [],
+    ls.stats || null,
+    match.best_of || 3,
+    match.p1_win_prob,
+  );
+
+  // NO SERVER, NO SERVE-CONDITIONED SIGNALS — but a live MATCH probability
+  // still exists.
+  //
+  // BreakHoldSignals (hold/break/pressure/danger, all attributed to "the
+  // current server") genuinely cannot be computed without knowing who that is
+  // — attributing them to a guess makes them wrong for the away server, half
+  // the time, confidently, which is why this stayed withheld.
+  //
+  // computeLiveMatchProbNoServer is different: it does not need the server,
+  // because the match/set-level Markov math never did (see the note on
+  // matchWinProbFromScore's unused p1Serving parameter in breakHoldEngine.ts).
+  // Withholding trueProbabilities here too — as this used to — threw away a
+  // real number for a reason that did not apply to it. It bites hardest
+  // whenever the proxy falls back to Flashscore, which renders the server as
+  // an icon rather than a feed field: EVERY live match has an unknown server,
+  // so this was the difference between every live card showing a number and
+  // every live card showing none.
   if (ls.server !== 1 && ls.server !== 2) {
     ls.breakHoldSignals = undefined;
+    ls.holdsAndBreaks = undefined;   // needs the same server reading breakHoldSignals does
+    ls.trueProbabilities = computeLiveMatchProbNoServer(
+      ls.currentSetGames || { p1: 0, p2: 0 },
+      ls.completedSets || [],
+      ls.stats || null,
+      match.best_of || 3,
+      match.p1_win_prob,
+      match.tour,
+      ls.liveMomentum?.p1,
+    );
     return;
   }
 
@@ -1705,6 +2003,18 @@ function attachBreakHoldSignals(match: ScheduledMatch): void {
       match.p1_win_prob,
       match.tour,
     );
+
+    // ── Holds & breaks tally ──
+    //
+    // Only reachable here because `srv` (a real server reading) exists — the
+    // one anchor holdsAndBreaks needs to turn "who won each game", which
+    // telemetry always has, into "who was serving it", which it never can on
+    // its own. `srv` is who is serving the game IN PROGRESS, i.e. the game
+    // right after the last one in telemetry.gameLog — exactly what
+    // holdsAndBreaks expects as `nextServer`.
+    if (telemetry && telemetry.gameLog.length > 0) {
+      ls.holdsAndBreaks = holdsAndBreaks(telemetry.gameLog, srv);
+    }
 
     // ── Edge vs bookmaker (de-vigged implied probability) ──
     if (ls.bookmakerOdds && ls.bookmakerOdds.p1 > 1 && ls.bookmakerOdds.p2 > 1) {
@@ -1790,6 +2100,7 @@ export function attachIntelligence(m: ScheduledMatch): void {
 
   if (m.status === "finished" || m.status === "cancelled") {
     m.value = undefined;
+    forgetTelemetry(m.id);   // release the score-history this match accumulated
     return;
   }
 

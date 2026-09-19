@@ -3,6 +3,8 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { ScheduledMatch, LiveMatchStats } from "@/lib/scheduleService";
 import { probToOdds, kellyFraction, fetchLiveScore, fetchSofaStats } from "@/lib/scheduleService";
+import { gameTree } from "@/lib/gameTree";
+import { observeTelemetry, momentum as realMomentum, workload as realWorkload } from "@/lib/liveTelemetry";
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    Tennis scoring engine + Markov match-win probability
@@ -925,17 +927,20 @@ function matchWinProb(pS1: number, pS2: number, state: MatchState): number {
   return pSet * pMatchW + (1 - pSet) * pMatchL;
 }
 
+/**
+ * P(server wins from this score) — game play delegates to lib/gameTree, the
+ * single implementation; tiebreaks keep their own recursion, since a tiebreak
+ * is a different scoring system and not a special case of a game.
+ *
+ * This file used to carry its own copy of the game recursion, carrying the same
+ * advantage-returner bug as breakHoldEngine: the deuce branch returned 0 for
+ * d === -1, asserting the server could never hold from 40-A when the true
+ * figure is p·p²/(p²+q²) — about 0.50 for a 0.65 server. Two copies of one
+ * formula meant one fix would have left the other wrong.
+ */
 function gameWinProb(p: number, pts1: number, pts2: number, isTB: boolean): number {
   if (isTB) return tbWinProb(p, pts1, pts2);
-  if (pts1 >= 4 && pts1 - pts2 >= 2) return 1;
-  if (pts2 >= 4 && pts2 - pts1 >= 2) return 0;
-  if (pts1 >= 3 && pts2 >= 3) {
-    const d = pts1 - pts2;
-    if (d === 0) return (p * p) / (p * p + (1 - p) * (1 - p));
-    if (d === 1) return p + (1 - p) * (p * p) / (p * p + (1 - p) * (1 - p));
-    return 0;
-  }
-  return p * gameWinProb(p, pts1 + 1, pts2, false) + (1 - p) * gameWinProb(p, pts1, pts2 + 1, false);
+  return gameTree(p, pts1, pts2).pServer;
 }
 
 function tbWinProb(p: number, a: number, b: number): number {
@@ -1155,11 +1160,41 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
   // Live stats from SofaScore
   const liveStats = liveMatch.liveScore?.stats || null;
 
-  // Build EWMA from real stats in auto mode
-  const activeEwma = useMemo(() => {
-    if (mode === "auto" && liveStats) return ewmaFromStats(liveStats);
-    return ewma;
-  }, [mode, liveStats, ewma]);
+  /**
+   * Telemetry derived from the SCORE, by differencing consecutive polls.
+   *
+   * This replaces ewmaFromStats as the source for momentum and workload in auto
+   * mode. That function read `stats.p1_firstServePercent || 50`; with the stat
+   * unreported (0) the fallback fired and every match displayed +20.0% for both
+   * players — the constant, arithmetic'd. It also was not a moving average of
+   * anything: it had one snapshot, and EWMA needs a sequence.
+   *
+   * The score IS the sequence. Two consecutive polls differ by the point just
+   * played, so the point winner is recoverable without serve stats and without
+   * knowing who is serving — which matters, because the live feed currently
+   * reports neither.
+   */
+  const telemetry = useMemo(() => {
+    const ls = liveMatch.liveScore;
+    if (mode !== "auto" || liveMatch.status !== "live" || !ls?.pointScore) return null;
+    const idx = (v: string) => ({ "0": 0, "15": 1, "30": 2, "40": 3, A: 4, AD: 4 } as Record<string, number>)[String(v).toUpperCase()];
+    const a = idx(ls.pointScore.p1), b = idx(ls.pointScore.p2);
+    if (a === undefined || b === undefined) return null;
+    return observeTelemetry({
+      matchId: liveMatch.id, p1Pts: a, p2Pts: b,
+      gamesP1: ls.currentSetGames?.p1 ?? 0, gamesP2: ls.currentSetGames?.p2 ?? 0,
+      setIndex: (ls.completedSets?.length ?? 0) + 1,
+      isTiebreak: !!ls.tiebreakScore,
+    });
+    // lastRefresh changes on every poll, which is exactly when a new score may
+    // have arrived — that is the dependency that makes this observe the match.
+  }, [mode, liveMatch, lastRefresh]);
+
+  const liveMomentum = useMemo(() => telemetry && realMomentum(telemetry), [telemetry]);
+  const liveWorkload = useMemo(() => telemetry && realWorkload(telemetry), [telemetry]);
+
+  // Manual mode keeps the hand-tracked EWMA; auto mode no longer uses it.
+  const activeEwma = ewma;
 
   // Build fatigue from live state in auto mode
   const activeFatigue = useMemo(() => {
@@ -1501,7 +1536,50 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             </Sec>
           )}
 
-          {/* EWMA Momentum */}
+          {/* Momentum — in auto mode, from points actually observed. */}
+          {mode === "auto" ? (
+            <Sec title="MOMENTUM">
+              {liveMomentum ? (
+                <>
+                  <div className="grid grid-cols-3 gap-1 text-center text-[10px]">
+                    <div>
+                      <div className={`text-[14px] font-bold ${liveMomentum.p1 > 0.03 ? "text-terminal-green" : liveMomentum.p1 < -0.03 ? "text-terminal-red" : "text-slate-400"}`}>
+                        {liveMomentum.p1 > 0 ? "+" : ""}{(liveMomentum.p1 * 100).toFixed(1)}%
+                      </div>
+                      <div className="text-[8px] text-terminal-muted">{p1Short}</div>
+                    </div>
+                    <div>
+                      <div className="flex justify-center gap-0.5 mt-1">
+                        {liveMomentum.recent.slice(-8).map((w, i) => (
+                          <div key={i} className={`w-2 h-2 rounded-full ${w === 1 ? "bg-terminal-green" : "bg-terminal-cyan"}`} />
+                        ))}
+                      </div>
+                      <div className="text-[7px] text-terminal-muted mt-1">{telemetry!.p1Points}-{telemetry!.p2Points} pts seen</div>
+                    </div>
+                    <div>
+                      <div className={`text-[14px] font-bold ${liveMomentum.p2 > 0.03 ? "text-terminal-cyan" : liveMomentum.p2 < -0.03 ? "text-terminal-red" : "text-slate-400"}`}>
+                        {liveMomentum.p2 > 0 ? "+" : ""}{(liveMomentum.p2 * 100).toFixed(1)}%
+                      </div>
+                      <div className="text-[8px] text-terminal-muted">{p2Short}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 h-2 bg-terminal-border rounded-full overflow-hidden flex">
+                    <div className="h-full bg-terminal-green transition-all duration-500" style={{ width: `${liveMomentum.fastP1 * 100}%` }} />
+                    <div className="h-full bg-terminal-cyan transition-all duration-500" style={{ width: `${(1 - liveMomentum.fastP1) * 100}%` }} />
+                  </div>
+                  <div className="text-[7px] text-terminal-muted text-center mt-1">
+                    Recent form vs this match&apos;s own baseline, over {liveMomentum.observedPoints} observed points
+                    {telemetry!.gaps > 0 ? ` (${telemetry!.gaps} gap${telemetry!.gaps > 1 ? "s" : ""} in the feed)` : ""}
+                  </div>
+                </>
+              ) : (
+                <div className="text-[9px] text-terminal-muted text-center py-2">
+                  Watching the score — momentum needs about {12} points before it
+                  means anything. {telemetry ? `${telemetry.observedPoints} seen so far.` : "Waiting for a live score."}
+                </div>
+              )}
+            </Sec>
+          ) : (
           <Sec title={`EWMA MOMENTUM${liveStats ? " (from live stats)" : " (α=0.15/0.05)"}`}>
             <div className="grid grid-cols-3 gap-1 text-center text-[10px]">
               <div>
@@ -1532,8 +1610,35 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
               <div className="h-full bg-terminal-cyan transition-all duration-500" style={{ width: `${activeEwma.fast2*100}%` }} />
             </div>
           </Sec>
+          )}
 
-          {/* Fatigue */}
+          {/* Workload — one figure, because the score cannot tell the two
+              players apart. The old panel drew two bars from p1Load and p2Load,
+              which were assigned the same value, over a point count that was
+              games x 4.5 and a deuce count that was games x 0.3. */}
+          {mode === "auto" ? (
+            <Sec title="MATCH WORKLOAD">
+              {liveWorkload ? (
+                <>
+                  <div className="relative h-2 bg-terminal-border rounded-full overflow-hidden">
+                    <div className={`h-full transition-all duration-500 ${liveWorkload.load < 0.35 ? "bg-terminal-green" : liveWorkload.load < 0.6 ? "bg-terminal-yellow" : "bg-terminal-red"}`}
+                      style={{ width: `${liveWorkload.load * 100}%` }} />
+                  </div>
+                  <div className="text-[9px] text-slate-300 text-center mt-1">
+                    {liveWorkload.points} points · {liveWorkload.deuceGames} deuce game{liveWorkload.deuceGames === 1 ? "" : "s"} · {liveWorkload.tiebreaks} tiebreak{liveWorkload.tiebreaks === 1 ? "" : "s"}
+                  </div>
+                  <div className="text-[7px] text-terminal-muted text-center mt-0.5">
+                    Both players contest every point, so this is the match, not a
+                    per-player split — telling them apart needs who served each
+                    game, which the feed is not reporting.
+                    {liveWorkload.incomplete ? " Counts are a floor: the feed skipped some points." : ""}
+                  </div>
+                </>
+              ) : (
+                <div className="text-[9px] text-terminal-muted text-center py-2">Waiting for points to count.</div>
+              )}
+            </Sec>
+          ) : (
           <Sec title="FATIGUE INDEX">
             <div className="grid grid-cols-2 gap-3">
               {[{n:p1Short,f:fat1,l:fl1,k:1},{n:p2Short,f:fat2,l:fl2,k:2}].map(({n,f,l,k}) => (
@@ -1549,9 +1654,21 @@ export default function PointTracker({ match }: { match: ScheduledMatch }) {
             </div>
             <div className="text-[8px] text-terminal-muted text-center mt-1">{activeFatigue.totalPoints} pts · {activeFatigue.deuceGames} deuce · {activeFatigue.tiebreaks} TB</div>
           </Sec>
+          )}
 
-          {/* Break opportunity */}
-          {!activeState.tiebreak && !activeState.matchOver && (
+          {/* Break opportunity.
+              Requires knowing who is serving AND a real serve profile. In auto
+              mode with neither, the old panel rendered "Hold: 100%" at 15-15
+              off zeroed serve stats. Withheld rather than invented. */}
+          {mode === "auto" && !liveMatch.liveScore?.server && (
+            <Sec title="BREAK OPPORTUNITY">
+              <div className="text-[9px] text-terminal-muted text-center py-2">
+                Not available — the live feed is not reporting who is serving,
+                and a break chance means nothing without it.
+              </div>
+            </Sec>
+          )}
+          {(mode !== "auto" || !!liveMatch.liveScore?.server) && !activeState.tiebreak && !activeState.matchOver && (
             <Sec title={`BREAK OPPORTUNITY${liveStats ? " (live)" : " (Markov)"}`}>
               <div className="text-center">
                 <div className={`text-[18px] font-bold ${currentBreakOpp > 0.50 ? "text-terminal-red animate-pulse" : currentBreakOpp > 0.35 ? "text-terminal-yellow" : currentBreakOpp > 0.25 ? "text-terminal-blue" : "text-terminal-muted"}`}>{(currentBreakOpp*100).toFixed(0)}%</div>
