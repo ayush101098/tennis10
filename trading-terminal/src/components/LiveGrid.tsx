@@ -34,7 +34,11 @@ import { displayName } from "@/lib/scheduleService";
 import LiveSignal from "@/components/LiveSignal";
 import { FEED_STALE_MS, ODDS_STALE_MS } from "@/lib/scheduleService";
 
-const LIVE_POLL_MS = 15_000;
+// push_sofa.py refreshes the score cache roughly every 15s, so polling faster
+// than that can't surface new data — 8s just means most cycles find nothing
+// changed. Kept snappier than the cache interval so a fresh push is picked up
+// quickly rather than waiting out a matching 15s window.
+const LIVE_POLL_MS = 8_000;
 const FULL_POLL_MS = 45_000;
 
 export default function LiveGrid() {

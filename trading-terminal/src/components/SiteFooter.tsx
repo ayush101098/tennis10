@@ -74,7 +74,24 @@ export default function SiteFooter() {
             enforced in the product for a reason. Tennis Alpha is an analytics tool, not a bookmaker
             and not betting advice; whether betting is legal where you live is your responsibility.
           </p>
-          <p className="mt-2">© {year} {LEGAL_NAME}. All rights reserved.</p>
+          <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
+            <p>© {year} {LEGAL_NAME}. All rights reserved.</p>
+            <a
+              href="https://launchpoly.com/?ref=rnpdWSOso4If3idHoJnAJHkAYo3XoWpA"
+              target="_blank"
+              rel="noopener"
+              data-launchpoly="rnpdWSOso4If3idHoJnAJHkAYo3XoWpA"
+              className="shrink-0"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element -- third-party badge, not an optimizable local asset */}
+              <img
+                src="https://launchpoly.com/api/badges/claim/rnpdWSOso4If3idHoJnAJHkAYo3XoWpA.svg?theme=light&size=medium"
+                alt="Featured on LaunchPoly"
+                width={150}
+                height={44}
+              />
+            </a>
+          </div>
         </div>
       </div>
     </footer>

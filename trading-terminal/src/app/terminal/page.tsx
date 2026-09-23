@@ -5,6 +5,7 @@ import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import LiveGrid from "@/components/LiveGrid";
 import BetTracker from "@/components/BetTracker";
+import ArbitrageScreener from "@/components/ArbitrageScreener";
 import AccessModal from "@/components/AccessModal";
 import { DonatePrompt } from "@/components/Donate";
 import LiveUsers from "@/components/LiveUsers";
@@ -21,7 +22,7 @@ import { disconnectPolymarket, loadPmConnection, PM_CHANGED_EVENT, type PmConnec
  */
 
 
-type View = "centre" | "tracker";
+type View = "centre" | "tracker" | "arb";
 
 export default function TerminalPage() {
   const { session, refresh } = useTier();
@@ -132,6 +133,10 @@ export default function TerminalPage() {
             className={`nav-tab ${view === "tracker" ? "text-terminal-cyan bg-terminal-cyan/10" : "text-terminal-muted hover:text-slate-300"}`}>
             📒<span className="hidden xs:inline"> BET TRACKER</span>
           </button>
+          <button onClick={() => setView("arb")}
+            className={`nav-tab ${view === "arb" ? "text-terminal-green bg-terminal-green/10" : "text-terminal-muted hover:text-slate-300"}`}>
+            ⚖️<span className="hidden xs:inline"> ARBITRAGE</span>
+          </button>
           <Link href="/manual"
             className="nav-tab text-terminal-muted hover:text-slate-300">
             📘<span className="hidden xs:inline"> MANUAL</span>
@@ -193,6 +198,10 @@ export default function TerminalPage() {
       <div className="flex-1 min-h-0 relative">
         {view === "tracker" ? (
           <BetTracker />
+        ) : view === "arb" ? (
+          // Same gate as LiveGrid below — read-only, but still the terminal's
+          // paid surface, not a public page.
+          paid ? <ArbitrageScreener /> : <div />
         ) : (
           // Still not mounted for a signed-out visitor: the board polls
           // continuously, and an overlay over a polling board makes every one

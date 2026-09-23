@@ -7,12 +7,12 @@
 
 import {
   computeBreakHoldSignals, computeTrueProbabilities, computeLiveMatchProbNoServer, evaluateHedgeSignal,
-  resolveTourAvgs, holdsAndBreaks, predictTotalGames,
+  holdsAndBreaks, predictTotalGames,
   type BreakHoldSignals, type TrueProbabilities, type HedgeAlert,
   type HoldsAndBreaks, type GamesPrediction,
 } from "./breakHoldEngine";
 import { loadNNModel, nnMatchProb } from "./nnModel";
-import { parseGameLog, computeMomentum, type MomentumState } from "./momentumEngine";
+import type { MomentumState } from "./momentumEngine";
 import { observeTelemetry, momentum as liveTelemetryMomentum, workload as liveTelemetryWorkload, forgetTelemetry,
   type Momentum as LiveTelemetryMomentum, type Workload as LiveTelemetryWorkload,
   type TelemetryState } from "./liveTelemetry";
@@ -1363,7 +1363,31 @@ export async function fetchScheduleClient(
     return matches.filter(m => (seen.has(m.id) ? false : (seen.add(m.id), true)));
   };
 
-  const today = dedup(byId([...at, ...wt]), sofaToday).sort(sort);
+  let today = dedup(byId([...at, ...wt]), sofaToday).sort(sort);
+
+  // A match that started before midnight and is still live after it falls out
+  // of every date-bucketed fetch: it's not in "today"'s category listing (it
+  // started "yesterday") and it's not in "tomorrow"'s either (same reason) —
+  // it simply never appears, and the board shows zero live matches even
+  // though SofaScore's own live-events endpoint (date-agnostic) has them.
+  // Confirmed 2026-09-20: three matches that started ~23:30-23:45 IST on the
+  // 19th were missing from today's ATP category fetch entirely. Fix: anything
+  // the live-events endpoint reports as in-progress gets added directly if no
+  // existing row already carries that sofaId.
+  try {
+    const liveNow = await fetchSofaLive();
+    const knownSofaIds = new Set(today.map(m => m.liveScore?.sofaId).filter(Boolean));
+    for (const evt of liveNow) {
+      if (knownSofaIds.has(evt.id)) continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const m = sofaEventToMatch(evt as any, rankMap);
+      if (m && m.status === "live") {
+        today.push(m);
+        knownSofaIds.add(evt.id);
+      }
+    }
+    today = today.sort(sort);
+  } catch { /* best-effort — a miss here just means fewer live rows, not a crash */ }
 
   // First paint. attachIntelligence is synchronous, so the rows carry True P,
   // edge and stake immediately — what is still missing is only the in-play
@@ -1600,62 +1624,24 @@ export async function refreshLiveMatches(matches: ScheduledMatch[]): Promise<boo
   if (!sofaEvents.length) return false;
 
   let changed = false;
-  const updated: ScheduledMatch[] = [];
   for (const m of live) {
     const sofaMatch = sofaEvents.find(se => se.id === m.liveScore!.sofaId);
     if (!sofaMatch) continue;
     applySofaLiveScore(m, sofaMatch);
     attachIntelligence(m);
-    updated.push(m);
     changed = true;
   }
-  // Momentum needs a per-match point-by-point fetch — do them in parallel so the
-  // whole live list stays point-by-point fresh without serializing round-trips.
-  await Promise.all(updated.map(attachMomentum));
+  // Point-by-point momentum deliberately left out of the fast cycle: SofaScore
+  // 403s that endpoint for every live match right now (confirmed in
+  // push_sofa.py's own logs — "no upstream, no fallback" on every push), so it
+  // was a guaranteed-failing extra round trip per match, every cycle, for a
+  // feature that never had data to show. Game score/holds/breaks above are
+  // score-derived (observeTelemetry off the live score feed) and don't need
+  // point-by-point at all. Re-add a call to attachMomentum() here if a working
+  // point-by-point source ever comes back.
   return changed;
 }
 
-// ── Live momentum from point-by-point ───────────────────────────────────────
-// point-win-on-serve prior per player from tour baselines (sets the hold-rate
-// expectation the serve-regression signal is measured against).
-function serveWinPrior(tour: string): number {
-  const a = resolveTourAvgs(tour);
-  return a.firstServeIn * a.firstServeWon + (1 - a.firstServeIn) * a.secondServeWon;
-}
-
-// Short-TTL per-event point-by-point cache: fetched fresh each live cycle but
-// deduped within a cycle so momentum tracks the score point-by-point.
-const _pbpCache = new Map<number, { games: ReturnType<typeof parseGameLog>; ts: number }>();
-const PBP_TTL = 4_000;
-
-async function fetchGameLog(sofaId: number, sofaHomeIsP1: boolean) {
-  const hit = _pbpCache.get(sofaId);
-  if (hit && Date.now() - hit.ts < PBP_TTL) return hit.games;
-  if (breakerOpen("point-by-point")) return hit?.games ?? [];
-  try {
-    const res = await fetch(apiUrl(`/api/sofa/event/${sofaId}/point-by-point`));
-    breakerNote("point-by-point", res.ok);
-    if (!res.ok) return hit?.games ?? [];
-    const json = await res.json();
-    const games = parseGameLog(json, sofaHomeIsP1);
-    _pbpCache.set(sofaId, { games, ts: Date.now() });
-    return games;
-  } catch {
-    return hit?.games ?? [];
-  }
-}
-
-/** Fetch point-by-point + compute live momentum for one match, attach to it. */
-async function attachMomentum(m: ScheduledMatch): Promise<void> {
-  const ls = m.liveScore;
-  if (!ls?.sofaId) return;
-  const games = await fetchGameLog(ls.sofaId, ls.sofaHomeIsP1 !== false);
-  const sp = serveWinPrior(m.tour);
-  const mom = computeMomentum(games, sp, sp);
-  if (!mom.hasSignal) return;
-  ls.momentum = mom;
-  if (m.value) m.value.momentum = mom;
-}
 
 /** Cache SofaScore data — ultra-fast for local use */
 let _sofaCache: { data: SofaLiveEvent[]; ts: number } | null = null;
